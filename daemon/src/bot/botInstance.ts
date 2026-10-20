@@ -123,6 +123,7 @@ function resolveBedrockTargetVersion(
 export class PebbleBotInstance {
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
+  public chatHistory: any[] = [];
   private broadcastFn: (msg: DaemonMessage) => void;
   private client: any = null;
   private connectStartTime: number = 0;
@@ -268,6 +269,7 @@ export class PebbleBotInstance {
         this.connectStartTime = Date.now();
         this.updateState('LOGGED_IN');
         this.logActivity('connect', `Successfully joined Bedrock server ${this.config.host}:${this.config.port}`);
+        this.handleSystemMessage(`Connected to ${this.config.host}:${this.config.port}`);
       });
 
       // Spawn event: Player loaded into the world
@@ -276,6 +278,7 @@ export class PebbleBotInstance {
         if (!this.connectStartTime) this.connectStartTime = Date.now();
         this.updateState('SPAWNED');
         this.logActivity('spawn', '🌍 Spawned into Bedrock world!');
+        this.handleSystemMessage(`🌍 Spawned into world as @${this.config.username}`);
 
         // Start tick_sync heartbeat to prevent timeout disconnects
         if (this.tickSyncInterval) clearInterval(this.tickSyncInterval);
@@ -435,6 +438,17 @@ export class PebbleBotInstance {
           platform_chat_id: '',
         });
       }
+      this.pushChat({
+        botId: this.config.id,
+        serverId: this.config.serverId,
+        accountUsername: this.config.username,
+        id: randomUUID(),
+        timestamp: Date.now(),
+        raw: message,
+        formattedText: message,
+        sender: this.config.username,
+        type: 'chat',
+      });
       this.logActivity('chat', `Sent: ${message}`);
     } catch (err: any) {
       console.log(chalk.red(`[PebbleAFK] Failed to send chat:`), err);
@@ -525,24 +539,100 @@ export class PebbleBotInstance {
     });
   }
 
-  private handleBedrockText(packet: any) {
-    const rawMsg = packet?.message || '';
-    const sender = packet?.source_name || (packet?.type === 'system' ? 'System' : 'Server');
-    const isSystem = packet?.type === 'system' || packet?.type === 'translation';
-
+  public pushChat(chatMsg: any) {
+    this.chatHistory.push(chatMsg);
+    if (this.chatHistory.length > 150) {
+      this.chatHistory.shift();
+    }
     this.broadcastFn({
       type: 'CHAT_MESSAGE',
-      payload: {
-        botId: this.config.id,
-        serverId: this.config.serverId,
-        accountUsername: this.config.username,
-        id: randomUUID(),
-        timestamp: Date.now(),
-        raw: rawMsg,
-        formattedText: rawMsg,
-        sender,
-        type: isSystem ? 'system' : 'chat',
-      },
+      payload: chatMsg,
+    });
+  }
+
+  public handleSystemMessage(text: string) {
+    this.pushChat({
+      botId: this.config.id,
+      serverId: this.config.serverId,
+      accountUsername: this.config.username,
+      id: randomUUID(),
+      timestamp: Date.now(),
+      raw: text,
+      formattedText: text,
+      sender: 'System',
+      type: 'system',
+    });
+  }
+
+  private handleBedrockText(packet: any) {
+    if (!packet) return;
+
+    let rawMsg = packet.message || '';
+    let sender = packet.source_name || '';
+    let isSystem = false;
+
+    // 1. Handle JSON / rawtext
+    if (typeof rawMsg === 'string' && (rawMsg.startsWith('{') || rawMsg.startsWith('['))) {
+      try {
+        const parsed = JSON.parse(rawMsg);
+        if (parsed.rawtext && Array.isArray(parsed.rawtext)) {
+          rawMsg = parsed.rawtext.map((item: any) => item.text || '').join('');
+        } else if (parsed.text) {
+          rawMsg = parsed.text + (parsed.extra ? parsed.extra.map((e: any) => e.text || '').join('') : '');
+        }
+      } catch (_) {}
+    }
+
+    // 2. Handle translation packet (used by Geyser / Bedrock for chat and announcements)
+    if (packet.type === 'translation' || packet.needs_translation) {
+      isSystem = true;
+      const params: string[] = Array.isArray(packet.parameters) ? packet.parameters : [];
+      const key = packet.message || '';
+
+      if (key.includes('chat.type.text') || key === '%s') {
+        if (params.length >= 2) {
+          sender = params[0].replace(/^<|>$/g, '').trim();
+          rawMsg = params.slice(1).join(' ');
+          isSystem = false;
+        } else if (params.length === 1) {
+          rawMsg = params[0];
+        }
+      } else if (key.includes('multiplayer.player.joined')) {
+        rawMsg = `${params[0] || 'A player'} joined the game`;
+        sender = 'Server';
+      } else if (key.includes('multiplayer.player.left')) {
+        rawMsg = `${params[0] || 'A player'} left the game`;
+        sender = 'Server';
+      } else if (params.length > 0) {
+        rawMsg = params.join(' ');
+      }
+    } else if (packet.type === 'system' || packet.type === 'announcement') {
+      isSystem = true;
+      if (!sender) sender = 'System';
+    } else if (packet.type === 'chat' || packet.type === 'whisper') {
+      if (!sender) sender = packet.source_name || 'Player';
+    }
+
+    if (!sender) {
+      sender = isSystem ? 'System' : 'Server';
+    }
+
+    // Clean section signs (§) for clean readable text
+    const cleanSender = sender.replace(/§[0-9a-fk-or]/gi, '').trim();
+    const cleanText = (rawMsg || '').replace(/§[0-9a-fk-or]/gi, '').trim();
+
+    if (!cleanText) return;
+
+    this.pushChat({
+      botId: this.config.id,
+      serverId: this.config.serverId,
+      accountUsername: this.config.username,
+      id: randomUUID(),
+      timestamp: Date.now(),
+      raw: rawMsg,
+      formattedText: cleanText,
+      sender: cleanSender,
+      type: isSystem ? 'system' : 'chat',
     });
   }
 

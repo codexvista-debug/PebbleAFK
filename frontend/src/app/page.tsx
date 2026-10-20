@@ -37,7 +37,9 @@ import {
   ChevronDown,
   AlertTriangle,
   RotateCcw,
-  RotateCw
+  RotateCw,
+  CornerDownLeft,
+  Edit3
 } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
@@ -136,6 +138,8 @@ export default function Home() {
   });
   const [chatInput, setChatInput] = useState('');
   const [selectedChatReceiver, setSelectedChatReceiver] = useState<string>('all');
+  const [chatFilter, setChatFilter] = useState<'all' | 'players' | 'system'>('all');
+  const [isReceiverDropdownOpen, setIsReceiverDropdownOpen] = useState(false);
   const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const handleTogglePin = (accId: string) => {
@@ -358,6 +362,7 @@ export default function Home() {
     msAuthData,
     setMsAuthData,
     sendChat,
+    clearChat,
     startBot,
     stopBot,
   } = useDaemonSocket(currentUser, handleAccountVerified);
@@ -979,6 +984,34 @@ export default function Home() {
       sendChat(`${activeServer.id}__${selectedChatReceiver}`, msg);
     }
     setChatInput('');
+  };
+
+  const handleClearCurrentChat = () => {
+    if (!activeServer) return;
+    const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
+    if (selectedChatReceiver === 'all') {
+      targetAccounts.forEach((acc) => {
+        clearChat(`${activeServer.id}__${acc.id}`);
+        clearChat(acc.id);
+      });
+    } else {
+      clearChat(`${activeServer.id}__${selectedChatReceiver}`);
+      clearChat(selectedChatReceiver);
+    }
+    showToast('Chat history cleared', 'info');
+  };
+
+  const handleQuickCommand = (cmd: string) => {
+    if (!activeServer) return;
+    const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
+    if (selectedChatReceiver === 'all') {
+      targetAccounts.forEach((acc) => {
+        sendChat(`${activeServer.id}__${acc.id}`, cmd);
+      });
+    } else {
+      sendChat(`${activeServer.id}__${selectedChatReceiver}`, cmd);
+    }
+    showToast(`Sent ${cmd}`, 'info');
   };
 
   // Status dot style for daemon button
@@ -2145,101 +2178,354 @@ export default function Home() {
                       </div>
                     )}
 
-                    {/* SUBTAB 2: CHAT */}
-                    {activeSubTab === 'chat' && (
-                      <div className="space-y-3">
-                        {/* Chat Receivers selector */}
-                        <div className="flex items-center justify-between gap-3 p-3 bg-white border border-slate-200 rounded-2xl shadow-xs">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-600">Chat receivers:</span>
-                            <select
-                              value={selectedChatReceiver}
-                              onChange={(e) => setSelectedChatReceiver(e.target.value)}
-                              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 cursor-pointer"
-                            >
-                              <option value="all">
-                                All {assignedAccounts.length > 0 ? 'Assigned ' : ''}Accounts ({assignedAccounts.length > 0 ? assignedAccounts.length : accounts.length})
-                              </option>
-                              {(assignedAccounts.length > 0 ? assignedAccounts : accounts).map((acc) => (
-                                <option key={acc.id} value={acc.id}>
-                                  @{acc.ign || acc.username}
-                                </option>
-                              ))}
-                            </select>
+                    {/* SUBTAB 2: CHAT (Matching PocketAFK Image 3 Pixel-Perfect!) */}
+                    {activeSubTab === 'chat' && (() => {
+                      const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
+                      const selectedAccount = targetAccounts.find((a) => a.id === selectedChatReceiver) || null;
+
+                      const isSelectedOnline = selectedAccount ? (() => {
+                        const bId = `${activeServer.id}__${selectedAccount.id}`;
+                        const st = botStates[bId] || botStates[selectedAccount.id];
+                        return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
+                      })() : false;
+
+                      const isAnyBotOnline = targetAccounts.some((acc) => {
+                        const bId = `${activeServer.id}__${acc.id}`;
+                        const st = botStates[bId] || botStates[acc.id];
+                        return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
+                      });
+
+                      // Collect chat messages
+                      let chatList: ChatMessage[] = [];
+                      if (selectedChatReceiver === 'all') {
+                        targetAccounts.forEach((acc) => {
+                          const bId = `${activeServer.id}__${acc.id}`;
+                          const msgs = messagesByBot[bId] || messagesByBot[acc.id] || [];
+                          chatList.push(...msgs);
+                        });
+                      } else {
+                        const bId = `${activeServer.id}__${selectedChatReceiver}`;
+                        const msgs = messagesByBot[bId] || messagesByBot[selectedChatReceiver] || [];
+                        chatList.push(...msgs);
+                      }
+
+                      // Deduplicate by timestamp + raw
+                      const seen = new Set<string>();
+                      chatList = chatList.filter((m) => {
+                        const key = `${m.timestamp}__${m.raw}`;
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                      });
+                      chatList.sort((a, b) => a.timestamp - b.timestamp);
+
+                      // Filter by Tab
+                      if (chatFilter === 'players') {
+                        chatList = chatList.filter((m) => m.type === 'chat' && m.sender !== 'System' && m.sender !== 'Server');
+                      } else if (chatFilter === 'system') {
+                        chatList = chatList.filter((m) => m.type === 'system' || m.sender === 'System' || m.sender === 'Server');
+                      }
+
+                      const quickChips = [
+                        { label: '/afk', cmd: '/afk', cls: 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200' },
+                        { label: '/lifesteal', cmd: '/lifesteal', cls: 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200' },
+                        { label: '/home', cmd: '/home', cls: 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200' },
+                        { label: '/spawn', cmd: '/spawn', cls: 'bg-sky-50 hover:bg-sky-100 text-sky-800 border-sky-200' },
+                        { label: '/tpdeny', cmd: '/tpdeny', cls: 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200' },
+                        { label: '/help', cmd: '/help', cls: 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-200' },
+                        { label: '/resourcepack', cmd: '/resourcepack', cls: 'bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border-cyan-200' },
+                        { label: '/tpa/tpaccept', cmd: '/tpaccept', cls: 'bg-teal-50 hover:bg-teal-100 text-teal-800 border-teal-200' },
+                        { label: '/survival', cmd: '/survival', cls: 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-200' },
+                      ];
+
+                      return (
+                        <div className="space-y-3.5">
+                          {/* 1. Chat Receivers bar (Matching Image 3 arrow pointer) */}
+                          <div className="flex items-center gap-2.5">
+                            <span className="text-xs font-bold text-slate-600 select-none">Chat receivers:</span>
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() => setIsReceiverDropdownOpen(!isReceiverDropdownOpen)}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-xl shadow-2xs hover:bg-slate-50 transition text-xs font-bold text-slate-800 cursor-pointer"
+                              >
+                                {selectedAccount ? (
+                                  <>
+                                    <div className="w-5 h-5 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                      <img
+                                        src={selectedAccount.avatarUrl || `https://crafthead.net/helm/${encodeURIComponent(selectedAccount.ign || selectedAccount.username)}/24`}
+                                        alt="Skin"
+                                        className="w-full h-full object-cover"
+                                        onError={(e) => {
+                                          (e.currentTarget as HTMLImageElement).src = `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(selectedAccount.ign || selectedAccount.username)}/avatarpic-l.png`;
+                                        }}
+                                      />
+                                    </div>
+                                    <span className="font-mono">@{selectedAccount.ign || selectedAccount.username}</span>
+                                    <span className={`w-2 h-2 rounded-full ${isSelectedOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                  </>
+                                ) : (
+                                  <>
+                                    <Users className="w-4 h-4 text-emerald-600" />
+                                    <span>All Assigned Accounts ({targetAccounts.length})</span>
+                                    <span className={`w-2 h-2 rounded-full ${isAnyBotOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                  </>
+                                )}
+                                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isReceiverDropdownOpen ? 'rotate-180 text-emerald-600' : ''}`} />
+                              </button>
+
+                              {isReceiverDropdownOpen && (
+                                <div className="absolute left-0 mt-1.5 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl z-30 p-1.5 space-y-0.5 animate-in fade-in duration-100">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedChatReceiver('all');
+                                      setIsReceiverDropdownOpen(false);
+                                    }}
+                                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                                      selectedChatReceiver === 'all' ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <Users className="w-4 h-4 text-emerald-600" />
+                                      <span>All Assigned Accounts ({targetAccounts.length})</span>
+                                    </div>
+                                    <span className={`w-2 h-2 rounded-full ${isAnyBotOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                  </button>
+
+                                  <div className="border-t border-slate-100 my-1" />
+
+                                  {targetAccounts.map((acc) => {
+                                    const bId = `${activeServer.id}__${acc.id}`;
+                                    const st = botStates[bId] || botStates[acc.id];
+                                    const isLive = daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
+                                    const isSel = selectedChatReceiver === acc.id;
+
+                                    return (
+                                      <button
+                                        key={acc.id}
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedChatReceiver(acc.id);
+                                          setIsReceiverDropdownOpen(false);
+                                        }}
+                                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                                          isSel ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
+                                        }`}
+                                      >
+                                        <div className="flex items-center gap-2.5">
+                                          <div className="w-5 h-5 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                            <img
+                                              src={acc.avatarUrl || `https://crafthead.net/helm/${encodeURIComponent(acc.ign || acc.username)}/24`}
+                                              alt="Skin"
+                                              className="w-full h-full object-cover"
+                                              onError={(e) => {
+                                                (e.currentTarget as HTMLImageElement).src = `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(acc.ign || acc.username)}/avatarpic-l.png`;
+                                              }}
+                                            />
+                                          </div>
+                                          <span className="font-mono">@{acc.ign || acc.username}</span>
+                                        </div>
+                                        <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Messages Box */}
-                        <div className="h-[460px] bg-white border border-slate-200/90 rounded-2xl p-4 overflow-y-auto space-y-2 shadow-xs font-mono text-xs">
-                          {(() => {
-                            const chatList: ChatMessage[] = [];
-                            const chatAccs = assignedAccounts.length > 0 ? assignedAccounts : accounts;
-                            if (selectedChatReceiver === 'all') {
-                              chatAccs.forEach((acc) => {
-                                const botId = `${activeServer.id}__${acc.id}`;
-                                const msgs = messagesByBot[botId] || messagesByBot[acc.id] || [];
-                                chatList.push(...msgs);
-                              });
-                            } else {
-                              const botId = `${activeServer.id}__${selectedChatReceiver}`;
-                              const msgs = messagesByBot[botId] || messagesByBot[selectedChatReceiver] || [];
-                              chatList.push(...msgs);
-                            }
-                            chatList.sort((a, b) => a.timestamp - b.timestamp);
-
-                            if (chatList.length === 0) {
-                              return (
-                                <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400 space-y-2">
-                                  <MessageSquare className="w-8 h-8 text-slate-300" />
-                                  <p className="text-xs font-medium">No chat messages received yet.</p>
-                                  <p className="text-[11px] text-slate-400">
-                                    When your Bedrock bot connects to {activeServer.name}, server messages and player chats will appear here in real time.
+                          {/* 2. Main Chat Box Container (Matching Image 3) */}
+                          <div className="bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
+                            {/* Card Header */}
+                            <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-slate-50/60">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 font-mono font-bold text-xs shrink-0 shadow-2xs">
+                                  &gt;_
+                                </div>
+                                <div>
+                                  <h3 className="font-black text-sm text-slate-900 leading-none">{activeServer.name}</h3>
+                                  <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                                    {activeServer.serverHost}:{activeServer.serverPort || 19132}
                                   </p>
                                 </div>
-                              );
-                            }
+                              </div>
 
-                            return (
-                              <>
-                                {chatList.map((m) => (
-                                  <div key={m.id} className="flex items-start gap-2 leading-relaxed">
-                                    <span className="text-[10px] text-slate-400 select-none">
-                                      {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                                    </span>
-                                    {m.sender && (
-                                      <span className="font-bold text-emerald-700">
-                                        &lt;{m.sender}&gt;
+                              <div className="flex items-center gap-2">
+                                {/* Segmented Filter Tabs: All | Players | System */}
+                                <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80 text-xs font-semibold">
+                                  {(['all', 'players', 'system'] as const).map((tab) => (
+                                    <button
+                                      key={tab}
+                                      type="button"
+                                      onClick={() => setChatFilter(tab)}
+                                      className={`px-3 py-1 rounded-lg capitalize transition cursor-pointer text-xs ${
+                                        chatFilter === tab
+                                          ? 'bg-white text-slate-900 font-bold shadow-2xs'
+                                          : 'text-slate-500 hover:text-slate-800'
+                                      }`}
+                                    >
+                                      {tab === 'all' ? 'All' : tab === 'players' ? 'Players' : 'System'}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                {/* Trash / Clear chat */}
+                                <button
+                                  type="button"
+                                  onClick={handleClearCurrentChat}
+                                  className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition cursor-pointer"
+                                  title="Clear chat messages"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Quick Command Chips Row */}
+                            <div className="flex items-center justify-between gap-2 px-5 py-2.5 bg-slate-50/40 border-b border-slate-200/80 overflow-x-auto text-xs">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[10px] font-black text-slate-400 tracking-wider mr-1 uppercase select-none font-mono">
+                                  QUICK:
+                                </span>
+                                {quickChips.map((q) => (
+                                  <button
+                                    key={q.label}
+                                    type="button"
+                                    onClick={() => handleQuickCommand(q.cmd)}
+                                    disabled={!isAnyBotOnline}
+                                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-mono font-bold transition shadow-2xs active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${q.cls}`}
+                                  >
+                                    {q.label}
+                                  </button>
+                                ))}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => showToast('Tip: Click any quick command above or type your command below to send.', 'info')}
+                                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition cursor-pointer shrink-0"
+                                title="Quick commands guide"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {/* Chat Messages Stream Area */}
+                            <div className="h-[430px] p-5 overflow-y-auto space-y-2.5 font-mono text-xs bg-white">
+                              {chatList.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400 space-y-3">
+                                  <div className="w-11 h-11 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-center text-slate-400 shadow-2xs">
+                                    <MessageSquare className="w-5 h-5 text-slate-400" />
+                                  </div>
+                                  <p className="text-xs font-bold text-slate-700">No chat messages received yet.</p>
+                                  <p className="text-[11px] text-slate-400 max-w-sm leading-relaxed">
+                                    In-game chat and system logs will stream here in real-time.
+                                  </p>
+                                  <div className="pt-2">
+                                    {isAnyBotOnline ? (
+                                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                        Bot is currently connected
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                        Bot is currently disconnected
                                       </span>
                                     )}
-                                    <span className="text-slate-800 break-all">{m.formattedText || m.raw}</span>
                                   </div>
-                                ))}
-                                <div ref={chatMessagesEndRef} />
-                              </>
-                            );
-                          })()}
-                        </div>
+                                </div>
+                              ) : (
+                                <>
+                                  {chatList.map((m) => {
+                                    const isPlayer = m.type === 'chat' && m.sender !== 'System' && m.sender !== 'Server';
+                                    const cleanSender = m.sender || 'Server';
+                                    const headUrl = `https://crafthead.net/helm/${encodeURIComponent(cleanSender)}/20`;
 
-                        {/* Chat input box */}
-                        <form onSubmit={handleSendChat} className="flex gap-2">
-                          <input
-                            type="text"
-                            value={chatInput}
-                            onChange={(e) => setChatInput(e.target.value)}
-                            placeholder="Send a message or command (e.g. /spawn)..."
-                            className="flex-1 bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 font-medium shadow-2xs"
-                          />
-                          <button
-                            type="submit"
-                            disabled={!chatInput.trim()}
-                            className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 disabled:opacity-40 text-white font-bold text-xs transition shadow-xs cursor-pointer flex items-center gap-1.5"
-                          >
-                            <Send className="w-3.5 h-3.5" />
-                            <span>Send</span>
-                          </button>
-                        </form>
-                      </div>
-                    )}
+                                    return (
+                                      <div key={m.id} className="flex items-start gap-2.5 py-1 text-xs hover:bg-slate-50/80 rounded-lg px-2 transition">
+                                        <span className="text-[10px] text-slate-400 select-none pt-0.5 font-mono shrink-0">
+                                          {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                        </span>
+
+                                        {isPlayer ? (
+                                          <div className="flex items-center gap-1.5 shrink-0">
+                                            <div className="w-4 h-4 rounded-xs overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                              <img
+                                                src={headUrl}
+                                                alt={cleanSender}
+                                                className="w-full h-full object-cover"
+                                                onError={(e) => {
+                                                  (e.currentTarget as HTMLImageElement).src = `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(cleanSender)}/avatarpic-l.png`;
+                                                }}
+                                              />
+                                            </div>
+                                            <span className="font-bold text-emerald-700 font-mono">
+                                              &lt;{cleanSender}&gt;
+                                            </span>
+                                          </div>
+                                        ) : (
+                                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200/90 font-mono shrink-0">
+                                            [{cleanSender}]
+                                          </span>
+                                        )}
+
+                                        <span className="text-slate-800 break-all font-mono leading-relaxed flex-1">
+                                          {m.formattedText || m.raw}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                  <div ref={chatMessagesEndRef} />
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 3. Bottom Chat Input Bar (Matching Image 3) */}
+                          <form onSubmit={handleSendChat} className="flex items-center gap-2">
+                            <div className="flex-1 flex items-center bg-white border border-slate-200/90 rounded-2xl shadow-2xs focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/10 transition px-3.5 py-1.5 gap-2">
+                              <span className="text-emerald-600 font-mono font-black text-sm select-none pl-1">&gt;</span>
+                              <input
+                                type="text"
+                                value={chatInput}
+                                onChange={(e) => setChatInput(e.target.value)}
+                                disabled={!isAnyBotOnline}
+                                placeholder={
+                                  isAnyBotOnline
+                                    ? "Send a message or command (e.g. /spawn)..."
+                                    : "Bot offline [connect bot to send chat messages]..."
+                                }
+                                className="flex-1 bg-transparent border-none text-xs text-slate-900 placeholder-slate-400 focus:outline-none font-medium py-1.5"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setIsReceiverDropdownOpen(!isReceiverDropdownOpen)}
+                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer select-none"
+                              >
+                                <Users className="w-3.5 h-3.5 text-slate-500" />
+                                <span className="max-w-[120px] truncate font-mono">
+                                  {selectedChatReceiver === 'all'
+                                    ? 'All accounts'
+                                    : `@${selectedAccount?.ign || selectedAccount?.username || 'Account'}`}
+                                </span>
+                                <ChevronDown className="w-3 h-3 text-slate-400" />
+                              </button>
+                            </div>
+
+                            <button
+                              type="submit"
+                              disabled={!isAnyBotOnline || !chatInput.trim()}
+                              className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs transition shadow-xs cursor-pointer flex items-center gap-2 shrink-0"
+                            >
+                              <Send className="w-3.5 h-3.5" />
+                              <span>Send</span>
+                              <CornerDownLeft className="w-3 h-3 text-emerald-200 select-none" />
+                            </button>
+                          </form>
+                        </div>
+                      );
+                    })()}
 
                     {/* SUBTAB 3: SETTINGS (Matching Image 2 pixel-perfect!) */}
                     {activeSubTab === 'settings' && (

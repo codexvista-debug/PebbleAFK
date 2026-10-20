@@ -37,7 +37,16 @@ export function useDaemonSocket(
   const [botStates, setBotStates] = useState<Record<string, BotLifecycleState>>({});
   const [botReasons, setBotReasons] = useState<Record<string, string>>({});
   const [telemetries, setTelemetries] = useState<Record<string, Telemetry>>({});
-  const [messagesByBot, setMessagesByBot] = useState<Record<string, ChatMessage[]>>({});
+  const [messagesByBot, setMessagesByBot] = useState<Record<string, ChatMessage[]>>(() => {
+    if (typeof window !== 'undefined') {
+      const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
+      try {
+        const stored = localStorage.getItem(`pebbleafk_chat_${u}`);
+        if (stored) return JSON.parse(stored);
+      } catch (_) {}
+    }
+    return {};
+  });
   const [activityLogs, setActivityLogs] = useState<Record<string, ActivityLog[]>>({});
   const [bedrockForms, setBedrockForms] = useState<Record<string, BedrockForm | null>>({});
   const [msAuthData, setMsAuthData] = useState<MsAuthData | null>(null);
@@ -81,6 +90,13 @@ export function useDaemonSocket(
     
     setDaemonUrlState(cleanSaved);
     setAuthTokenState(savedToken);
+    try {
+      const storedChat = localStorage.getItem(`pebbleafk_chat_${u}`);
+      if (storedChat) setMessagesByBot(JSON.parse(storedChat));
+      else setMessagesByBot({});
+    } catch (_) {
+      setMessagesByBot({});
+    }
     setStatus('DISCONNECTED');
   }, [currentUser]);
 
@@ -177,10 +193,21 @@ export function useDaemonSocket(
           }
 
           if (msg.type === 'CHAT_MESSAGE') {
-            setMessagesByBot((prev) => ({
-              ...prev,
-              [msg.payload.botId]: [...(prev[msg.payload.botId] || []).slice(-100), msg.payload],
-            }));
+            setMessagesByBot((prev) => {
+              const currentList = prev[msg.payload.botId] || [];
+              if (currentList.some((m) => m.id === msg.payload.id || (m.timestamp === msg.payload.timestamp && m.raw === msg.payload.raw))) {
+                return prev;
+              }
+              const updated = [...currentList.slice(-150), msg.payload];
+              const nextMap = { ...prev, [msg.payload.botId]: updated };
+              if (typeof window !== 'undefined') {
+                const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
+                try {
+                  localStorage.setItem(`pebbleafk_chat_${u}`, JSON.stringify(nextMap));
+                } catch (_) {}
+              }
+              return nextMap;
+            });
           }
 
           if (msg.type === 'ACTIVITY_LOG') {
@@ -292,6 +319,23 @@ export function useDaemonSocket(
     updateDaemon: () => {
       setBotStates({});
       return send({ type: 'UPDATE_DAEMON' });
+    },
+    clearChat: (botId?: string) => {
+      setMessagesByBot((prev) => {
+        const next = { ...prev };
+        if (botId) {
+          delete next[botId];
+        } else {
+          return {};
+        }
+        if (typeof window !== 'undefined') {
+          const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
+          try {
+            localStorage.setItem(`pebbleafk_chat_${u}`, JSON.stringify(next));
+          } catch (_) {}
+        }
+        return next;
+      });
     },
     verifyAccount: (accountId: string, email?: string) => send({ type: 'VERIFY_ACCOUNT', payload: { accountId, email } }),
     sendChat: (botId: string, message: string) => send({ type: 'SEND_CHAT', payload: { botId, message } }),

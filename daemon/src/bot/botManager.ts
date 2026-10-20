@@ -131,6 +131,16 @@ export class BotManager {
               state: instance.state,
             },
           });
+
+          // Sync buffered chat history for this bot so dashboard chat loads immediately
+          if (instance.chatHistory && instance.chatHistory.length > 0) {
+            for (const chatMsg of instance.chatHistory) {
+              this.broadcastFn({
+                type: 'CHAT_MESSAGE',
+                payload: chatMsg,
+              });
+            }
+          }
         }
         break;
       }
