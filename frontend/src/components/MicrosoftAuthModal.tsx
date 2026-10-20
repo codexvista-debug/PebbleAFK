@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, ExternalLink, Copy, CheckCircle2, KeyRound, AlertTriangle, Loader2, LogOut } from 'lucide-react';
+import { X, ExternalLink, Copy, CheckCircle2, KeyRound, AlertTriangle, Loader2, LogOut, ShieldAlert } from 'lucide-react';
 
 interface MicrosoftAuthModalProps {
   authData: {
@@ -9,6 +9,7 @@ interface MicrosoftAuthModalProps {
     userCode: string;
     url: string;
     message?: string;
+    targetEmail?: string;
   } | null;
   accountEmail?: string;
   isPolling?: boolean;
@@ -28,17 +29,12 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
 
   if (!authData) return null;
 
-  // Ensure prompt=login is always present so Microsoft never auto-confirms an already-active session
-  let forceAccountUrl = authData.url || 'https://www.microsoft.com/link';
-  if (!forceAccountUrl.includes('prompt=')) {
-    forceAccountUrl += (forceAccountUrl.includes('?') ? '&' : '?') + 'prompt=login';
-  } else if (forceAccountUrl.includes('prompt=select_account')) {
-    forceAccountUrl = forceAccountUrl.replace('prompt=select_account', 'prompt=login');
-  }
+  const effectiveEmail = accountEmail || authData.targetEmail;
 
-  const effectiveEmail = accountEmail || (authData as any).targetEmail;
-  if (effectiveEmail && !forceAccountUrl.includes('login_hint=')) {
-    forceAccountUrl += (forceAccountUrl.includes('?') ? '&' : '?') + `login_hint=${encodeURIComponent(effectiveEmail)}`;
+  // Direct login.live.com URL bypasses microsoft.com redirects that strip query params
+  let directRemoteUrl = `https://login.live.com/oauth20_remoteconnect.srf?otc=${encodeURIComponent(authData.userCode)}&prompt=login`;
+  if (effectiveEmail) {
+    directRemoteUrl += `&login_hint=${encodeURIComponent(effectiveEmail)}`;
   }
 
   const handleCopyCode = () => {
@@ -48,9 +44,9 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
   };
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText(forceAccountUrl);
+    navigator.clipboard.writeText(directRemoteUrl);
     setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
+    setTimeout(() => setCopiedLink(false), 2500);
   };
 
   return (
@@ -87,7 +83,7 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
             </div>
           )}
 
-          {/* Active Waiting & Auto-Close Loading Animation Indicator */}
+          {/* Active Waiting Indicator */}
           {!errorMessage && (
             <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-50 via-teal-50 to-sky-50 border border-emerald-200/90 shadow-2xs text-left relative overflow-hidden">
               <div className="flex items-center gap-3 relative z-10">
@@ -103,7 +99,7 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   </div>
                   <p className="text-[11px] text-emerald-800/90 font-medium leading-relaxed mt-0.5">
-                    Please approve in your browser. <b>Do not close this window</b> — it will verify and close automatically!
+                    Approve in your browser. <b>Do not close this window</b> — it will verify and close automatically!
                   </p>
                 </div>
               </div>
@@ -111,14 +107,14 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
           )}
 
           {effectiveEmail && (
-            <div className="p-3 rounded-xl bg-slate-100 border border-slate-200 text-xs flex items-center justify-between text-left">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Signing In As:</span>
+            <div className="p-2.5 rounded-xl bg-slate-100 border border-slate-200 text-xs flex items-center justify-between text-left">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Target Account:</span>
               <span className="font-mono font-bold text-slate-900 truncate max-w-[220px]">{effectiveEmail}</span>
             </div>
           )}
 
           <p className="text-xs text-slate-600 leading-relaxed">
-            Microsoft requires you to verify ownership of your Bedrock / Xbox account. Enter this code at the Microsoft link below:
+            Enter this code at Microsoft to verify your Bedrock account:
           </p>
 
           {/* Big Code Card */}
@@ -131,56 +127,61 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
             </div>
             <button
               onClick={handleCopyCode}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition border border-slate-700 cursor-pointer shadow-xs"
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition border border-slate-700 cursor-pointer shadow-xs active:scale-95"
             >
               {copiedCode ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
               {copiedCode ? 'Code Copied!' : 'Copy Code'}
             </button>
           </div>
 
+          {/* Multi-Account / Incognito Notice */}
+          <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200/90 text-left space-y-1.5">
+            <div className="flex items-center gap-1.5 text-amber-900 font-bold text-xs">
+              <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>Multi-Account Tip: Avoid Browser Auto-Login</span>
+            </div>
+            <p className="text-[11px] text-amber-800 leading-relaxed">
+              If your browser is already logged into another account, click <b>Copy Incognito Link</b> below, then open a <b>New Incognito Tab</b> (<code>Ctrl + Shift + N</code>) and paste it!
+            </p>
+          </div>
+
           {/* Action Buttons */}
           <div className="space-y-2 pt-1">
             <a
-              href={forceAccountUrl}
+              href={directRemoteUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
+              className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer active:scale-98"
             >
               <ExternalLink className="w-4 h-4" />
-              Open Microsoft Sign-In (Private Login)
+              <span>Open Microsoft Sign-In</span>
             </a>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                onClick={handleCopyLink}
+                className={`py-2 px-3 rounded-lg text-xs font-bold transition border cursor-pointer flex items-center justify-center gap-1.5 ${
+                  copiedLink
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                    : 'bg-slate-900 hover:bg-slate-800 text-white border-slate-900 shadow-2xs'
+                }`}
+                title="Copy link to paste in an Incognito tab"
+              >
+                {copiedLink ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedLink ? 'Copied! Paste in Incognito' : 'Copy Incognito Link'}</span>
+              </button>
+
               <a
                 href="https://login.live.com/logout.srf"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="py-2 px-3 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold text-xs transition border border-amber-200 cursor-pointer flex items-center justify-center gap-1.5"
-                title="Log out of current Microsoft account in browser"
+                className="py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition border border-slate-200 cursor-pointer flex items-center justify-center gap-1.5"
+                title="Sign out of existing Microsoft account in your browser"
               >
-                <LogOut className="w-3.5 h-3.5 text-amber-700" />
+                <LogOut className="w-3.5 h-3.5 text-slate-500" />
                 <span>Sign Out of Microsoft</span>
               </a>
-
-              <button
-                onClick={handleCopyLink}
-                className="py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition border border-slate-200 cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                {copiedLink ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                {copiedLink ? 'Copied!' : 'Copy Private Link'}
-              </button>
             </div>
-          </div>
-
-          {/* Multi-Account Advice Box */}
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-left space-y-1.5">
-            <div className="flex items-center gap-1.5 text-slate-900 font-bold text-xs">
-              <KeyRound className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>Private Multi-Account Authentication</span>
-            </div>
-            <p className="text-[11px] text-slate-600 leading-relaxed">
-              Every sign-in forces a fresh login prompt (<code>prompt=login</code>). When Microsoft opens, sign in with the <b>Microsoft email</b> that owns your Bedrock / Xbox account.
-            </p>
           </div>
         </div>
 

@@ -164,8 +164,8 @@ export class BotManager {
         if (verificationId !== this.currentVerificationId) return;
         console.log(chalk.yellow(`[Auth Code] Xbox Code for ${authKey}: ${data.user_code}`));
         const directUri = data.user_code
-          ? `https://www.microsoft.com/link?otc=${encodeURIComponent(data.user_code)}${!isNew ? `&login_hint=${encodeURIComponent(authKey)}` : ''}&prompt=login`
-          : (data.verification_uri || 'https://www.microsoft.com/link');
+          ? `https://login.live.com/oauth20_remoteconnect.srf?otc=${encodeURIComponent(data.user_code)}${!isNew ? `&login_hint=${encodeURIComponent(authKey)}` : ''}&prompt=login`
+          : (data.verification_uri || 'https://login.live.com/oauth20_remoteconnect.srf');
 
         this.broadcastFn({
           type: 'MS_AUTH_CODE',
