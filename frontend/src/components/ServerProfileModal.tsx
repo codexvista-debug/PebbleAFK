@@ -32,7 +32,9 @@ const DEFAULT_SETTINGS: BotSettings = {
 
 const BEDROCK_VERSIONS = [
   { label: 'Auto Detect (Recommended)', value: 'auto' },
-  { label: '1.21.50 (Latest)', value: '1.21.50' },
+  { label: '1.26.30 (FreshSMP / Bedrock 26.x)', value: '1.26.30' },
+  { label: '1.26.51 (DonutSMP / Bedrock Preview)', value: '1.26.51' },
+  { label: '1.21.50 (Bedrock 1.21 Stable)', value: '1.21.50' },
   { label: '1.21.40', value: '1.21.40' },
   { label: '1.21.30', value: '1.21.30' },
   { label: '1.21.20', value: '1.21.20' },

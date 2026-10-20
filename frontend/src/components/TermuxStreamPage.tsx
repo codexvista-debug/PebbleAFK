@@ -23,14 +23,26 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  const logsEndRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-scroll when new logs arrive
+  // Auto-scroll when new logs arrive (ONLY when autoScroll is active)
   useEffect(() => {
-    if (autoScroll && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (autoScroll && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
     }
   }, [logs, autoScroll]);
+
+  // Mobile & desktop scroll detector: pauses auto-scroll when user scrolls up
+  const handleScroll = () => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 60;
+    if (!isAtBottom && autoScroll) {
+      setAutoScroll(false);
+    } else if (isAtBottom && !autoScroll) {
+      setAutoScroll(true);
+    }
+  };
 
   const handleCopyLogs = () => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -70,7 +82,7 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
+    <div className="max-w-6xl mx-auto space-y-6 w-full">
       {/* Main Light Card */}
       <div className="bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
         {/* Card Header (Light Mode) */}
@@ -93,7 +105,13 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
           <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
-              onClick={() => setAutoScroll(!autoScroll)}
+              onClick={() => {
+                const next = !autoScroll;
+                setAutoScroll(next);
+                if (next && scrollContainerRef.current) {
+                  scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+                }
+              }}
               title={autoScroll ? 'Auto-scroll is ON (Click to pause)' : 'Auto-scroll is PAUSED (Click to resume)'}
               className={`p-2 rounded-xl border transition cursor-pointer shadow-2xs flex items-center justify-center ${
                 autoScroll
@@ -155,8 +173,13 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
           </div>
         </div>
 
-        {/* Terminal Screen Body (100% Crisp Light Mode) */}
-        <div className="p-4 bg-slate-50/80 border-b border-slate-200 h-[520px] overflow-y-auto font-mono text-xs text-slate-700 space-y-1 select-text">
+        {/* Terminal Screen Body (Exact Same Size as Chat Box: h-[580px] sm:h-[650px]) */}
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScroll}
+          className="p-4 bg-slate-50/80 border-b border-slate-200 h-[580px] sm:h-[650px] overflow-y-auto font-mono text-xs text-slate-700 space-y-1 select-text overscroll-contain touch-pan-y"
+          style={{ WebkitOverflowScrolling: 'touch' }}
+        >
           <div className="text-slate-400 pb-2 text-[10px] border-b border-slate-200 mb-2 flex items-center justify-between font-bold">
             <span>PebbleAFK • Android Termux Bedrock Core Stream</span>
             <span>Total Log Lines: {logs.length}</span>
@@ -175,7 +198,6 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
           ) : (
             <>
               {logs.map((line, idx) => formatLogLine(line, idx))}
-              <div ref={logsEndRef} />
             </>
           )}
         </div>

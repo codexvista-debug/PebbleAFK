@@ -49,8 +49,17 @@ function getBedrockSupportedVersions(): { versions: Record<string, number>; curr
       return { versions: opts.Versions, currentVersion: '1.21.50' };
     }
   } catch (_) {}
-  return { versions: { '1.21.50': 766, '1.26.51': 2193 }, currentVersion: '1.21.50' };
+  return { versions: { '1.21.50': 766, '1.26.30': 770, '1.26.51': 2193 }, currentVersion: '1.26.30' };
 }
+
+// Persistent memory cache of verified working Bedrock versions per host
+const SERVER_VERSION_CACHE: Map<string, string> = new Map([
+  ['play.freshsmp.fun', '1.26.30'],
+  ['freshsmp.fun', '1.26.30'],
+  ['donutsmp.net', '1.26.51'],
+]);
+
+const BEDROCK_CYCLE_VERSIONS = ['1.26.30', '1.26.51', '1.26.0', '1.21.50', '1.21.30', '1.20.80'];
 
 function resolveBedrockTargetVersion(
   userVersion?: string,
@@ -82,11 +91,19 @@ function resolveBedrockTargetVersion(
     };
   }
 
-  // Known server auto-resolutions
+  // 1. Check verified working version cache
+  const cachedVer = SERVER_VERSION_CACHE.get(cleanHost);
+  if (cachedVer && versions[cachedVer]) {
+    return { version: cachedVer, isFallback: false, note: `Using verified Bedrock protocol for ${cleanHost} (${cachedVer})` };
+  }
+
+  // 2. Known server auto-resolutions
   if (cleanHost.includes('freshsmp')) {
-    return { version: '1.21.50', isFallback: false, note: 'Auto-detected FreshSMP Bedrock protocol (1.21.50)' };
+    SERVER_VERSION_CACHE.set(cleanHost, '1.26.30');
+    return { version: '1.26.30', isFallback: false, note: 'Auto-detected FreshSMP Bedrock protocol (1.26.30)' };
   }
   if (cleanHost.includes('donutsmp')) {
+    SERVER_VERSION_CACHE.set(cleanHost, '1.26.51');
     return { version: '1.26.51', isFallback: false, note: 'Auto-detected DonutSMP Bedrock protocol (1.26.51)' };
   }
 
@@ -147,6 +164,8 @@ export class PebbleBotInstance {
   private isExplicitlyStopped: boolean = false;
   private clientTick: bigint = 0n;
   private autoVersionOverride: string | null = null;
+  private reconnectAttemptCount: number = 0;
+  private currentVersionCandidate: string | null = null;
 
   // Telemetry cache
   private position = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -158,6 +177,11 @@ export class PebbleBotInstance {
   constructor(config: BotConfig, broadcastFn: (msg: DaemonMessage) => void) {
     this.config = config;
     this.broadcastFn = broadcastFn;
+  }
+
+  public getUptime(): number {
+    if (!this.connectStartTime || (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN')) return 0;
+    return Math.floor((Date.now() - this.connectStartTime) / 1000);
   }
 
   public async start() {
@@ -204,7 +228,7 @@ export class PebbleBotInstance {
       }
 
       const resolved = resolveBedrockTargetVersion(rawUserVersion, pingRes?.protocol, pingRes?.version, cleanHost);
-      const targetVersion = this.autoVersionOverride || resolved.version;
+      const targetVersion = this.autoVersionOverride || this.currentVersionCandidate || resolved.version;
 
       this.logActivity('connect', `🚀 Initiating RakNet handshake with ${cleanHost}:${cleanPort} (Minecraft Bedrock ${targetVersion}, Transport: ${rakBackend})...`);
 
@@ -292,6 +316,12 @@ export class PebbleBotInstance {
         this.updateState('SPAWNED');
         this.logActivity('spawn', '🌍 Spawned into Bedrock world!');
         this.handleSystemMessage(`🌍 Spawned into world as @${this.config.username}`);
+
+        // Lock in verified working version for this server host
+        this.reconnectAttemptCount = 0;
+        this.currentVersionCandidate = null;
+        this.autoVersionOverride = targetVersion;
+        SERVER_VERSION_CACHE.set(cleanHost, targetVersion);
 
         // Start Bedrock auth input and tick sync keepalive loops to prevent timeout kicks
         this.startTickSyncLoop(client);
@@ -400,10 +430,11 @@ export class PebbleBotInstance {
         this.handleSystemMessage(`🔄 Server transferring to subserver ${packet.server_address}:${packet.port}...`);
       });
 
-      // Disconnect event
-      client.on('disconnect', (packet: any) => {
-        const reason = packet?.message || packet?.reason || 'Disconnected from server';
-        console.log(chalk.red(`[PebbleAFK] Bot ${this.config.username} disconnected: ${reason}`));
+      let lastDisconnectReason = '';
+
+      const handleDisconnect = (reason: string, isError = false) => {
+        if (this.state === 'DISCONNECTED') return;
+        lastDisconnectReason = reason;
 
         // Auto-detect version requirement if server reports client is outdated
         const versionMatch = reason.match(/(?:supports|requires|versions?:?)[\s:]*([0-9.]+)/i);
@@ -411,40 +442,44 @@ export class PebbleBotInstance {
           let reqVer = versionMatch[1];
           if (reqVer.startsWith('26.')) reqVer = `1.${reqVer}`;
           this.autoVersionOverride = reqVer;
-          console.log(chalk.yellow(`[PebbleAFK] Server requested Bedrock version ${reqVer}. Auto-adjusting target version...`));
+          SERVER_VERSION_CACHE.set(cleanHost, reqVer);
+          console.log(chalk.yellow(`[PebbleAFK] Server requested Bedrock version ${reqVer}. Saved to verified cache.`));
           this.logActivity('status', `🔄 Server requested version ${reqVer}. Auto-adjusting target version...`);
         }
 
+        console.log(chalk.red(`[PebbleAFK] Bot @${this.config.username} disconnected: ${reason}`));
         this.logActivity('disconnect', `Disconnected: ${reason}`);
         this.cleanup();
-        this.updateState('KICKED', reason);
+        this.updateState(isError ? 'ERROR' : 'DISCONNECTED', reason);
         this.handleAutoReconnect();
+      };
+
+      // 1. Kick event from bedrock-protocol
+      client.on('kick', (packet: any) => {
+        const reason = packet?.message || packet?.reason || 'Kicked by server';
+        handleDisconnect(reason, false);
       });
 
-      // Error event
+      // 2. Disconnect packet from server
+      client.on('disconnect', (packet: any) => {
+        const reason = packet?.message || packet?.reason || 'Disconnected from server';
+        handleDisconnect(reason, false);
+      });
+
+      // 3. Error event
       client.on('error', (err: any) => {
         const errMsg = err?.message || String(err);
-        console.log(chalk.red(`[PebbleAFK] Bot ${this.config.username} error: ${errMsg}`));
         let descriptiveReason = errMsg;
         if (errMsg.includes('Connect timed out') || errMsg.includes('timed out')) {
-          if (isAutoVersion) {
-            // If connection timed out on auto, try alternating between 1.21.50 and 1.21.30
-            this.autoVersionOverride = this.autoVersionOverride === '1.21.30' ? '1.21.50' : '1.21.30';
-          }
-          descriptiveReason = `Connect timed out: ${cleanHost}:${cleanPort} sent no reply to RakNet UDP packets. (Server Bedrock gateway is offline or dropping UDP traffic).`;
+          descriptiveReason = `Connect timed out: ${cleanHost}:${cleanPort} sent no reply to RakNet UDP packets. (Server Bedrock gateway offline or filtering UDP traffic).`;
         }
-        this.logActivity('error', descriptiveReason);
-        this.cleanup();
-        this.updateState('ERROR', descriptiveReason);
-        this.handleAutoReconnect();
+        handleDisconnect(descriptiveReason, true);
       });
 
-      // Close event
+      // 4. Close event
       client.on('close', () => {
-        if (this.state !== 'DISCONNECTED' && this.state !== 'KICKED' && this.state !== 'ERROR') {
-          this.cleanup();
-          this.updateState('DISCONNECTED', 'Connection closed');
-          this.handleAutoReconnect();
+        if (this.state !== 'DISCONNECTED' && this.state !== 'ERROR') {
+          handleDisconnect(lastDisconnectReason || 'Server closed connection / session ended');
         }
       });
 
@@ -851,6 +886,19 @@ export class PebbleBotInstance {
 
     this.reconnectTimer = setTimeout(() => {
       if (!this.isExplicitlyStopped) {
+        const rawUserVersion = this.config.version?.trim();
+        const isAuto = !rawUserVersion || rawUserVersion.toLowerCase() === 'auto' || rawUserVersion.toLowerCase() === 'default';
+
+        if (isAuto && !this.autoVersionOverride) {
+          // Cycle through candidate Bedrock versions on each attempt until connected
+          const nextIdx = this.reconnectAttemptCount % BEDROCK_CYCLE_VERSIONS.length;
+          const candidate = BEDROCK_CYCLE_VERSIONS[nextIdx];
+          this.currentVersionCandidate = candidate;
+          this.logActivity('status', `🔄 Trying Bedrock protocol candidate: ${candidate}...`);
+          console.log(chalk.cyan(`[PebbleAFK] Version probe candidate: ${candidate} (Attempt #${this.reconnectAttemptCount + 1})`));
+        }
+
+        this.reconnectAttemptCount++;
         console.log(chalk.cyan(`[PebbleAFK] Executing auto-reconnect for ${this.config.username}...`));
         this.start();
       }

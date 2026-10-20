@@ -926,7 +926,8 @@ export default function Home() {
             const reason = botReasons[botKey] ? `: ${botReasons[botKey]}` : '';
             addPlayerLog(ign, srv.serverHost, 'error', `Connection error (${srv.serverHost})${reason}`, undefined, 'error');
           } else if (st === 'DISCONNECTED' && prevSt && prevSt !== 'DISCONNECTED') {
-            addPlayerLog(ign, srv.serverHost, 'disconnected', `Disconnected from ${srv.serverHost}`, undefined, 'warning');
+            const reason = botReasons[botKey] ? `: ${botReasons[botKey]}` : '';
+            addPlayerLog(ign, srv.serverHost, 'disconnected', `Disconnected from ${srv.serverHost}${reason}`, undefined, 'warning');
           }
         }
       }
@@ -2694,7 +2695,9 @@ export default function Home() {
                                   className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 cursor-pointer appearance-none"
                                 >
                                   <option value="auto">Auto Detect ({getAutoDetectedBedrockVersion(activeServer.serverHost)})</option>
-                                  <option value="1.21.50">1.21.50 (Latest)</option>
+                                  <option value="1.26.30">1.26.30 (FreshSMP / Bedrock 26.x)</option>
+                                  <option value="1.26.51">1.26.51 (DonutSMP / Bedrock Preview)</option>
+                                  <option value="1.21.50">1.21.50 (Bedrock 1.21 Stable)</option>
                                   <option value="1.21.40">1.21.40</option>
                                   <option value="1.21.30">1.21.30</option>
                                   <option value="1.21.20">1.21.20</option>

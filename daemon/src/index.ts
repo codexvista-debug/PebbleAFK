@@ -4,6 +4,7 @@ import * as dotenv from 'dotenv';
 import chalk from 'chalk';
 import { BotManager } from './bot/botManager';
 import { ClientMessage, DaemonMessage } from './types';
+import { startTermuxNotificationTicker, updateTermuxNotification } from './termuxNotification';
 
 dotenv.config();
 
@@ -91,9 +92,13 @@ function broadcast(message: DaemonMessage) {
       client.send(json);
     }
   }
+  if (message.type === 'BOT_STATE') {
+    updateTermuxNotification(botManager);
+  }
 }
 
 const botManager = new BotManager(broadcast);
+startTermuxNotificationTicker(botManager);
 
 wss.on('connection', (ws: WebSocket, req) => {
   const ip = req.socket.remoteAddress;

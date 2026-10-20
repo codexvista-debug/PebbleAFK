@@ -147,8 +147,8 @@ export interface MsAuthData {
 
 export function getAutoDetectedBedrockVersion(host?: string): string {
   const h = (host || '').toLowerCase();
-  if (h.includes('freshsmp')) return '1.21.50';
+  if (h.includes('freshsmp')) return '1.26.30';
   if (h.includes('donutsmp')) return '1.26.51';
   if (h.includes('cubecraft')) return '1.26.51';
-  return '1.21.50';
+  return '1.26.30';
 }
