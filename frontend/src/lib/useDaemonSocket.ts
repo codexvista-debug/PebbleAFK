@@ -58,6 +58,7 @@ export function useDaemonSocket(
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pingStartTimeRef = useRef<number>(0);
   const reconnectAttemptsRef = useRef<number>(0);
+  const chatSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
@@ -239,18 +240,25 @@ export function useDaemonSocket(
 
           if (msg.type === 'CHAT_MESSAGE') {
             setMessagesByBot((prev) => {
-              const currentList = prev[msg.payload.botId] || [];
+              const bId = msg.payload.botId;
+              const currentList = prev[bId] || [];
               if (currentList.some((m) => m.id === msg.payload.id || (m.timestamp === msg.payload.timestamp && m.raw === msg.payload.raw))) {
                 return prev;
               }
-              const updated = [...currentList.slice(-150), msg.payload];
-              const nextMap = { ...prev, [msg.payload.botId]: updated };
-              if (typeof window !== 'undefined') {
-                const u = currentUserRef.current ? currentUserRef.current.trim().toLowerCase() : 'guest';
-                try {
-                  localStorage.setItem(`pebbleafk_chat_${u}`, JSON.stringify(nextMap));
-                } catch (_) {}
-              }
+              const updated = [...currentList.slice(-250), msg.payload];
+              const nextMap = { ...prev, [bId]: updated };
+
+              // Debounce localStorage write so incoming chat renders instantly without UI delay
+              if (chatSaveTimerRef.current) clearTimeout(chatSaveTimerRef.current);
+              chatSaveTimerRef.current = setTimeout(() => {
+                if (typeof window !== 'undefined') {
+                  const u = currentUserRef.current ? currentUserRef.current.trim().toLowerCase() : 'guest';
+                  try {
+                    localStorage.setItem(`pebbleafk_chat_${u}`, JSON.stringify(nextMap));
+                  } catch (_) {}
+                }
+              }, 1200);
+
               return nextMap;
             });
           }

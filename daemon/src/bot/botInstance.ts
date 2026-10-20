@@ -336,6 +336,20 @@ export class PebbleBotInstance {
         this.handleBedrockForm(packet);
       });
 
+      // Bedrock Titles, Queue status & Action Bar notifications
+      client.on('set_title', (packet: any) => {
+        const titleText = (packet.text || packet.message || '').trim();
+        if (titleText) {
+          this.handleSystemMessage(`📢 ${titleText}`);
+        }
+      });
+
+      // Subserver Transfer request (e.g. /lifesteal gateway)
+      client.on('transfer', (packet: any) => {
+        console.log(chalk.cyan(`[PebbleAFK] Server requested transfer for ${this.config.username} -> ${packet.server_address}:${packet.port}`));
+        this.handleSystemMessage(`🔄 Server transferring to subserver ${packet.server_address}:${packet.port}...`);
+      });
+
       // Disconnect event
       client.on('disconnect', (packet: any) => {
         const reason = packet?.message || packet?.reason || 'Disconnected from server';
@@ -558,9 +572,14 @@ export class PebbleBotInstance {
 
   public pushChat(chatMsg: any) {
     this.chatHistory.push(chatMsg);
-    if (this.chatHistory.length > 150) {
+    if (this.chatHistory.length > 250) {
       this.chatHistory.shift();
     }
+
+    // Stream live chat to Termux terminal in real time
+    const cleanContent = (chatMsg.formattedText || chatMsg.raw || '').replace(/§[0-9a-fk-or]/gi, '');
+    console.log(chalk.magenta(`[Chat • @${this.config.username}] <${chatMsg.sender}> ${cleanContent}`));
+
     this.broadcastFn({
       type: 'CHAT_MESSAGE',
       payload: chatMsg,

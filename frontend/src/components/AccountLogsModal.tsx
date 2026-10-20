@@ -51,10 +51,8 @@ export const AccountLogsModal: React.FC<AccountLogsModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
-  const cleanPlayerName = account?.ign || account?.expectedIgn || account?.username || 'Unknown';
-  const avatarUrl =
-    account?.avatarUrl ||
-    `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(cleanPlayerName)}/avatarpic-l.png`;
+  const cleanPlayerName = (account?.ign || account?.expectedIgn || account?.username || 'Steve').replace(/^@/, '').trim();
+  const avatarUrl = `https://crafthead.net/helm/${encodeURIComponent(cleanPlayerName)}/32`;
 
   const unifiedLogs = useMemo(() => {
     type UnifiedLogItem = {

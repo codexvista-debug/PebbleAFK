@@ -52,8 +52,14 @@ import { ServerProfileModal } from '@/components/ServerProfileModal';
 import { DangerousSettingsModal } from '@/components/DangerousSettingsModal';
 import { AccountLogsModal } from '@/components/AccountLogsModal';
 import { ServerLogo } from '@/components/ServerLogo';
+import { MinecraftText } from '@/components/MinecraftText';
 import { useDaemonSocket } from '@/lib/useDaemonSocket';
 import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType, getAutoDetectedBedrockVersion } from '@/types';
+
+const getPlayerSkinHeadUrl = (name: string, size = 32) => {
+  const clean = (name || 'Steve').replace(/^@/, '').trim();
+  return `https://crafthead.net/helm/${encodeURIComponent(clean)}/${size}`;
+};
 import { 
   loadAccountsFromSupabase, 
   syncAllToSupabase, 
@@ -1713,7 +1719,7 @@ export default function Home() {
                             .map((acc) => {
                               const displayName = acc.ign || acc.username || 'BedrockPlayer';
                               const rawName = displayName.includes('@') ? displayName.split('@')[0] : displayName;
-                              const primaryAvatarUrl = acc.avatarUrl || `https://crafthead.net/helm/${encodeURIComponent(displayName)}/32`;
+                              const primaryAvatarUrl = getPlayerSkinHeadUrl(displayName, 36);
                               const dateAddedStr = acc.addedAt
                                 ? new Date(acc.addedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
                                   ', ' +
@@ -1731,13 +1737,11 @@ export default function Home() {
                                           alt={displayName}
                                           className="w-full h-full object-cover [image-rendering:pixelated]"
                                           onError={(e) => {
-                                            const img = e.target as HTMLImageElement;
-                                            if (acc.avatarUrl && img.src !== acc.avatarUrl) {
-                                              img.src = acc.avatarUrl;
-                                            } else if (!img.src.includes('crafthead')) {
-                                              img.src = `https://crafthead.net/helm/${encodeURIComponent(displayName)}/32`;
-                                            } else if (!img.src.includes('mc-heads')) {
+                                            const img = e.currentTarget as HTMLImageElement;
+                                            if (!img.src.includes('mc-heads')) {
                                               img.src = `https://mc-heads.net/avatar/${encodeURIComponent(displayName)}/32`;
+                                            } else if (!img.src.includes('minotar')) {
+                                              img.src = `https://minotar.net/helm/${encodeURIComponent(displayName)}/32`;
                                             } else {
                                               img.src = 'https://minotar.net/helm/MHF_Steve/32.png';
                                             }
@@ -1868,7 +1872,7 @@ export default function Home() {
 
             {/* VIEW 3: SERVERS VIEW (CONNECT, CHAT, SETTINGS) */}
             {activeTab === 'servers' && (
-              <div className="max-w-4xl mx-auto space-y-6">
+              <div className="max-w-6xl mx-auto space-y-6 w-full">
                 {!activeServer ? (
                   /* Empty state when no server profile exists */
                   <div className="p-12 rounded-3xl bg-white border border-slate-200/90 shadow-xs text-center space-y-4">
@@ -2029,11 +2033,17 @@ export default function Home() {
                                           <div className="flex items-center gap-2.5">
                                             <div className="w-7 h-7 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
                                               <img
-                                                src={acc.avatarUrl || `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(acc.ign || acc.username)}/avatarpic-l.png`}
-                                                alt="Gamerpic"
-                                                className="w-full h-full object-cover"
+                                                src={getPlayerSkinHeadUrl(acc.ign || acc.username, 32)}
+                                                alt="Skin"
+                                                className="w-full h-full object-cover [image-rendering:pixelated]"
                                                 onError={(e) => {
-                                                  (e.currentTarget as HTMLImageElement).src = 'https://raw.githubusercontent.com/InventivetalentDev/MineRender/master/dist/steve.png';
+                                                  const img = e.currentTarget as HTMLImageElement;
+                                                  const clean = (acc.ign || acc.username || 'Steve').replace(/^@/, '').trim();
+                                                  if (!img.src.includes('mc-heads')) {
+                                                    img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/32`;
+                                                  } else {
+                                                    img.src = 'https://minotar.net/helm/MHF_Steve/32.png';
+                                                  }
                                                 }}
                                               />
                                             </div>
@@ -2158,11 +2168,17 @@ export default function Home() {
                                           <div className="flex items-center gap-2.5">
                                             <div className="w-7 h-7 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
                                               <img
-                                                src={acc.avatarUrl || `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(acc.ign || acc.username)}/avatarpic-l.png`}
-                                                alt="Gamerpic"
-                                                className="w-full h-full object-cover"
+                                                src={getPlayerSkinHeadUrl(acc.ign || acc.username, 32)}
+                                                alt="Skin"
+                                                className="w-full h-full object-cover [image-rendering:pixelated]"
                                                 onError={(e) => {
-                                                  (e.currentTarget as HTMLImageElement).src = 'https://raw.githubusercontent.com/InventivetalentDev/MineRender/master/dist/steve.png';
+                                                  const img = e.currentTarget as HTMLImageElement;
+                                                  const clean = (acc.ign || acc.username || 'Steve').replace(/^@/, '').trim();
+                                                  if (!img.src.includes('mc-heads')) {
+                                                    img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/32`;
+                                                  } else {
+                                                    img.src = 'https://minotar.net/helm/MHF_Steve/32.png';
+                                                  }
                                                 }}
                                               />
                                             </div>
@@ -2246,10 +2262,13 @@ export default function Home() {
                       // Collect chat messages
                       let chatList: ChatMessage[] = [];
                       if (selectedChatReceiver === 'all') {
-                        targetAccounts.forEach((acc) => {
-                          const bId = `${activeServer.id}__${acc.id}`;
-                          const msgs = messagesByBot[bId] || messagesByBot[acc.id] || [];
-                          chatList.push(...msgs);
+                        Object.entries(messagesByBot).forEach(([bKey, msgs]) => {
+                          if (
+                            bKey.startsWith(`${activeServer.id}__`) ||
+                            targetAccounts.some((a) => bKey === a.id || bKey === a.ign || bKey === a.username)
+                          ) {
+                            chatList.push(...msgs);
+                          }
                         });
                       } else {
                         const bId = `${activeServer.id}__${selectedChatReceiver}`;
@@ -2301,11 +2320,17 @@ export default function Home() {
                                   <>
                                     <div className="w-5 h-5 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
                                       <img
-                                        src={selectedAccount.avatarUrl || `https://crafthead.net/helm/${encodeURIComponent(selectedAccount.ign || selectedAccount.username)}/24`}
+                                        src={getPlayerSkinHeadUrl(selectedAccount.ign || selectedAccount.username, 24)}
                                         alt="Skin"
-                                        className="w-full h-full object-cover"
+                                        className="w-full h-full object-cover [image-rendering:pixelated]"
                                         onError={(e) => {
-                                          (e.currentTarget as HTMLImageElement).src = `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(selectedAccount.ign || selectedAccount.username)}/avatarpic-l.png`;
+                                          const img = e.currentTarget as HTMLImageElement;
+                                          const clean = (selectedAccount.ign || selectedAccount.username || 'Steve').replace(/^@/, '').trim();
+                                          if (!img.src.includes('mc-heads')) {
+                                            img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/24`;
+                                          } else {
+                                            img.src = 'https://minotar.net/helm/MHF_Steve/24.png';
+                                          }
                                         }}
                                       />
                                     </div>
@@ -2364,11 +2389,17 @@ export default function Home() {
                                         <div className="flex items-center gap-2.5">
                                           <div className="w-5 h-5 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
                                             <img
-                                              src={acc.avatarUrl || `https://crafthead.net/helm/${encodeURIComponent(acc.ign || acc.username)}/24`}
+                                              src={getPlayerSkinHeadUrl(acc.ign || acc.username, 24)}
                                               alt="Skin"
-                                              className="w-full h-full object-cover"
+                                              className="w-full h-full object-cover [image-rendering:pixelated]"
                                               onError={(e) => {
-                                                (e.currentTarget as HTMLImageElement).src = `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(acc.ign || acc.username)}/avatarpic-l.png`;
+                                                const img = e.currentTarget as HTMLImageElement;
+                                                const clean = (acc.ign || acc.username || 'Steve').replace(/^@/, '').trim();
+                                                if (!img.src.includes('mc-heads')) {
+                                                  img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/24`;
+                                                } else {
+                                                  img.src = 'https://minotar.net/helm/MHF_Steve/24.png';
+                                                }
                                               }}
                                             />
                                           </div>
@@ -2458,8 +2489,8 @@ export default function Home() {
                               </button>
                             </div>
 
-                            {/* Chat Messages Stream Area */}
-                            <div className="h-[430px] p-5 overflow-y-auto space-y-2.5 font-mono text-xs bg-white">
+                            {/* Chat Messages Stream Area (Spacious layout matching PocketAFK) */}
+                            <div className="h-[580px] sm:h-[650px] p-5 overflow-y-auto space-y-2.5 font-mono text-xs bg-white">
                               {chatList.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400 space-y-3">
                                   <div className="w-11 h-11 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-center text-slate-400 shadow-2xs">
@@ -2488,7 +2519,6 @@ export default function Home() {
                                   {chatList.map((m) => {
                                     const isPlayer = m.type === 'chat' && m.sender !== 'System' && m.sender !== 'Server';
                                     const cleanSender = m.sender || 'Server';
-                                    const headUrl = `https://crafthead.net/helm/${encodeURIComponent(cleanSender)}/20`;
 
                                     return (
                                       <div key={m.id} className="flex items-start gap-2.5 py-1 text-xs hover:bg-slate-50/80 rounded-lg px-2 transition">
@@ -2500,11 +2530,16 @@ export default function Home() {
                                           <div className="flex items-center gap-1.5 shrink-0">
                                             <div className="w-4 h-4 rounded-xs overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
                                               <img
-                                                src={headUrl}
+                                                src={getPlayerSkinHeadUrl(cleanSender, 20)}
                                                 alt={cleanSender}
-                                                className="w-full h-full object-cover"
+                                                className="w-full h-full object-cover [image-rendering:pixelated]"
                                                 onError={(e) => {
-                                                  (e.currentTarget as HTMLImageElement).src = `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(cleanSender)}/avatarpic-l.png`;
+                                                  const img = e.currentTarget as HTMLImageElement;
+                                                  if (!img.src.includes('mc-heads')) {
+                                                    img.src = `https://mc-heads.net/avatar/${encodeURIComponent(cleanSender)}/20`;
+                                                  } else {
+                                                    img.src = 'https://minotar.net/helm/MHF_Steve/20.png';
+                                                  }
                                                 }}
                                               />
                                             </div>
@@ -2519,7 +2554,7 @@ export default function Home() {
                                         )}
 
                                         <span className="text-slate-800 break-all font-mono leading-relaxed flex-1">
-                                          {m.formattedText || m.raw}
+                                          <MinecraftText text={m.raw || m.formattedText} />
                                         </span>
                                       </div>
                                     );
