@@ -2517,8 +2517,33 @@ export default function Home() {
                               ) : (
                                 <>
                                   {chatList.map((m) => {
-                                    const isPlayer = m.type === 'chat' && m.sender !== 'System' && m.sender !== 'Server';
-                                    const cleanSender = m.sender || 'Server';
+                                    const rawOrFormatted = m.raw || m.formattedText || '';
+                                    let effectiveSender = m.sender || 'Server';
+                                    let effectiveMessage = m.raw || m.formattedText || '';
+                                    let isPlayer = m.type === 'chat' && m.sender !== 'System' && m.sender !== 'Server';
+
+                                    // Dynamic sender recognition for server broadcasts / FreshSMP ▶ formats
+                                    if (!isPlayer) {
+                                      const stripped = rawOrFormatted
+                                        .replace(/(?:§|&)x(?:(?:§|&)[0-9a-fA-F]){6}/gi, '')
+                                        .replace(/(?:§|&)[0-9a-zA-Z]/gi, '')
+                                        .replace(/§+/g, '')
+                                        .trim();
+                                      const matchAngle = stripped.match(/^<([a-zA-Z0-9_]{3,16})>\s*([\s\S]*)$/);
+                                      const matchSeparator = stripped.match(/^(?:\[?[a-zA-Z0-9_+\- ]+\]?\s+)?([a-zA-Z0-9_]{3,16})\s*[▶:»>]\s*([\s\S]*)$/);
+
+                                      if (matchAngle) {
+                                        effectiveSender = matchAngle[1];
+                                        effectiveMessage = matchAngle[2];
+                                        isPlayer = true;
+                                      } else if (matchSeparator) {
+                                        effectiveSender = matchSeparator[1];
+                                        effectiveMessage = matchSeparator[2];
+                                        isPlayer = true;
+                                      }
+                                    }
+
+                                    const cleanSender = effectiveSender;
 
                                     return (
                                       <div key={m.id} className="flex items-start gap-2.5 py-1 text-xs hover:bg-slate-50/80 rounded-lg px-2 transition">
@@ -2554,7 +2579,7 @@ export default function Home() {
                                         )}
 
                                         <span className="text-slate-800 break-all font-mono leading-relaxed flex-1">
-                                          <MinecraftText text={m.raw || m.formattedText} />
+                                          <MinecraftText text={effectiveMessage} />
                                         </span>
                                       </div>
                                     );

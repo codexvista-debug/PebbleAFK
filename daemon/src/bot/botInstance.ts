@@ -120,6 +120,18 @@ function resolveBedrockTargetVersion(
   };
 }
 
+export function stripMinecraftFormatting(text: string): string {
+  if (!text) return '';
+  return text
+    // Strip hex color codes: §x§r§r§g§g§b§b or &x&r&r&g&g&b&b
+    .replace(/(?:§|&)x(?:(?:§|&)[0-9a-fA-F]){6}/gi, '')
+    // Strip standard and extended Bedrock color/format codes
+    .replace(/(?:§|&)[0-9a-zA-Z]/gi, '')
+    // Strip any stray section signs
+    .replace(/§+/g, '')
+    .trim();
+}
+
 export class PebbleBotInstance {
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
@@ -129,6 +141,7 @@ export class PebbleBotInstance {
   private connectStartTime: number = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private tickSyncInterval: NodeJS.Timeout | null = null;
+  private playerAuthInterval: NodeJS.Timeout | null = null;
   private antiAfkInterval: NodeJS.Timeout | null = null;
   private telemetryInterval: NodeJS.Timeout | null = null;
   private isExplicitlyStopped: boolean = false;
@@ -280,28 +293,15 @@ export class PebbleBotInstance {
         this.logActivity('spawn', '🌍 Spawned into Bedrock world!');
         this.handleSystemMessage(`🌍 Spawned into world as @${this.config.username}`);
 
-        // Start tick_sync heartbeat to prevent timeout disconnects
-        if (this.tickSyncInterval) clearInterval(this.tickSyncInterval);
-        this.clientTick = 0n;
-        this.tickSyncInterval = setInterval(() => {
-          if (this.client !== client || this.state !== 'SPAWNED') return;
-          try {
-            client.write('tick_sync', { request_time: this.clientTick, response_time: 0n });
-            this.clientTick += 10n;
-          } catch (_) {}
-        }, 500);
-
-        client.on('tick_sync', (packet: any) => {
-          if (packet?.response_time) {
-            this.clientTick = BigInt(packet.response_time);
-          }
-        });
+        // Start Bedrock auth input and tick sync keepalive loops to prevent timeout kicks
+        this.startTickSyncLoop(client);
+        this.startPlayerAuthInputLoop(client);
 
         this.setupTelemetry();
         this.setupAntiAfk();
       });
 
-      // Start Game packet: captures spawn coordinates & world info
+      // Start Game packet: captures spawn coordinates & world info, and confirms chunk radius
       client.on('start_game', (packet: any) => {
         if (packet?.player_position) {
           this.position = {
@@ -313,6 +313,56 @@ export class PebbleBotInstance {
           };
           this.emitTelemetry();
         }
+        try {
+          client.write('request_chunk_radius', { chunk_radius: 8 });
+        } catch (_) {}
+      });
+
+      // Confirm chunk loading so server knows client finished downloading terrain
+      client.on('network_chunk_publisher_update', (packet: any) => {
+        try {
+          client.write('request_chunk_radius', { chunk_radius: 8 });
+        } catch (_) {}
+      });
+
+      client.on('chunk_radius_update', (packet: any) => {
+        try {
+          client.write('request_chunk_radius', { chunk_radius: packet.chunk_radius || 8 });
+        } catch (_) {}
+      });
+
+      // Handle subserver dimension changes (e.g. transfer to /lifesteal)
+      client.on('change_dimension', (packet: any) => {
+        console.log(chalk.cyan(`[PebbleAFK] Dimension change acknowledged for @${this.config.username}`));
+        this.logActivity('status', `🔄 Dimension change acknowledged (moving to subserver)`);
+        try {
+          client.write('player_action', {
+            runtime_entity_id: client.entityId || 1n,
+            action: 'dimension_change_ack',
+            position: { x: 0, y: 0, z: 0 },
+            result_position: { x: 0, y: 0, z: 0 },
+            face: 0,
+          });
+          client.write('request_chunk_radius', { chunk_radius: 8 });
+        } catch (_) {}
+      });
+
+      client.on('respawn', (packet: any) => {
+        if (packet?.position) {
+          this.position.x = Math.round(packet.position.x * 10) / 10;
+          this.position.y = Math.round(packet.position.y * 10) / 10;
+          this.position.z = Math.round(packet.position.z * 10) / 10;
+        }
+        try {
+          client.write('player_action', {
+            runtime_entity_id: client.entityId || 1n,
+            action: 'respawn',
+            position: { x: 0, y: 0, z: 0 },
+            result_position: { x: 0, y: 0, z: 0 },
+            face: 0,
+          });
+          client.write('request_chunk_radius', { chunk_radius: 8 });
+        } catch (_) {}
       });
 
       // Move Player packet: updates bot position
@@ -510,6 +560,56 @@ export class PebbleBotInstance {
     } catch (_) {}
   }
 
+  private startTickSyncLoop(client: any) {
+    if (this.tickSyncInterval) clearInterval(this.tickSyncInterval);
+    this.clientTick = 0n;
+    this.tickSyncInterval = setInterval(() => {
+      if (this.client !== client || (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN')) return;
+      try {
+        client.write('tick_sync', { request_time: this.clientTick, response_time: 0n });
+      } catch (_) {}
+    }, 1000);
+
+    client.on('tick_sync', (packet: any) => {
+      if (packet?.response_time) {
+        this.clientTick = BigInt(packet.response_time);
+      }
+    });
+  }
+
+  private startPlayerAuthInputLoop(client: any) {
+    if (this.playerAuthInterval) clearInterval(this.playerAuthInterval);
+    this.playerAuthInterval = setInterval(() => {
+      if (this.client !== client || (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN')) return;
+      try {
+        this.clientTick += 2n;
+
+        // Continuous player authoritative inputs prevent Bedrock server / Geyser timeout watchdogs
+        client.write('player_auth_input', {
+          pitch: this.position.pitch || 0,
+          yaw: this.position.yaw || 0,
+          position: {
+            x: this.position.x || 0,
+            y: this.position.y || 64,
+            z: this.position.z || 0,
+          },
+          move_vector: { x: 0, z: 0 },
+          head_yaw: this.position.yaw || 0,
+          input_data: {},
+          input_mode: 'touch',
+          play_mode: 'normal',
+          interaction_model: 'classic',
+          interact_rotation: { x: 0, z: 0 },
+          tick: this.clientTick,
+          delta: { x: 0, y: 0, z: 0 },
+          analogue_move_vector: { x: 0, z: 0 },
+          camera_orientation: { x: 0, y: 0, z: 0 },
+          raw_move_vector: { x: 0, z: 0 },
+        });
+      } catch (_) {}
+    }, 100);
+  }
+
   private setupAntiAfk() {
     if (this.antiAfkInterval) clearInterval(this.antiAfkInterval);
     if (!this.config.settings?.antiAfk) return;
@@ -529,6 +629,23 @@ export class PebbleBotInstance {
         this.client.write('animate', {
           action_id: 1, // Swing arm
           runtime_entity_id: this.client.entityId || 1n,
+        });
+
+        // Bedrock move_player packet ensures server anticheats and watchdog track active movement
+        this.client.write('move_player', {
+          runtime_id: this.client.entityId || 1n,
+          position: {
+            x: this.position.x || 0,
+            y: this.position.y || 64,
+            z: this.position.z || 0,
+          },
+          pitch: this.position.pitch || 0,
+          yaw: this.position.yaw || 0,
+          head_yaw: this.position.yaw || 0,
+          mode: 'normal',
+          on_ground: true,
+          ridden_runtime_id: 0,
+          tick: this.clientTick,
         });
       } catch (_) {}
     }, intervalSec * 1000);
@@ -577,7 +694,7 @@ export class PebbleBotInstance {
     }
 
     // Stream live chat to Termux terminal in real time
-    const cleanContent = (chatMsg.formattedText || chatMsg.raw || '').replace(/§[0-9a-fk-or]/gi, '');
+    const cleanContent = stripMinecraftFormatting(chatMsg.formattedText || chatMsg.raw || '');
     console.log(chalk.magenta(`[Chat • @${this.config.username}] <${chatMsg.sender}> ${cleanContent}`));
 
     this.broadcastFn({
@@ -654,24 +771,32 @@ export class PebbleBotInstance {
       if (!sender) sender = packet.source_name || '';
     }
 
-    // Clean section signs (§) for clean readable text
-    let cleanSender = sender.replace(/§[0-9a-fk-or]/gi, '').trim();
-    let cleanText = (rawMsg || '').replace(/§[0-9a-fk-or]/gi, '').trim();
+    // Clean section signs (§) and formatting codes
+    let cleanSender = stripMinecraftFormatting(sender);
+    let cleanText = stripMinecraftFormatting(rawMsg);
 
     if (!cleanText) return;
 
-    // Pattern recognition: extract player sender if embedded in message (e.g., "<Player> Hi" or "[Rank] Player: Hi" or "Player » Hi")
+    // Pattern recognition: extract player sender if embedded in message
+    // Handles formats like:
+    // "<Player> message"
+    // "MEMBER Player ▶ message"
+    // "MEMBER _CyanCanvas78406 ▶ CyanCanvas78406"
+    // "[MEMBER] Player: message"
+    // "Player ▶ message"
+    // "Player » message"
+    // "Player: message"
     if (!cleanSender || cleanSender === 'Server' || cleanSender === 'System') {
-      const matchBracket = cleanText.match(/^<([a-zA-Z0-9_]{3,16})>\s*(.*)$/);
-      const matchColon = cleanText.match(/^(?:\[[^\]]+\]\s*)*([a-zA-Z0-9_]{3,16})\s*[:»>]\s*(.*)$/);
+      const matchAngle = cleanText.match(/^<([a-zA-Z0-9_]{3,16})>\s*([\s\S]*)$/);
+      const matchSeparator = cleanText.match(/^(?:\[?[a-zA-Z0-9_+\- ]+\]?\s+)?([a-zA-Z0-9_]{3,16})\s*[▶:»>]\s*([\s\S]*)$/);
 
-      if (matchBracket) {
-        cleanSender = matchBracket[1];
-        cleanText = matchBracket[2];
+      if (matchAngle) {
+        cleanSender = matchAngle[1];
+        cleanText = matchAngle[2];
         isSystem = false;
-      } else if (matchColon) {
-        cleanSender = matchColon[1];
-        cleanText = matchColon[2];
+      } else if (matchSeparator) {
+        cleanSender = matchSeparator[1];
+        cleanText = matchSeparator[2];
         isSystem = false;
       }
     }
@@ -686,7 +811,7 @@ export class PebbleBotInstance {
       accountUsername: this.config.username,
       id: randomUUID(),
       timestamp: Date.now(),
-      raw: rawMsg,
+      raw: isSystem ? rawMsg : cleanText,
       formattedText: cleanText,
       sender: cleanSender,
       type: isSystem ? 'system' : 'chat',
@@ -842,6 +967,10 @@ export class PebbleBotInstance {
   }
 
   private cleanup() {
+    if (this.playerAuthInterval) {
+      clearInterval(this.playerAuthInterval);
+      this.playerAuthInterval = null;
+    }
     if (this.tickSyncInterval) {
       clearInterval(this.tickSyncInterval);
       this.tickSyncInterval = null;
