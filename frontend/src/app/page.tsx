@@ -7,13 +7,13 @@ import {
   LayoutDashboard, 
   Server, 
   Users, 
-  Activity, 
-  Terminal,
-  RotateCw,
-  Check,
-  Copy,
-  Network,
-  Sparkles
+  Terminal, 
+  Check, 
+  Copy, 
+  Network, 
+  Sparkles,
+  Menu,
+  X
 } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
@@ -24,6 +24,7 @@ export default function Home() {
   const [secretCode, setSecretCode] = useState<string>('');
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'servers' | 'accounts'>('dashboard');
   const [copiedCmd, setCopiedCmd] = useState(false);
 
@@ -43,7 +44,6 @@ export default function Home() {
     setCurrentUser(username);
     if (typeof window !== 'undefined') {
       localStorage.setItem('pebbleafk_current_user', username);
-      // Fetch or derive secret code
       fetch(`/api/auth?username=${encodeURIComponent(username)}`)
         .then((r) => r.json())
         .then((data) => {
@@ -59,6 +59,7 @@ export default function Home() {
   const handleLogout = () => {
     setCurrentUser(null);
     setSecretCode('');
+    setIsMobileSidebarOpen(false);
     if (typeof window !== 'undefined') {
       localStorage.removeItem('pebbleafk_current_user');
     }
@@ -93,7 +94,6 @@ export default function Home() {
           const targetUrl = (data?.url || data?.tunnel_url || '').trim();
           const targetToken = (data?.token || secretCode || authToken || '').trim();
           if (targetUrl && targetUrl.startsWith('wss://') && targetUrl !== daemonUrl) {
-            console.log('[PebbleAFK] Auto-syncing discovered Bedrock daemon tunnel:', targetUrl);
             setDaemonUrl(targetUrl);
             if (targetToken) setAuthToken(targetToken);
           }
@@ -117,7 +117,7 @@ export default function Home() {
     }
   };
 
-  // Status dot style for the top-right header button matching PocketAFK
+  // Status dot style for daemon button
   const getDaemonRingStyle = () => {
     switch (daemonStatus) {
       case 'AUTHENTICATED':
@@ -127,7 +127,7 @@ export default function Home() {
       case 'CONNECTING':
         return 'border-sky-300 bg-sky-50 text-sky-600 shadow-sky-500/20 animate-pulse';
       case 'AUTH_ERROR':
-        return 'border-red-300 bg-red-50 text-red-600 shadow-red-500/20';
+        return 'border-rose-300 bg-rose-50 text-rose-600 shadow-rose-500/20';
       default:
         return 'border-slate-300 bg-slate-100 text-slate-400';
     }
@@ -142,7 +142,7 @@ export default function Home() {
       case 'CONNECTING':
         return 'bg-sky-500 animate-ping';
       case 'AUTH_ERROR':
-        return 'bg-red-500';
+        return 'bg-rose-500';
       default:
         return 'bg-slate-400';
     }
@@ -152,9 +152,9 @@ export default function Home() {
   if (!currentUser) {
     return (
       <main className="min-h-screen bg-grid-slate flex flex-col items-center justify-center p-4">
-        <div className="glass-panel p-8 md:p-10 rounded-2xl border border-slate-200/90 shadow-2xl max-w-md w-full text-center space-y-6">
-          <div className="w-16 h-16 rounded-2xl bg-emerald-600 flex items-center justify-center mx-auto text-white text-3xl font-black shadow-lg shadow-emerald-600/25">
-            P
+        <div className="glass-panel p-8 sm:p-10 rounded-3xl border border-slate-200/90 shadow-2xl max-w-sm w-full text-center space-y-6">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center mx-auto text-3xl font-black shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-500/20">
+            ⛏
           </div>
 
           <div className="space-y-2">
@@ -184,90 +184,159 @@ export default function Home() {
     );
   }
 
-  // 2. LOGGED-IN VIEW: Matching Image 2
+  // 2. LOGGED-IN VIEW: Responsive layout matching Image 2
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* Top Header */}
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-4 py-2.5 flex items-center justify-between shadow-2xs">
-        {/* Left: Brand + Breadcrumb */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-emerald-600 flex items-center justify-center font-black text-white text-base shadow-sm shadow-emerald-600/20">
-              P
+      {/* Mobile Top Header Bar (Shown only on small screens) */}
+      <div className="md:hidden flex items-center justify-between p-3.5 bg-white border-b border-slate-200/90 shrink-0 sticky top-0 z-30 shadow-2xs">
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setIsMobileSidebarOpen(true)}
+            className="p-1.5 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+            title="Open navigation menu"
+            aria-label="Open navigation menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center font-black text-xs shadow-xs ring-2 ring-emerald-500/20">
+              ⛏
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-slate-900 text-sm tracking-tight">PebbleAFK</span>
-                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
-                  v1.0 Bedrock Core
-                </span>
-                <span className={`w-2 h-2 rounded-full ${daemonStatus === 'AUTHENTICATED' ? 'bg-emerald-500' : 'bg-red-400'}`} />
-              </div>
+              <span className="font-black text-sm text-slate-900 tracking-tight">PebbleAFK</span>
             </div>
           </div>
         </div>
 
-        {/* Right: Focused Daemon Status Icon (Matching top-right of image) */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setIsSettingsOpen(true)}
-            className={`relative w-8 h-8 rounded-full border-2 flex items-center justify-center transition shadow-sm hover:scale-105 cursor-pointer ${getDaemonRingStyle()}`}
-            title={`Termux Daemon: ${daemonStatus} - Click for 1-Click launcher & settings`}
-          >
-            <span className={`w-2.5 h-2.5 rounded-full ${getDaemonInnerDot()}`} />
-          </button>
-        </div>
-      </header>
+        {/* Right Daemon status button on mobile */}
+        <button
+          onClick={() => setIsSettingsOpen(true)}
+          className={`relative w-8 h-8 rounded-full border-2 flex items-center justify-center transition shadow-xs hover:scale-105 cursor-pointer ${getDaemonRingStyle()}`}
+          title={`Termux Daemon: ${daemonStatus}`}
+        >
+          <span className={`w-2.5 h-2.5 rounded-full ${getDaemonInnerDot()}`} />
+        </button>
+      </div>
 
-      {/* Main Body with Sidebar + Content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar */}
-        <aside className="w-56 bg-white border-r border-slate-200/90 flex flex-col justify-between shrink-0 p-3">
-          <div className="space-y-1">
-            <button
-              onClick={() => setActiveTab('dashboard')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-                activeTab === 'dashboard'
-                  ? 'bg-slate-100 text-slate-900 shadow-2xs'
-                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4 text-emerald-600" />
-              <span>Dashboard</span>
-            </button>
+      {/* Main Container */}
+      <div className="flex-1 flex flex-col md:flex-row md:min-h-screen">
+        {/* Mobile Backdrop Overlay */}
+        {isMobileSidebarOpen && (
+          <div
+            onClick={() => setIsMobileSidebarOpen(false)}
+            className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs md:hidden animate-in fade-in duration-150"
+          />
+        )}
 
-            <button
-              onClick={() => setActiveTab('servers')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-                activeTab === 'servers'
-                  ? 'bg-slate-100 text-slate-900 shadow-2xs'
-                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-              }`}
-            >
-              <Server className="w-4 h-4 text-slate-400" />
-              <span>Servers</span>
-            </button>
+        {/* LEFT SIDEBAR (Slide-out drawer on mobile, permanent sidebar on desktop) */}
+        <aside
+          className={`fixed md:static inset-y-0 left-0 z-50 w-72 max-w-[85vw] md:w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 shadow-2xl md:shadow-none transition-transform duration-200 ease-in-out ${
+            isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+          }`}
+        >
+          <div>
+            {/* Logo Bar inside Sidebar (Matching Image 2) */}
+            <div className="p-4 border-b border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('dashboard');
+                  setIsMobileSidebarOpen(false);
+                }}
+                className="flex items-center gap-2.5 text-left group hover:opacity-90 transition cursor-pointer"
+                title="Go to PebbleAFK Dashboard"
+              >
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center font-black text-sm shadow-xs ring-2 ring-emerald-500/20 group-hover:scale-105 transition-transform">
+                  ⛏
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-black text-sm text-slate-900 tracking-tight group-hover:text-emerald-700 transition-colors">
+                      PebbleAFK
+                    </span>
+                    <span className={`w-2 h-2 rounded-full ring-2 ${daemonStatus === 'AUTHENTICATED' ? 'bg-emerald-500 ring-emerald-500/30 animate-pulse' : 'bg-rose-500 ring-rose-500/30'}`} />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-slate-500 font-mono font-medium">v1.0 Bedrock Core</span>
+                  </div>
+                </div>
+              </button>
 
-            <button
-              onClick={() => setActiveTab('accounts')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-                activeTab === 'accounts'
-                  ? 'bg-slate-100 text-slate-900 shadow-2xs'
-                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <Users className="w-4 h-4 text-slate-400" />
-                <span>Accounts</span>
-              </div>
-              <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
-                0/5
-              </span>
-            </button>
+              {/* Close Button on Mobile Drawer */}
+              <button
+                type="button"
+                onClick={() => setIsMobileSidebarOpen(false)}
+                className="md:hidden p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-lg transition cursor-pointer"
+                title="Close navigation"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Top Navigation Items */}
+            <div className="p-3 space-y-1.5">
+              <button
+                onClick={() => {
+                  setActiveTab('dashboard');
+                  setIsMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                  activeTab === 'dashboard'
+                    ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
+                }`}
+              >
+                <div className={`p-1 rounded-lg ${activeTab === 'dashboard' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  <LayoutDashboard className="w-4 h-4" />
+                </div>
+                <span>Dashboard</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('servers');
+                  setIsMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                  activeTab === 'servers'
+                    ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
+                }`}
+              >
+                <div className="p-1 rounded-lg bg-slate-100 text-slate-500">
+                  <Server className="w-4 h-4" />
+                </div>
+                <span>Servers</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('accounts');
+                  setIsMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                  activeTab === 'accounts'
+                    ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-1 rounded-lg bg-slate-100 text-slate-500">
+                    <Users className="w-4 h-4" />
+                  </div>
+                  <span>Accounts</span>
+                </div>
+                <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
+                  0/5
+                </span>
+              </button>
+            </div>
           </div>
 
           {/* User Profile + Logout at Bottom */}
-          <div className="pt-3 border-t border-slate-200/80 flex items-center justify-between">
+          <div className="p-3 border-t border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
             <div className="flex items-center gap-2 overflow-hidden">
               <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
               <span className="text-xs font-bold text-slate-900 truncate">
@@ -280,7 +349,7 @@ export default function Home() {
 
             <button
               onClick={handleLogout}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
               title="Sign Out"
             >
               <LogOut className="w-4 h-4" />
@@ -288,23 +357,44 @@ export default function Home() {
           </div>
         </aside>
 
-        {/* Main Content Area */}
-        <main className="flex-1 bg-grid-slate p-6 overflow-y-auto">
-          <div className="max-w-3xl mx-auto space-y-6">
-            {/* 1-Click Termux Launcher Card (Exact same experience as PocketAFK) */}
-            <div className="glass-panel p-6 rounded-3xl border border-slate-200/90 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-700 shadow-2xs">
-                    <Terminal className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h2 className="text-sm font-bold text-slate-900">Android Termux 1-Click Launcher</h2>
-                    <p className="text-xs text-slate-500">Run this command on your phone to launch 24/7 Bedrock AFK</p>
-                  </div>
-                </div>
+        {/* Desktop Header + Main View Area */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Desktop Top Header Bar (Hidden on Mobile) */}
+          <header className="hidden md:flex sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-6 py-2.5 items-center justify-between shadow-2xs">
+            <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+              <span className="font-bold text-slate-800">Bedrock Core</span>
+              <span>/</span>
+              <span>Dashboard</span>
+            </div>
 
-                <div className="flex items-center gap-2">
+            {/* Right: Focused Daemon Status Icon */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className={`relative w-8 h-8 rounded-full border-2 flex items-center justify-center transition shadow-xs hover:scale-105 cursor-pointer ${getDaemonRingStyle()}`}
+                title={`Termux Daemon: ${daemonStatus} - Click for 1-Click launcher & settings`}
+              >
+                <span className={`w-2.5 h-2.5 rounded-full ${getDaemonInnerDot()}`} />
+              </button>
+            </div>
+          </header>
+
+          {/* Main Scrollable Content */}
+          <main className="flex-1 bg-grid-slate p-3 sm:p-6 overflow-y-auto">
+            <div className="max-w-3xl mx-auto space-y-5">
+              {/* 1-Click Termux Launcher Card */}
+              <div className="glass-panel p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200/90 shadow-sm space-y-4">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-700 shadow-2xs shrink-0">
+                      <Terminal className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-900">Android Termux 1-Click Launcher</h2>
+                      <p className="text-xs text-slate-500">Run this command on your phone to launch 24/7 Bedrock AFK</p>
+                    </div>
+                  </div>
+
                   <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${
                     daemonStatus === 'AUTHENTICATED'
                       ? 'bg-emerald-50 text-emerald-800 border border-emerald-300'
@@ -314,56 +404,56 @@ export default function Home() {
                     {daemonStatus === 'AUTHENTICATED' ? 'Daemon Online' : 'Standby'}
                   </span>
                 </div>
-              </div>
 
-              {/* Command Box */}
-              <div className="bg-gradient-to-br from-emerald-50/70 via-white to-slate-50 p-4 rounded-2xl border border-emerald-200/90 space-y-3 shadow-xs">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
-                    <span>📱</span> Copy &amp; paste into Termux:
-                  </span>
-
-                  <button
-                    onClick={handleCopyCmd}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs cursor-pointer active:scale-95"
-                  >
-                    {copiedCmd ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedCmd ? 'Copied to Clipboard!' : 'Copy Command'}</span>
-                  </button>
-                </div>
-
-                <div className="p-3 rounded-xl bg-white border border-slate-200/90 font-mono text-xs text-slate-800 break-all select-all shadow-inner leading-relaxed">
-                  {termux1ClickCmd}
-                </div>
-
-                <div className="text-[11px] text-slate-500 leading-relaxed flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>
-                    <strong className="text-emerald-700">Auto-Sync Enabled:</strong> Termux will automatically pair its secure Cloudflare tunnel to your account. Zero manual copy-pasting required!
-                  </span>
-                </div>
-              </div>
-
-              {/* Latency and Tunnel status */}
-              {daemonStatus === 'AUTHENTICATED' && (
-                <div className="p-3 rounded-xl bg-emerald-50/80 border border-emerald-200/80 flex items-center justify-between text-xs text-emerald-900">
-                  <div className="flex items-center gap-2">
-                    <Network className="w-4 h-4 text-emerald-600" />
-                    <span className="font-mono text-[11px] break-all">{daemonUrl}</span>
-                  </div>
-                  {latency !== null && (
-                    <span className="font-mono text-[11px] font-bold bg-white px-2 py-0.5 rounded-md border border-emerald-200">
-                      {latency}ms
+                {/* Command Box */}
+                <div className="bg-gradient-to-br from-emerald-50/70 via-white to-slate-50 p-3.5 sm:p-4 rounded-2xl border border-emerald-200/90 space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                      <span>📱</span> Copy &amp; paste into Termux:
                     </span>
-                  )}
+
+                    <button
+                      onClick={handleCopyCmd}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs cursor-pointer active:scale-95"
+                    >
+                      {copiedCmd ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedCmd ? 'Copied!' : 'Copy Command'}</span>
+                    </button>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-white border border-slate-200/90 font-mono text-[11px] sm:text-xs text-slate-800 break-all select-all shadow-inner leading-relaxed">
+                    {termux1ClickCmd}
+                  </div>
+
+                  <div className="text-[11px] text-slate-500 leading-relaxed flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>
+                      <strong className="text-emerald-700">Auto-Sync Enabled:</strong> Termux will automatically pair its secure Cloudflare tunnel to your account with zero manual copy-pasting.
+                    </span>
+                  </div>
                 </div>
-              )}
+
+                {/* Latency and Tunnel status */}
+                {daemonStatus === 'AUTHENTICATED' && (
+                  <div className="p-3 rounded-xl bg-emerald-50/80 border border-emerald-200/80 flex items-center justify-between text-xs text-emerald-900 flex-wrap gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Network className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span className="font-mono text-[11px] break-all">{daemonUrl}</span>
+                    </div>
+                    {latency !== null && (
+                      <span className="font-mono text-[11px] font-bold bg-white px-2 py-0.5 rounded-md border border-emerald-200 shrink-0">
+                        {latency}ms
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        </main>
+          </main>
+        </div>
       </div>
 
-      {/* Settings / Termux Daemon Bridge Modal (Matching PocketAFK) */}
+      {/* Settings / Termux Daemon Bridge Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
