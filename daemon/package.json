@@ -1,0 +1,35 @@
+{
+  "name": "pebbleafk-daemon",
+  "version": "1.0.0",
+  "description": "PebbleAFK Headless Bedrock Bot Daemon",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "serve": "node dist/index.js"
+  },
+  "keywords": [
+    "minecraft",
+    "bedrock",
+    "bedrock-protocol",
+    "afk",
+    "pebbleafk"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "bedrock-protocol": "^3.60.1",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.4.5",
+    "prismarine-auth": "^3.1.1",
+    "uuid": "^9.0.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@types/uuid": "^9.0.8",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.2"
+  }
+}
