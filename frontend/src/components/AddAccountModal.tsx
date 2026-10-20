@@ -9,6 +9,7 @@ interface AddAccountModalProps {
   onSubmit: (email: string) => void;
   waitingForPopup?: boolean;
   targetEmail?: string;
+  userCode?: string;
   authUrl?: string;
   errorMessage?: string | null;
 }
@@ -19,11 +20,13 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
   onSubmit,
   waitingForPopup = false,
   targetEmail = '',
+  userCode = '',
   authUrl = '',
   errorMessage = null,
 }) => {
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
+  const [copiedLink, setCopiedLink] = useState(false);
 
   if (!isOpen) return null;
 
@@ -86,10 +89,44 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
               </div>
             )}
 
+            {userCode && (
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col items-center gap-2">
+                <div className="text-[11px] text-slate-500 font-medium">Authentication Code</div>
+                <div className="text-xl font-mono font-black tracking-widest text-emerald-700 bg-white px-4 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                  {userCode}
+                </div>
+              </div>
+            )}
+
             {errorMessage && (
               <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 text-left">
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
                 <span>{errorMessage}</span>
+              </div>
+            )}
+
+            {/* Quick Action / Friend Share */}
+            {authUrl && (
+              <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-2xl text-left space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold text-amber-900">
+                    Adding a friend or 2nd account?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(authUrl);
+                      setCopiedLink(true);
+                      setTimeout(() => setCopiedLink(false), 2500);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-[11px] font-bold text-amber-800 hover:bg-amber-100/60 transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                  >
+                    <span>{copiedLink ? '✓ Copied!' : 'Copy Link'}</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-amber-800/90 leading-relaxed">
+                  Send this link to your friend, or open it in an <b>Incognito / Private tab</b> so your current browser account doesn&apos;t auto-sign in.
+                </p>
               </div>
             )}
 

@@ -1025,6 +1025,7 @@ export default function Home() {
         onSubmit={(email) => handleStartMicrosoftLogin(email)}
         waitingForPopup={isWaitingForPopup}
         targetEmail={selectedEmail}
+        userCode={msAuthData?.userCode}
         authUrl={msAuthData?.url}
         errorMessage={msAuthError}
       />
