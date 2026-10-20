@@ -7,15 +7,21 @@ export function useDaemonSocket(currentUser: string | null) {
   const [daemonUrl, setDaemonUrlState] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
-      return localStorage.getItem(`pebbleafk_daemon_url_${u}`) || 'ws://localhost:8080';
+      const stored = localStorage.getItem(`pebbleafk_daemon_url_${u}`) || '';
+      // Filter out localhost / 127.0.0.1 to avoid Chrome Private Network Access prompt
+      if (stored && (stored.includes('localhost') || stored.includes('127.0.0.1'))) {
+        localStorage.removeItem(`pebbleafk_daemon_url_${u}`);
+        return '';
+      }
+      return stored;
     }
-    return 'ws://localhost:8080';
+    return '';
   });
 
   const [authToken, setAuthTokenState] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
-      return localStorage.getItem(`pebbleafk_daemon_token_${u}`) || '';
+      return localStorage.getItem(`pebbleafk_daemon_token_${u}`) || localStorage.getItem(`pebbleafk_secret_${u}`) || '';
     }
     return '';
   });
@@ -34,34 +40,47 @@ export function useDaemonSocket(currentUser: string | null) {
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pingStartTimeRef = useRef<number>(0);
 
-  const setDaemonUrl = (url: string) => {
-    setDaemonUrlState(url);
+  const setDaemonUrl = useCallback((url: string) => {
+    const clean = url.trim();
+    if (clean.includes('localhost') || clean.includes('127.0.0.1')) {
+      // Ignore localhost
+      return;
+    }
+    setDaemonUrlState(clean);
     if (typeof window !== 'undefined') {
       const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
-      localStorage.setItem(`pebbleafk_daemon_url_${u}`, url);
+      localStorage.setItem(`pebbleafk_daemon_url_${u}`, clean);
     }
-  };
+  }, [currentUser]);
 
-  const setAuthToken = (token: string) => {
-    setAuthTokenState(token);
+  const setAuthToken = useCallback((token: string) => {
+    const clean = token.trim();
+    setAuthTokenState(clean);
     if (typeof window !== 'undefined') {
       const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
-      localStorage.setItem(`pebbleafk_daemon_token_${u}`, token);
+      localStorage.setItem(`pebbleafk_daemon_token_${u}`, clean);
     }
-  };
+  }, [currentUser]);
 
-  // Re-load settings when user changes
+  // Clean user switching
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
-    const savedUrl = localStorage.getItem(`pebbleafk_daemon_url_${u}`) || 'ws://localhost:8080';
-    const savedToken = localStorage.getItem(`pebbleafk_daemon_token_${u}`) || '';
-    setDaemonUrlState(savedUrl);
+    const savedUrl = localStorage.getItem(`pebbleafk_daemon_url_${u}`) || '';
+    const cleanSaved = (savedUrl.includes('localhost') || savedUrl.includes('127.0.0.1')) ? '' : savedUrl;
+    const savedToken = localStorage.getItem(`pebbleafk_daemon_token_${u}`) || localStorage.getItem(`pebbleafk_secret_${u}`) || '';
+    
+    setDaemonUrlState(cleanSaved);
     setAuthTokenState(savedToken);
+    setStatus('DISCONNECTED');
   }, [currentUser]);
 
   const connect = useCallback(() => {
     if (!currentUser) {
+      if (socketRef.current) {
+        try { socketRef.current.close(); } catch (_) {}
+        socketRef.current = null;
+      }
       setStatus('DISCONNECTED');
       return;
     }
@@ -76,7 +95,8 @@ export function useDaemonSocket(currentUser: string | null) {
     }
 
     const cleanUrl = daemonUrl.trim();
-    if (!cleanUrl) {
+    // Do NOT connect to localhost or empty URLs
+    if (!cleanUrl || cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1')) {
       setStatus('DISCONNECTED');
       return;
     }
@@ -89,13 +109,12 @@ export function useDaemonSocket(currentUser: string | null) {
 
       ws.onopen = () => {
         setStatus('CONNECTED');
-        // Send AUTH
+        const effectiveToken = authToken || (typeof window !== 'undefined' ? localStorage.getItem(`pebbleafk_secret_${currentUser.trim().toLowerCase()}`) || '' : '');
         ws.send(JSON.stringify({
           type: 'AUTH',
-          payload: { token: authToken, username: currentUser },
+          payload: { token: effectiveToken, username: currentUser },
         }));
 
-        // Keepalive ping loop
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         pingIntervalRef.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -114,6 +133,10 @@ export function useDaemonSocket(currentUser: string | null) {
               setStatus('AUTHENTICATED');
             } else {
               setStatus('AUTH_ERROR');
+              if (socketRef.current) {
+                try { socketRef.current.close(); } catch (_) {}
+                socketRef.current = null;
+              }
             }
           }
 
@@ -167,10 +190,9 @@ export function useDaemonSocket(currentUser: string | null) {
       ws.onclose = () => {
         setStatus('DISCONNECTED');
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-        // Auto-reconnect after 4s
         reconnectTimeoutRef.current = setTimeout(() => {
           connect();
-        }, 4000);
+        }, 5000);
       };
 
       ws.onerror = () => {
@@ -192,11 +214,18 @@ export function useDaemonSocket(currentUser: string | null) {
     };
   }, [connect]);
 
-  const send = (msg: any) => {
+  const send = useCallback((msg: any) => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(msg));
+      return true;
     }
-  };
+    return false;
+  }, []);
+
+  const restartDaemon = useCallback((reason = 'Restart requested from dashboard') => {
+    setBotStates({});
+    return send({ type: 'RESTART_DAEMON', payload: { reason } });
+  }, [send]);
 
   return {
     status,
@@ -212,6 +241,7 @@ export function useDaemonSocket(currentUser: string | null) {
     bedrockForms,
     msAuthData,
     reconnect: connect,
+    restartDaemon,
     sendChat: (botId: string, message: string) => send({ type: 'SEND_CHAT', payload: { botId, message } }),
     submitForm: (botId: string, formId: number, responseData: any) => send({ type: 'SUBMIT_FORM', payload: { botId, formId, responseData } }),
     closeForm: (botId: string, formId: number) => send({ type: 'CLOSE_FORM', payload: { botId, formId } }),
