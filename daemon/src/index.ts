@@ -129,6 +129,15 @@ wss.on('connection', (ws: WebSocket, req) => {
   });
 });
 
+server.on('error', (err: any) => {
+  if (err?.code === 'EADDRINUSE') {
+    console.error(chalk.red(`[PebbleAFK Fatal] Port ${PORT} is already in use by another process.`));
+  } else {
+    console.error(chalk.red(`[PebbleAFK Fatal Server Error] ${err?.message || err}`));
+  }
+  process.exit(1);
+});
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(chalk.cyan(`
   ╔═══════════════════════════════════════════════════╗

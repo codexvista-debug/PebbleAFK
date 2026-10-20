@@ -49,7 +49,7 @@ const BEDROCK_VERSIONS = [
 ];
 
 const POPULAR_BEDROCK_SETUPS = [
-  { name: 'FreshSMP', host: 'bedrock.freshsmp.fun', port: 19132, version: 'auto' },
+  { name: 'FreshSMP', host: 'play.freshsmp.fun', port: 19132, version: 'auto' },
   { name: 'DonutSMP', host: 'bedrock.donutsmp.net', port: 19132, version: 'auto' },
   { name: 'CubeCraft', host: 'play.cubecraft.net', port: 19132, version: 'auto' },
   { name: 'NetherGames', host: 'play.nethergames.org', port: 19132, version: 'auto' },

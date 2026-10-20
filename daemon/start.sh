@@ -81,10 +81,20 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo -e "      ${CYAN}Syncing latest PebbleAFK core from GitHub...${NC}"
   git pull origin main 2>/dev/null || true
 fi
+
+echo "=== PebbleAFK Daemon Started $(date) ===" > daemon.log
 pkill -9 -f "cloudflared" 2>/dev/null || true
-pkill -9 -f "tsx src/index.ts" 2>/dev/null || true
+pkill -9 -f "tsx" 2>/dev/null || true
+pkill -9 -f "node.*index" 2>/dev/null || true
+pkill -9 -f "pebbleafk" 2>/dev/null || true
 pkill -9 -f "pebbleafk_heartbeat" 2>/dev/null || true
 pkill -9 -f "curl.*tunnel" 2>/dev/null || true
+if command -v fuser &> /dev/null; then
+  fuser -k -9 8080/tcp 2>/dev/null || true
+fi
+if command -v lsof &> /dev/null; then
+  lsof -ti:8080 | xargs -r kill -9 2>/dev/null || true
+fi
 if [ -f "$HOME/.pebbleafk_heartbeat.pid" ]; then
   kill -9 "$(cat "$HOME/.pebbleafk_heartbeat.pid")" 2>/dev/null || true
   rm -f "$HOME/.pebbleafk_heartbeat.pid"
