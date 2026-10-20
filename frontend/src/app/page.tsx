@@ -349,6 +349,7 @@ export default function Home() {
     botReasons,
     telemetries,
     messagesByBot,
+    activityLogs,
     reconnect,
     restartDaemon,
     verifyAccount,
@@ -852,6 +853,51 @@ export default function Home() {
     });
     prevBotStatesRef.current = { ...botStates };
   }, [botStates, botReasons, daemonStatus, servers, accounts, addPlayerLog]);
+
+  // Sync real-time daemon activity logs (version negotiation, UDP probe, errors) into Player Logs
+  const prevActivityLogLenRef = useRef<Record<string, number>>({});
+  useEffect(() => {
+    Object.entries(activityLogs).forEach(([botId, logs]) => {
+      const prevLen = prevActivityLogLenRef.current[botId] || 0;
+      if (logs.length > prevLen) {
+        const newLogs = logs.slice(prevLen);
+        const [srvId, accId] = botId.includes('__') ? botId.split('__') : ['', botId];
+        const srv = servers.find((s) => s.id === srvId) || activeServer;
+        const acc = accounts.find((a) => a.id === accId);
+        const ign = acc?.username || 'Player';
+        const host = srv?.serverHost || 'Bedrock Server';
+
+        newLogs.forEach((item) => {
+          let category: 'info' | 'error' | 'warning' | 'success' = 'info';
+          let logType: PlayerLogType = 'info';
+          const typeStr = item.type as string;
+
+          if (typeStr === 'error' || (item.type === 'status' && item.message.toLowerCase().includes('error'))) {
+            category = 'error';
+            logType = 'error';
+          } else if (typeStr === 'warning' || (item.type === 'status' && item.message.includes('⚠️'))) {
+            category = 'warning';
+            logType = 'info';
+          } else if (item.type === 'spawn') {
+            category = 'success';
+            logType = 'spawned';
+          } else if (item.type === 'connect' || item.message.includes('joined') || item.message.includes('verified') || item.message.includes('✓')) {
+            category = 'success';
+            logType = 'connected';
+          } else if (item.type === 'disconnect') {
+            category = 'warning';
+            logType = 'disconnected';
+          } else if (item.type === 'chat') {
+            category = 'info';
+            logType = 'chat';
+          }
+
+          addPlayerLog(ign, host, logType, item.message, undefined, category);
+        });
+        prevActivityLogLenRef.current[botId] = logs.length;
+      }
+    });
+  }, [activityLogs, servers, activeServer, accounts, addPlayerLog]);
 
   // Connect / Disconnect all checked accounts
   const handleConnectSelected = () => {

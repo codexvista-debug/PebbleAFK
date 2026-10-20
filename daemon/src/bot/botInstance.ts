@@ -163,16 +163,24 @@ export class PebbleBotInstance {
       const isAutoVersion = !rawUserVersion || rawUserVersion.toLowerCase() === 'auto' || rawUserVersion.toLowerCase() === 'default';
 
       if (isAutoVersion) {
+        this.logActivity('status', `🔍 Pinging Bedrock UDP port ${cleanHost}:${cleanPort}...`);
         try {
-          pingRes = await pingBedrockJsp(cleanHost, cleanPort, 2000);
+          pingRes = await pingBedrockJsp(cleanHost, cleanPort, 2500);
           if (pingRes) {
             console.log(chalk.cyan(`[PebbleAFK] Bedrock ping response from ${cleanHost}:${cleanPort}: protocol=${pingRes.protocol}, version=${pingRes.version}`));
+            this.logActivity('status', `✓ Bedrock server online: Protocol ${pingRes.protocol || 'auto'}, Version ${pingRes.version || 'auto'}`);
+          } else {
+            this.logActivity('warning', `⚠️ No UDP ping response from ${cleanHost}:${cleanPort}. Server may be offline or filtering Unconnected Ping.`);
           }
-        } catch (_) {}
+        } catch (_) {
+          this.logActivity('warning', `⚠️ UDP ping probe failed for ${cleanHost}:${cleanPort}. Proceeding with default protocol.`);
+        }
       }
 
       const resolved = resolveBedrockTargetVersion(rawUserVersion, pingRes?.protocol, pingRes?.version);
       const targetVersion = resolved.version;
+
+      this.logActivity('connect', `🚀 Initiating RakNet handshake with ${cleanHost}:${cleanPort} (Minecraft Bedrock ${targetVersion}, Transport: ${rakBackend})...`);
 
       const clientOptions: any = {
         host: cleanHost,
@@ -327,9 +335,13 @@ export class PebbleBotInstance {
       client.on('error', (err: any) => {
         const errMsg = err?.message || String(err);
         console.log(chalk.red(`[PebbleAFK] Bot ${this.config.username} error: ${errMsg}`));
-        this.logActivity('status', `Error: ${errMsg}`);
+        let descriptiveReason = errMsg;
+        if (errMsg.includes('Connect timed out') || errMsg.includes('timed out')) {
+          descriptiveReason = `Connect timed out: ${cleanHost}:${cleanPort} sent no reply to RakNet UDP packets. (Server Bedrock gateway is offline or dropping UDP traffic).`;
+        }
+        this.logActivity('error', descriptiveReason);
         this.cleanup();
-        this.updateState('ERROR', errMsg);
+        this.updateState('ERROR', descriptiveReason);
         this.handleAutoReconnect();
       });
 
