@@ -139,8 +139,9 @@ export class BotManager {
 
   public async verifyAccount(accountId: string, email?: string) {
     const verificationId = ++this.currentVerificationId;
-    const isNew = !email || email === 'new_account' || email.startsWith('acc_') || email.startsWith('bedrock_user_');
-    const authKey = isNew ? `bedrock_user_${Date.now()}` : email;
+    const cleanEmail = email?.trim().toLowerCase();
+    const isNew = !cleanEmail || cleanEmail === 'new_account' || cleanEmail.startsWith('acc_') || cleanEmail.startsWith('bedrock_user_');
+    const authKey = isNew ? `bedrock_user_${Date.now()}` : cleanEmail;
     console.log(chalk.cyan(`[Auth] Initiating Bedrock/Xbox Device Verification for ${authKey}...`));
 
     try {
@@ -163,7 +164,7 @@ export class BotManager {
         if (verificationId !== this.currentVerificationId) return;
         console.log(chalk.yellow(`[Auth Code] Xbox Code for ${authKey}: ${data.user_code}`));
         const directUri = data.user_code
-          ? `https://www.microsoft.com/link?otc=${encodeURIComponent(data.user_code)}&prompt=login`
+          ? `https://www.microsoft.com/link?otc=${encodeURIComponent(data.user_code)}${!isNew ? `&login_hint=${encodeURIComponent(authKey)}` : ''}&prompt=login`
           : (data.verification_uri || 'https://www.microsoft.com/link');
 
         this.broadcastFn({
@@ -173,6 +174,7 @@ export class BotManager {
             userCode: data.user_code,
             url: directUri,
             message: data.message,
+            targetEmail: !isNew ? authKey : undefined,
           },
         });
       });

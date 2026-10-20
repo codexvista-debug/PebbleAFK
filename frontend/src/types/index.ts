@@ -119,4 +119,5 @@ export interface MsAuthData {
   userCode: string;
   url: string;
   message: string;
+  targetEmail?: string;
 }

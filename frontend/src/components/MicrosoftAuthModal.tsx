@@ -36,6 +36,11 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
     forceAccountUrl = forceAccountUrl.replace('prompt=select_account', 'prompt=login');
   }
 
+  const effectiveEmail = accountEmail || (authData as any).targetEmail;
+  if (effectiveEmail && !forceAccountUrl.includes('login_hint=')) {
+    forceAccountUrl += (forceAccountUrl.includes('?') ? '&' : '?') + `login_hint=${encodeURIComponent(effectiveEmail)}`;
+  }
+
   const handleCopyCode = () => {
     navigator.clipboard.writeText(authData.userCode);
     setCopiedCode(true);
@@ -102,6 +107,13 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
                   </p>
                 </div>
               </div>
+            </div>
+          )}
+
+          {effectiveEmail && (
+            <div className="p-3 rounded-xl bg-slate-100 border border-slate-200 text-xs flex items-center justify-between text-left">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Signing In As:</span>
+              <span className="font-mono font-bold text-slate-900 truncate max-w-[220px]">{effectiveEmail}</span>
             </div>
           )}
 

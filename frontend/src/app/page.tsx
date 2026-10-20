@@ -28,6 +28,7 @@ import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { MicrosoftAuthModal } from '@/components/MicrosoftAuthModal';
+import { AddAccountModal } from '@/components/AddAccountModal';
 import { useDaemonSocket } from '@/lib/useDaemonSocket';
 import { BedrockAccount } from '@/types';
 import { loadAccountsFromSupabase, syncAllToSupabase, deleteAccountFromSupabase } from '@/lib/supabaseSync';
@@ -45,6 +46,8 @@ export default function Home() {
   const [accountFilter, setAccountFilter] = useState('');
   const [copiedIgnId, setCopiedIgnId] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<BedrockAccount | null>(null);
+  const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
+  const [selectedEmail, setSelectedEmail] = useState('');
   const [msAuthError, setMsAuthError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
 
@@ -108,6 +111,8 @@ export default function Home() {
         return updated;
       });
 
+      setSelectedEmail('');
+      setIsAddAccountModalOpen(false);
       showToast(`Verified Bedrock account: @${verifiedIgn}`, 'success');
     },
     [currentUser, showToast]
@@ -230,8 +235,8 @@ export default function Home() {
     };
   }, [currentUser, daemonUrl, secretCode, authToken, setDaemonUrl, setAuthToken]);
 
-  // Direct 1-Click Start Microsoft OAuth login via daemon (NO asking for gamertag!)
-  const handleStartMicrosoftLogin = async () => {
+  // Start Microsoft OAuth login via daemon targeting exact email
+  const handleStartMicrosoftLogin = async (targetEmail?: string) => {
     if (!currentUser) {
       setIsAuthOpen(true);
       return;
@@ -248,11 +253,18 @@ export default function Home() {
       return;
     }
 
+    // If no email entered yet, open the Add Account modal matching MinecraftAFK
+    if (!targetEmail) {
+      setIsAddAccountModalOpen(true);
+      return;
+    }
+
     setMsAuthError(null);
+    setSelectedEmail(targetEmail);
     const targetId = `acc_${Math.random().toString(36).substring(2, 9)}`;
 
-    showToast('Requesting Microsoft sign-in via Termux daemon...', 'info');
-    verifyAccount(targetId, '');
+    showToast(`Requesting Microsoft sign-in for ${targetEmail}...`, 'info');
+    verifyAccount(targetId, targetEmail);
   };
 
   // Delete / Unlink Account
@@ -673,7 +685,7 @@ export default function Home() {
                   <div className="flex items-center gap-2.5">
                     <button
                       disabled={verifiedAccountsCount >= 5}
-                      onClick={handleStartMicrosoftLogin}
+                      onClick={() => handleStartMicrosoftLogin()}
                       className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs transition shadow-xs cursor-pointer active:scale-95"
                     >
                       <UserPlus className="w-3.5 h-3.5" />
@@ -722,7 +734,7 @@ export default function Home() {
                                   Click &ldquo;+ Add Account&rdquo; above to authenticate and link your official Bedrock Microsoft account.
                                 </p>
                                 <button
-                                  onClick={handleStartMicrosoftLogin}
+                                  onClick={() => handleStartMicrosoftLogin()}
                                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition shadow-xs cursor-pointer"
                                 >
                                   <UserPlus className="w-3.5 h-3.5" /> + Add Account
@@ -839,7 +851,7 @@ export default function Home() {
                                     <div className="flex items-center justify-end gap-1.5">
                                       {acc.authError && (
                                         <button
-                                          onClick={handleStartMicrosoftLogin}
+                                          onClick={() => handleStartMicrosoftLogin(acc.username || acc.ign)}
                                           className="p-1.5 rounded-lg text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition cursor-pointer"
                                           title="Re-verify with Microsoft"
                                         >
@@ -907,6 +919,16 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Add Account Email Modal (Matching MinecraftAFK) */}
+      <AddAccountModal
+        isOpen={isAddAccountModalOpen}
+        onClose={() => setIsAddAccountModalOpen(false)}
+        onSubmit={(email) => {
+          setIsAddAccountModalOpen(false);
+          handleStartMicrosoftLogin(email);
+        }}
+      />
+
       {/* Modern In-App Confirm Unlink Modal */}
       <ConfirmModal
         isOpen={Boolean(deletingAccount)}
@@ -928,8 +950,10 @@ export default function Home() {
       {msAuthData && (
         <MicrosoftAuthModal
           authData={msAuthData}
+          accountEmail={selectedEmail || msAuthData.targetEmail}
           onClose={() => {
             setMsAuthData(null);
+            setSelectedEmail('');
           }}
           errorMessage={msAuthError}
         />

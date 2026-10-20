@@ -136,7 +136,7 @@ export type DaemonMessage =
   | { type: 'BEDROCK_FORM'; payload: BedrockFormPayload }
   | { type: 'CONTAINER_WINDOW'; payload: ContainerWindowPayload }
   | { type: 'WINDOW_CLOSE'; payload: { botId: string; windowId: number } }
-  | { type: 'MS_AUTH_CODE'; payload: { botId: string; userCode: string; url: string; message: string } }
+  | { type: 'MS_AUTH_CODE'; payload: { botId: string; userCode: string; url: string; message: string; targetEmail?: string } }
   | { type: 'ACCOUNT_VERIFIED'; payload: { botId: string; email: string; ign: string; uuid?: string; avatarUrl?: string } }
   | { type: 'ACTIVITY_LOG'; payload: ActivityLog }
   | { type: 'PONG'; payload: { timestamp: number } }
