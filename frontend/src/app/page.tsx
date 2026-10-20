@@ -39,10 +39,12 @@ import {
   RotateCcw,
   RotateCw,
   CornerDownLeft,
-  Edit3
+  Edit3,
+  Terminal
 } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
+import { TermuxConsoleModal } from '@/components/TermuxConsoleModal';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { MicrosoftAuthModal } from '@/components/MicrosoftAuthModal';
 import { ServerProfileModal } from '@/components/ServerProfileModal';
@@ -116,6 +118,7 @@ export default function Home() {
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedLogsAccount, setSelectedLogsAccount] = useState<BedrockAccount | null>(null);
   const [isAccountLogsOpen, setIsAccountLogsOpen] = useState(false);
+  const [isTermuxConsoleOpen, setIsTermuxConsoleOpen] = useState(false);
   const [pinnedAccountIds, setPinnedAccountIds] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -363,6 +366,9 @@ export default function Home() {
     setMsAuthData,
     sendChat,
     clearChat,
+    terminalLogs,
+    fetchTerminalLogs,
+    clearTerminalLogs,
     startBot,
     stopBot,
   } = useDaemonSocket(currentUser, handleAccountVerified);
@@ -1011,7 +1017,6 @@ export default function Home() {
     } else {
       sendChat(`${activeServer.id}__${selectedChatReceiver}`, cmd);
     }
-    showToast(`Sent ${cmd}`, 'info');
   };
 
   // Status dot style for daemon button
@@ -1129,8 +1134,20 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Right Daemon status button on mobile */}
-        <div className="flex items-center gap-2">
+        {/* Right Daemon & Termux status buttons on mobile */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              fetchTerminalLogs();
+              setIsTermuxConsoleOpen(true);
+            }}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-slate-700 font-mono text-xs font-bold shadow-2xs transition active:scale-95 cursor-pointer"
+            title="Termux Live Terminal & Logs Stream"
+          >
+            <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+            <span>&gt;_</span>
+          </button>
           {daemonStatus === 'AUTHENTICATED' && (
             <button
               type="button"
@@ -1138,11 +1155,10 @@ export default function Home() {
                 updateDaemon();
                 showToast('🔄 Updating Bedrock daemon from GitHub...', 'info');
               }}
-              className="px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-700 text-xs font-bold flex items-center gap-1 cursor-pointer active:scale-95"
+              className="px-2 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-700 text-xs font-bold flex items-center gap-1 cursor-pointer active:scale-95"
               title="1-Click Update Daemon"
             >
               <RotateCw className="w-3 h-3 text-sky-600" />
-              <span>Update</span>
             </button>
           )}
           <button
@@ -1460,8 +1476,21 @@ export default function Home() {
               )}
             </div>
 
-            {/* Right: Focused Daemon Status Icon */}
-            <div className="flex items-center gap-3">
+            {/* Right: Termux Live Console + Daemon Status Icon */}
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  fetchTerminalLogs();
+                  setIsTermuxConsoleOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-slate-700 font-mono text-xs font-bold shadow-2xs transition hover:scale-105 active:scale-95 cursor-pointer"
+                title="Termux Live Terminal & Logs Stream"
+              >
+                <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Termux Stream</span>
+              </button>
+
               <button
                 onClick={() => setIsSettingsOpen(true)}
                 className={`relative w-8 h-8 rounded-full border-2 flex items-center justify-center transition shadow-xs hover:scale-105 cursor-pointer ${getDaemonRingStyle()}`}
@@ -2777,6 +2806,19 @@ export default function Home() {
         onRestartDaemon={restartDaemon}
         onUpdateDaemon={updateDaemon}
         isDaemonOnline={daemonStatus === 'AUTHENTICATED'}
+      />
+
+      {/* Termux Live Console & Output Stream Modal */}
+      <TermuxConsoleModal
+        isOpen={isTermuxConsoleOpen}
+        onClose={() => setIsTermuxConsoleOpen(false)}
+        logs={terminalLogs}
+        isOnline={daemonStatus === 'AUTHENTICATED'}
+        onFetchLogs={fetchTerminalLogs}
+        onClearLogs={clearTerminalLogs}
+        onRestartDaemon={restartDaemon}
+        onUpdateDaemon={updateDaemon}
+        termuxCommand={termux1ClickCmd}
       />
 
       {/* Bedrock Server Profile Modal (Create / Edit) */}

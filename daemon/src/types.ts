@@ -127,6 +127,7 @@ export type ClientMessage =
   | { type: 'VERIFY_ACCOUNT'; payload: { accountId: string; email?: string } }
   | { type: 'UPDATE_DAEMON'; payload?: { reason?: string } }
   | { type: 'RESTART_DAEMON'; payload?: { reason?: string } }
+  | { type: 'GET_TERMINAL_LOGS' }
   | { type: 'PING' };
 
 // Daemon to Client Messages
@@ -142,4 +143,6 @@ export type DaemonMessage =
   | { type: 'ACCOUNT_VERIFIED'; payload: { botId: string; email: string; ign: string; uuid?: string; avatarUrl?: string } }
   | { type: 'ACTIVITY_LOG'; payload: ActivityLog }
   | { type: 'PONG'; payload: { timestamp: number } }
-  | { type: 'SERVER_INFO'; payload: { version: string; activeBots: string[] } };
+  | { type: 'SERVER_INFO'; payload: { version: string; activeBots: string[] } }
+  | { type: 'TERMINAL_LOGS'; payload: { logs: string[]; timestamp: number } }
+  | { type: 'TERMINAL_LOG_LINE'; payload: { line: string; timestamp: number } };

@@ -23,6 +23,13 @@ const PORT = parseInt(process.env.PORT || '8080', 10);
 const AUTH_TOKEN = (process.env.DAEMON_AUTH_TOKEN || '').trim();
 
 const server = http.createServer((req, res) => {
+  if (req.url === '/logs') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    });
+    return res.end(JSON.stringify({ logs: terminalLogs }));
+  }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({
     service: 'PebbleAFK Daemon (Bedrock Edition)',
@@ -35,6 +42,49 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 const authenticatedClients = new Set<WebSocket>();
+
+const terminalLogs: string[] = [];
+const MAX_LOGS = 500;
+
+function appendTerminalLog(rawText: string) {
+  const line = `[${new Date().toLocaleTimeString()}] ${rawText}`;
+  terminalLogs.push(line);
+  if (terminalLogs.length > MAX_LOGS) {
+    terminalLogs.shift();
+  }
+  const payload = JSON.stringify({
+    type: 'TERMINAL_LOG_LINE',
+    payload: { line, timestamp: Date.now() },
+  });
+  for (const client of authenticatedClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try { client.send(payload); } catch (_) {}
+    }
+  }
+}
+
+// Intercept console output to capture live Termux logs
+const origLog = console.log;
+const origWarn = console.warn;
+const origErr = console.error;
+
+console.log = (...args: any[]) => {
+  origLog(...args);
+  const text = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  appendTerminalLog(text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, ''));
+};
+
+console.warn = (...args: any[]) => {
+  origWarn(...args);
+  const text = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  appendTerminalLog(`⚠️ ${text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')}`);
+};
+
+console.error = (...args: any[]) => {
+  origErr(...args);
+  const text = args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  appendTerminalLog(`❌ ${text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')}`);
+};
 
 function broadcast(message: DaemonMessage) {
   const json = JSON.stringify(message);
@@ -108,6 +158,30 @@ wss.on('connection', (ws: WebSocket, req) => {
       // Keepalive PING / PONG
       if (parsed.type === 'PING') {
         ws.send(JSON.stringify({ type: 'PONG', payload: { timestamp: Date.now() } }));
+        return;
+      }
+
+      // Stream live Termux terminal logs to dashboard
+      if (parsed.type === 'GET_TERMINAL_LOGS') {
+        const fs = require('fs');
+        const path = require('path');
+        let fileLines: string[] = [];
+        try {
+          const logPath = path.resolve(process.cwd(), 'daemon.log');
+          if (fs.existsSync(logPath)) {
+            fileLines = fs.readFileSync(logPath, 'utf8')
+              .split('\n')
+              .slice(-150)
+              .map((l: string) => l.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim())
+              .filter(Boolean);
+          }
+        } catch (_) {}
+
+        const combined = Array.from(new Set([...fileLines, ...terminalLogs])).slice(-350);
+        ws.send(JSON.stringify({
+          type: 'TERMINAL_LOGS',
+          payload: { logs: combined, timestamp: Date.now() },
+        }));
         return;
       }
 

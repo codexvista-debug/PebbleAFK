@@ -417,16 +417,36 @@ export class PebbleBotInstance {
       if (message.startsWith('/')) {
         // Send as Bedrock command
         const uuid = randomUUID();
-        this.client.write('command_request', {
-          command: message,
-          origin: {
-            type: 'player',
-            uuid,
-            request_id: uuid,
-          },
-          internal: false,
-          version: 66,
-        });
+        let cmdSent = false;
+        try {
+          this.client.write('command_request', {
+            command: message,
+            origin: {
+              type: 'player',
+              uuid,
+              request_id: uuid,
+              player_entity_id: this.client.entityId || 0n,
+            },
+            internal: false,
+            version: '',
+          });
+          cmdSent = true;
+        } catch (err: any) {
+          console.warn(chalk.yellow(`[PebbleAFK] command_request notice: ${err?.message}, attempting text fallback`));
+        }
+
+        if (!cmdSent) {
+          try {
+            this.client.write('text', {
+              type: 'chat',
+              needs_translation: false,
+              source_name: this.client.username || this.config.username,
+              message,
+              xuid: '',
+              platform_chat_id: '',
+            });
+          } catch (_) {}
+        }
       } else {
         // Send as regular chat
         this.client.write('text', {

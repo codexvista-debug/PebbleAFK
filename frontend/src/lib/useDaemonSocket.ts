@@ -51,6 +51,7 @@ export function useDaemonSocket(
   const [bedrockForms, setBedrockForms] = useState<Record<string, BedrockForm | null>>({});
   const [msAuthData, setMsAuthData] = useState<MsAuthData | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
+  const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
 
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -234,6 +235,18 @@ export function useDaemonSocket(
               onAccountVerifiedRef.current(msg.payload);
             }
           }
+
+          if (msg.type === 'TERMINAL_LOGS') {
+            if (Array.isArray(msg.payload?.logs)) {
+              setTerminalLogs(msg.payload.logs);
+            }
+          }
+
+          if (msg.type === 'TERMINAL_LOG_LINE') {
+            if (msg.payload?.line) {
+              setTerminalLogs((prev) => [...prev.slice(-400), msg.payload.line]);
+            }
+          }
         } catch (_) {}
       };
 
@@ -337,6 +350,9 @@ export function useDaemonSocket(
         return next;
       });
     },
+    terminalLogs,
+    fetchTerminalLogs: () => send({ type: 'GET_TERMINAL_LOGS' }),
+    clearTerminalLogs: () => setTerminalLogs([]),
     verifyAccount: (accountId: string, email?: string) => send({ type: 'VERIFY_ACCOUNT', payload: { accountId, email } }),
     sendChat: (botId: string, message: string) => send({ type: 'SEND_CHAT', payload: { botId, message } }),
     submitForm: (botId: string, formId: number, responseData: any) => send({ type: 'SUBMIT_FORM', payload: { botId, formId, responseData } }),
