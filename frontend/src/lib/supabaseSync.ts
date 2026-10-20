@@ -1,5 +1,5 @@
 import { supabase } from './supabaseClient';
-import { BedrockAccount, ServerProfile } from '@/types';
+import { BedrockAccount, ServerProfile, PlayerLogEntry } from '@/types';
 
 /**
  * Universal Server Profiles Sync:
@@ -194,5 +194,85 @@ export async function deleteAccountFromSupabase(currentUser: string, ign: string
       .ilike('bot_name', cleanIgn);
   } catch (err) {
     console.warn('Failed to delete account from Supabase:', err);
+  }
+}
+
+/**
+ * Saves and updates player connection & activity logs in Supabase.
+ */
+export async function saveAccountLogsToSupabase(
+  currentUser: string,
+  accountName: string,
+  logs: PlayerLogEntry[]
+) {
+  if (!supabase || !currentUser || !accountName) return;
+  try {
+    const cleanUser = currentUser.trim();
+    const cleanAccount = accountName.trim().replace(/^@/, '');
+    const metaBotName = `__meta_logs_${cleanAccount.toLowerCase()}`;
+
+    const payload = {
+      logs: logs.slice(-150),
+      updatedAt: Date.now(),
+    };
+
+    const { data: existing } = await supabase
+      .from('accounts')
+      .select('id')
+      .ilike('username', cleanUser)
+      .eq('bot_name', metaBotName)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      await supabase
+        .from('accounts')
+        .update({ settings: payload, updated_at: new Date().toISOString() })
+        .eq('id', existing[0].id);
+    } else {
+      await supabase.from('accounts').insert([
+        {
+          username: cleanUser,
+          bot_name: metaBotName,
+          server_host: logs[0]?.serverHost || 'pebbleafk.internal',
+          server_port: 19132,
+          settings: payload,
+        },
+      ]);
+    }
+  } catch (err) {
+    console.warn('Failed to save account logs to Supabase:', err);
+  }
+}
+
+/**
+ * Loads player connection & activity logs from Supabase.
+ */
+export async function loadAccountLogsFromSupabase(
+  currentUser: string,
+  accountName: string
+): Promise<PlayerLogEntry[]> {
+  if (!supabase || !currentUser || !accountName) return [];
+  try {
+    const cleanUser = currentUser.trim();
+    const cleanAccount = accountName.trim().replace(/^@/, '');
+    const metaBotName = `__meta_logs_${cleanAccount.toLowerCase()}`;
+
+    const { data } = await supabase
+      .from('accounts')
+      .select('settings')
+      .ilike('username', cleanUser)
+      .eq('bot_name', metaBotName)
+      .limit(1);
+
+    if (data && data.length > 0 && data[0].settings) {
+      const logs = data[0].settings.logs;
+      if (Array.isArray(logs)) {
+        return logs;
+      }
+    }
+    return [];
+  } catch (err) {
+    console.warn('Failed to load account logs from Supabase:', err);
+    return [];
   }
 }

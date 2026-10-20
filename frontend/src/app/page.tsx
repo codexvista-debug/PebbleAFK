@@ -28,6 +28,8 @@ import {
   Play,
   Square,
   Clock,
+  Pin,
+  FileText,
   Home as HomeIcon,
   MessageSquare,
   Sliders,
@@ -42,15 +44,18 @@ import { ConfirmModal } from '@/components/ConfirmModal';
 import { MicrosoftAuthModal } from '@/components/MicrosoftAuthModal';
 import { ServerProfileModal } from '@/components/ServerProfileModal';
 import { DangerousSettingsModal } from '@/components/DangerousSettingsModal';
+import { AccountLogsModal } from '@/components/AccountLogsModal';
 import { ServerLogo } from '@/components/ServerLogo';
 import { useDaemonSocket } from '@/lib/useDaemonSocket';
-import { BedrockAccount, ServerProfile, BotSettings, ChatMessage } from '@/types';
+import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType } from '@/types';
 import { 
   loadAccountsFromSupabase, 
   syncAllToSupabase, 
   deleteAccountFromSupabase,
   loadServersFromSupabase,
-  saveServersToSupabase
+  saveServersToSupabase,
+  saveAccountLogsToSupabase,
+  loadAccountLogsFromSupabase
 } from '@/lib/supabaseSync';
 
 export default function Home() {
@@ -106,9 +111,42 @@ export default function Home() {
   const [editingServer, setEditingServer] = useState<ServerProfile | null>(null);
   const [isDangerousSettingsOpen, setIsDangerousSettingsOpen] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
+  const [selectedLogsAccount, setSelectedLogsAccount] = useState<BedrockAccount | null>(null);
+  const [isAccountLogsOpen, setIsAccountLogsOpen] = useState(false);
+  const [pinnedAccountIds, setPinnedAccountIds] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const u = localStorage.getItem('pebbleafk_current_user') || 'guest';
+        const saved = localStorage.getItem(`pebbleafk_pinned_${u}`);
+        if (saved) return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return [];
+  });
+  const [accountLogsMap, setAccountLogsMap] = useState<Record<string, PlayerLogEntry[]>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const u = localStorage.getItem('pebbleafk_current_user') || 'guest';
+        const saved = localStorage.getItem(`pebbleafk_player_logs_${u}`);
+        if (saved) return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return {};
+  });
   const [chatInput, setChatInput] = useState('');
   const [selectedChatReceiver, setSelectedChatReceiver] = useState<string>('all');
   const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const handleTogglePin = (accId: string) => {
+    setPinnedAccountIds((prev) => {
+      const next = prev.includes(accId) ? prev.filter((id) => id !== accId) : [...prev, accId];
+      if (typeof window !== 'undefined') {
+        const u = currentUser || 'guest';
+        localStorage.setItem(`pebbleafk_pinned_${u}`, JSON.stringify(next));
+      }
+      return next;
+    });
+  };
 
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
   const showToast = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
@@ -118,6 +156,131 @@ export default function Home() {
       setToast(null);
     }, 4000);
   }, []);
+
+  // Player Audit & Connection Logs Handlers
+  const addPlayerLog = useCallback(
+    (
+      accountName: string,
+      serverHost: string,
+      type: PlayerLogType,
+      message: string,
+      details?: string,
+      status: 'info' | 'success' | 'warning' | 'error' = 'info'
+    ) => {
+      if (!accountName) return;
+      const cleanName = accountName.replace(/^@/, '').trim();
+      const newEntry: PlayerLogEntry = {
+        id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        accountName: cleanName,
+        serverHost: serverHost || 'Configured Server',
+        timestamp: Date.now(),
+        type,
+        message,
+        details,
+        status,
+      };
+
+      setAccountLogsMap((prev) => {
+        const currentList = prev[cleanName] || [];
+        if (
+          currentList.length > 0 &&
+          currentList[0].message === message &&
+          Date.now() - currentList[0].timestamp < 2000
+        ) {
+          return prev;
+        }
+        const updatedList = [newEntry, ...currentList].slice(0, 150);
+        const updatedMap = { ...prev, [cleanName]: updatedList };
+
+        if (typeof window !== 'undefined') {
+          const u = currentUser || 'guest';
+          try {
+            localStorage.setItem(`pebbleafk_player_logs_${u}`, JSON.stringify(updatedMap));
+          } catch (e) {}
+        }
+
+        if (currentUser) {
+          saveAccountLogsToSupabase(currentUser, cleanName, updatedList).catch(() => {});
+        }
+
+        return updatedMap;
+      });
+    },
+    [currentUser]
+  );
+
+  const handleOpenAccountLogs = async (acc: BedrockAccount) => {
+    setSelectedLogsAccount(acc);
+    setIsAccountLogsOpen(true);
+    const cleanName = (acc.ign || acc.expectedIgn || acc.username || '').replace(/^@/, '').trim();
+    if (currentUser && cleanName) {
+      try {
+        const remoteLogs = await loadAccountLogsFromSupabase(currentUser, cleanName);
+        if (remoteLogs && remoteLogs.length > 0) {
+          setAccountLogsMap((prev) => {
+            const current = prev[cleanName] || [];
+            const map = new Map<string, PlayerLogEntry>();
+            [...current, ...remoteLogs].forEach((l) => map.set(l.id, l));
+            const merged = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp).slice(0, 150);
+            return { ...prev, [cleanName]: merged };
+          });
+        }
+      } catch (_) {}
+    }
+  };
+
+  const handleClearAccountLogs = () => {
+    if (!selectedLogsAccount) return;
+    const cleanName = (selectedLogsAccount.ign || selectedLogsAccount.expectedIgn || selectedLogsAccount.username || '').replace(/^@/, '').trim();
+    setAccountLogsMap((prev) => {
+      const updated = { ...prev, [cleanName]: [] };
+      if (typeof window !== 'undefined') {
+        const u = currentUser || 'guest';
+        localStorage.setItem(`pebbleafk_player_logs_${u}`, JSON.stringify(updated));
+      }
+      return updated;
+    });
+    if (currentUser) {
+      saveAccountLogsToSupabase(currentUser, cleanName, []).catch(() => {});
+    }
+    showToast(`Logs cleared for @${cleanName}`, 'info');
+  };
+
+  const getStatusBadge = (state: BotLifecycleState) => {
+    switch (state) {
+      case 'SPAWNED':
+      case 'LOGGED_IN':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs group-hover:bg-emerald-200 transition">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            Online
+          </span>
+        );
+      case 'CONNECTING':
+      case 'RECONNECTING':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs group-hover:bg-amber-200 transition">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
+            Connecting...
+          </span>
+        );
+      case 'KICKED':
+      case 'ERROR':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-700 border border-rose-200 shadow-2xs group-hover:bg-rose-200 transition">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+            {state === 'KICKED' ? 'Kicked' : 'Error'}
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-300/80 shadow-2xs group-hover:bg-slate-200 transition">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+            Offline
+          </span>
+        );
+    }
+  };
 
   // Daemon Account Verification Callback
   const handleAccountVerified = useCallback(
@@ -594,6 +757,15 @@ export default function Home() {
       }
       return next;
     });
+    const ign = acc.ign || acc.username;
+    addPlayerLog(
+      ign,
+      srv.serverHost,
+      'connecting',
+      `Manual connection initiated: @${ign} -> ${srv.serverHost}:${srv.serverPort || 19132}`,
+      `Protocol: ${srv.serverVersion || 'auto'}`,
+      'info'
+    );
     const botConfig = {
       id: botId,
       username: acc.ign || acc.username,
@@ -620,8 +792,63 @@ export default function Home() {
       }
       return next;
     });
+    const ign = acc.ign || acc.username;
+    addPlayerLog(
+      ign,
+      srv.serverHost,
+      'disconnected',
+      `Bot session disconnected by user.`,
+      undefined,
+      'warning'
+    );
     showToast(`Disconnecting @${acc.ign || acc.username}...`, 'info');
   };
+
+  // Automatic live bot lifecycle logging
+  const prevBotStatesRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (daemonStatus !== 'AUTHENTICATED') return;
+    Object.entries(botStates).forEach(([botKey, st]) => {
+      const prevSt = prevBotStatesRef.current[botKey];
+      if (prevSt === st) return;
+
+      const parts = botKey.split('__');
+      if (parts.length === 2) {
+        const [sId, aId] = parts;
+        const srv = servers.find((s) => s.id === sId);
+        const acc = accounts.find((a) => a.id === aId || a.ign === aId);
+        if (srv && acc) {
+          const ign = acc.ign || acc.username;
+          if (st === 'SPAWNED' || st === 'LOGGED_IN') {
+            addPlayerLog(
+              ign,
+              srv.serverHost,
+              'spawned',
+              `Spawned into world successfully on ${srv.serverHost}. AFK engine active.`,
+              undefined,
+              'success'
+            );
+          } else if (st === 'CONNECTING' || st === 'RECONNECTING') {
+            addPlayerLog(
+              ign,
+              srv.serverHost,
+              'connecting',
+              `Attempting RakNet connection to ${srv.serverHost}:${srv.serverPort || 19132}...`,
+              undefined,
+              'info'
+            );
+          } else if (st === 'KICKED') {
+            addPlayerLog(ign, srv.serverHost, 'kicked', `Kicked from server: ${srv.serverHost}`, undefined, 'error');
+          } else if (st === 'ERROR') {
+            addPlayerLog(ign, srv.serverHost, 'error', `Connection error: ${srv.serverHost}`, undefined, 'error');
+          } else if (st === 'DISCONNECTED' && prevSt && prevSt !== 'DISCONNECTED') {
+            addPlayerLog(ign, srv.serverHost, 'disconnected', `Disconnected from ${srv.serverHost}`, undefined, 'warning');
+          }
+        }
+      }
+    });
+    prevBotStatesRef.current = { ...botStates };
+  }, [botStates, daemonStatus, servers, accounts, addPlayerLog]);
 
   // Connect / Disconnect all checked accounts
   const handleConnectSelected = () => {
@@ -1078,10 +1305,33 @@ export default function Home() {
         <div className="flex-1 flex flex-col min-w-0">
           {/* Desktop Top Header Bar */}
           <header className="hidden md:flex sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-6 py-2.5 items-center justify-between shadow-2xs">
-            <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-              <span className="font-bold text-slate-800">Bedrock Core</span>
-              <span>/</span>
-              <span className="capitalize">{activeTab}</span>
+            <div className="flex items-center gap-2.5 text-xs font-bold">
+              {activeTab === 'servers' && activeServer ? (
+                <>
+                  <div className="flex items-center gap-2">
+                    <ServerLogo host={activeServer.serverHost} name={activeServer.name} size="w-5 h-5" />
+                    <span className="text-slate-850 font-extrabold">{activeServer.name}</span>
+                  </div>
+                  <span className="text-slate-300 font-normal">/</span>
+                  <span
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-black uppercase tracking-wider border shadow-2xs ${
+                      activeSubTab === 'connect'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                        : activeSubTab === 'chat'
+                        ? 'bg-sky-50 text-sky-800 border-sky-300'
+                        : 'bg-slate-100 text-slate-800 border-slate-300'
+                    }`}
+                  >
+                    {activeSubTab}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="font-bold text-slate-800">Bedrock Core</span>
+                  <span>/</span>
+                  <span className="capitalize">{activeTab}</span>
+                </>
+              )}
             </div>
 
             {/* Right: Focused Daemon Status Icon */}
@@ -1456,49 +1706,6 @@ export default function Home() {
                   </div>
                 ) : (
                   <>
-                    {/* Breadcrumbs Row (Matching Image 1 & 2) */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2.5 text-xs text-slate-500 font-bold uppercase tracking-wider">
-                        <ServerLogo host={activeServer.serverHost} name={activeServer.name} size="w-6 h-6" />
-                        <span className="text-slate-900 font-black text-sm">{activeServer.name}</span>
-                        <span>/</span>
-                        <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md font-extrabold text-[10px]">
-                          {activeSubTab.toUpperCase()}
-                        </span>
-                      </div>
-
-                      {/* Sub-tab pills for mobile or direct switching */}
-                      <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
-                        <button
-                          type="button"
-                          onClick={() => setActiveSubTab('connect')}
-                          className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                            activeSubTab === 'connect' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
-                          }`}
-                        >
-                          Connect
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveSubTab('chat')}
-                          className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                            activeSubTab === 'chat' ? 'bg-white text-sky-700 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
-                          }`}
-                        >
-                          Chat
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveSubTab('settings')}
-                          className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                            activeSubTab === 'settings' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
-                          }`}
-                        >
-                          Settings
-                        </button>
-                      </div>
-                    </div>
-
                     {/* SUBTAB 1: CONNECT */}
                     {activeSubTab === 'connect' && (
                       <div className="space-y-4">
@@ -1628,6 +1835,17 @@ export default function Home() {
                                               <div className="font-bold text-slate-900 font-mono flex items-center gap-1.5">
                                                 <span>@{acc.ign || acc.username}</span>
                                                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                                <button
+                                                  type="button"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleOpenAccountLogs(acc);
+                                                  }}
+                                                  className="p-1 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 transition cursor-pointer shadow-2xs ml-0.5 group"
+                                                  title="View connection & audit logs for this account"
+                                                >
+                                                  <FileText className="w-3 h-3 group-hover:scale-110 transition-transform text-slate-500 hover:text-emerald-600" />
+                                                </button>
                                               </div>
                                               <div className="text-[10px] text-slate-400">
                                                 Bedrock Edition
@@ -1636,30 +1854,32 @@ export default function Home() {
                                           </div>
                                         </td>
                                         <td className="p-3">
-                                          <span
-                                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              if (!activeServer) return;
+                                              if (daemonStatus !== 'AUTHENTICATED') {
+                                                showToast('Cannot toggle: Termux daemon is offline. Start daemon first.', 'error');
+                                                return;
+                                              }
+                                              if (isConnected || isConnecting) {
+                                                handleDisconnectAccount(acc, activeServer);
+                                              } else {
+                                                handleConnectAccount(acc, activeServer);
+                                              }
+                                            }}
+                                            className="group inline-flex items-center transition-all duration-150 transform hover:scale-105 active:scale-95 cursor-pointer focus:outline-none"
+                                            title={
                                               isConnected
-                                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                                ? `Online • Click to disconnect @${acc.ign || acc.username}`
                                                 : isConnecting
-                                                ? 'bg-sky-50 text-sky-700 border border-sky-200 animate-pulse'
-                                                : botState === 'ERROR' || botState === 'KICKED'
-                                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                                : 'bg-slate-100 text-slate-600 border border-slate-200'
-                                            }`}
+                                                ? `Connecting • Click to disconnect @${acc.ign || acc.username}`
+                                                : `Offline • Click to connect @${acc.ign || acc.username}`
+                                            }
                                           >
-                                            <span
-                                              className={`w-1.5 h-1.5 rounded-full ${
-                                                isConnected
-                                                  ? 'bg-emerald-500 animate-pulse'
-                                                  : isConnecting
-                                                  ? 'bg-sky-500'
-                                                  : botState === 'ERROR' || botState === 'KICKED'
-                                                  ? 'bg-rose-500'
-                                                  : 'bg-slate-400'
-                                              }`}
-                                            />
-                                            <span>{isConnected ? 'ONLINE' : botState}</span>
-                                          </span>
+                                            {getStatusBadge(botState as BotLifecycleState)}
+                                          </button>
                                         </td>
                                         <td className="p-3">
                                           {isConnected ? (
@@ -1682,27 +1902,18 @@ export default function Home() {
                                         </td>
                                         <td className="p-3 text-right">
                                           <div className="flex items-center justify-end gap-1.5">
-                                            {isConnected ? (
-                                              <button
-                                                type="button"
-                                                onClick={() => handleDisconnectAccount(acc, activeServer)}
-                                                className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                                                title="Disconnect bot"
-                                              >
-                                                <Square className="w-3 h-3 fill-current" />
-                                                <span>Stop</span>
-                                              </button>
-                                            ) : (
-                                              <button
-                                                type="button"
-                                                onClick={() => handleConnectAccount(acc, activeServer)}
-                                                className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold text-xs transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                                                title="Connect bot"
-                                              >
-                                                <Play className="w-3 h-3 fill-current" />
-                                                <span>Start</span>
-                                              </button>
-                                            )}
+                                            <button
+                                              type="button"
+                                              onClick={() => handleTogglePin(acc.id)}
+                                              className={`p-1.5 rounded-lg transition cursor-pointer ${
+                                                pinnedAccountIds.includes(acc.id)
+                                                  ? 'text-amber-600 bg-amber-50'
+                                                  : 'text-slate-400 hover:text-slate-700'
+                                              }`}
+                                              title={pinnedAccountIds.includes(acc.id) ? 'Unpin' : 'Pin'}
+                                            >
+                                              <Pin className="w-3.5 h-3.5" />
+                                            </button>
 
                                             {/* Remove from server profile (-) */}
                                             <button
@@ -1752,6 +1963,17 @@ export default function Home() {
                                             <div className="font-bold text-slate-900 flex items-center gap-1.5 font-mono">
                                               <span>@{acc.ign || acc.username}</span>
                                               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleOpenAccountLogs(acc);
+                                                }}
+                                                className="p-1 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 transition cursor-pointer shadow-2xs ml-0.5 group"
+                                                title="View connection & audit logs for this account"
+                                              >
+                                                <FileText className="w-3 h-3 group-hover:scale-110 transition-transform text-slate-500 hover:text-emerald-600" />
+                                              </button>
                                             </div>
                                           </div>
                                         </td>
@@ -2160,6 +2382,40 @@ export default function Home() {
         server={activeServer}
         onToggleSetting={handleUpdateServerSetting}
         onDeleteServer={handleDeleteServer}
+      />
+
+      {/* Account Logs Modal (Audit logs, connection attempts, kicks, errors) */}
+      <AccountLogsModal
+        isOpen={isAccountLogsOpen}
+        onClose={() => {
+          setIsAccountLogsOpen(false);
+          setSelectedLogsAccount(null);
+        }}
+        account={selectedLogsAccount}
+        serverHost={activeServer?.serverHost}
+        logs={
+          selectedLogsAccount
+            ? accountLogsMap[
+                (
+                  selectedLogsAccount.ign ||
+                  selectedLogsAccount.expectedIgn ||
+                  selectedLogsAccount.username ||
+                  ''
+                )
+                  .replace(/^@/, '')
+                  .trim()
+              ] || []
+            : []
+        }
+        onClearLogs={handleClearAccountLogs}
+        isLiveConnected={Boolean(
+          selectedLogsAccount &&
+            activeServer &&
+            (botStates[`${activeServer.id}__${selectedLogsAccount.id}`] === 'SPAWNED' ||
+              botStates[`${activeServer.id}__${selectedLogsAccount.id}`] === 'LOGGED_IN' ||
+              botStates[selectedLogsAccount.id] === 'SPAWNED' ||
+              botStates[selectedLogsAccount.id] === 'LOGGED_IN')
+        )}
       />
     </div>
   );
