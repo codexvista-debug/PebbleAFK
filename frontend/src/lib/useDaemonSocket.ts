@@ -266,6 +266,10 @@ export function useDaemonSocket(
     setMsAuthData,
     reconnect: connect,
     restartDaemon,
+    updateDaemon: () => {
+      setBotStates({});
+      return send({ type: 'UPDATE_DAEMON' });
+    },
     verifyAccount: (accountId: string, email?: string) => send({ type: 'VERIFY_ACCOUNT', payload: { accountId, email } }),
     sendChat: (botId: string, message: string) => send({ type: 'SEND_CHAT', payload: { botId, message } }),
     submitForm: (botId: string, formId: number, responseData: any) => send({ type: 'SUBMIT_FORM', payload: { botId, formId, responseData } }),

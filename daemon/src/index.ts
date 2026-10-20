@@ -111,6 +111,40 @@ wss.on('connection', (ws: WebSocket, req) => {
         return;
       }
 
+      // 1-Click Remote Update & Restart from Dashboard
+      if (parsed.type === 'UPDATE_DAEMON' || parsed.type === 'RESTART_DAEMON') {
+        const isUpdate = parsed.type === 'UPDATE_DAEMON';
+        console.log(chalk.cyan(`[Daemon] Remote ${isUpdate ? 'update & restart' : 'restart'} requested by dashboard.`));
+        try {
+          ws.send(JSON.stringify({
+            type: 'DAEMON_STATUS_UPDATE',
+            payload: { message: isUpdate ? '🔄 Pulling latest code from GitHub & restarting...' : '🔁 Rebooting daemon core...' }
+          }));
+        } catch (_) {}
+
+        if (isUpdate) {
+          try {
+            const cp = require('child_process');
+            const path = require('path');
+            const fs = require('fs');
+            let repoDir = path.resolve(__dirname, '..', '..');
+            if (!fs.existsSync(path.join(repoDir, '.git')) && process.env.HOME) {
+              const homeRepo = path.join(process.env.HOME, 'PebbleAFK');
+              if (fs.existsSync(path.join(homeRepo, '.git'))) {
+                repoDir = homeRepo;
+              }
+            }
+            cp.execSync('git reset --hard HEAD && git pull --force origin main', { cwd: repoDir, stdio: 'inherit' });
+          } catch (gitErr: any) {
+            console.error(chalk.yellow(`[Update] git pull notice: ${gitErr?.message || gitErr}`));
+          }
+        }
+        setTimeout(() => {
+          process.exit(42);
+        }, 600);
+        return;
+      }
+
       // Forward message to BotManager
       botManager.handleClientMessage(parsed);
     } catch (err: any) {

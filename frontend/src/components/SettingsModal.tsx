@@ -11,6 +11,7 @@ interface SettingsModalProps {
   onSaveDaemonSettings: (url: string, token: string) => void;
   termuxCommand?: string;
   onRestartDaemon?: () => void;
+  onUpdateDaemon?: () => void;
   isDaemonOnline?: boolean;
 }
 
@@ -22,6 +23,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSaveDaemonSettings,
   termuxCommand = 'curl -sL https://pebbleafk.vercel.app/install | bash',
   onRestartDaemon,
+  onUpdateDaemon,
   isDaemonOnline = false,
 }) => {
   const [urlInput, setUrlInput] = useState(daemonUrl);
@@ -31,6 +33,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isManualExpanded, setIsManualExpanded] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [restartSuccess, setRestartSuccess] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [updateSuccess, setUpdateSuccess] = useState(false);
 
   React.useEffect(() => {
     setUrlInput(daemonUrl);
@@ -52,6 +56,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setTimeout(() => setRestartSuccess(false), 3000);
     } finally {
       setTimeout(() => setIsRestarting(false), 1200);
+    }
+  };
+
+  const handleUpdate = async () => {
+    if (!onUpdateDaemon || isUpdating) return;
+    setIsUpdating(true);
+    setUpdateSuccess(false);
+    try {
+      await onUpdateDaemon();
+      setUpdateSuccess(true);
+      setTimeout(() => setUpdateSuccess(false), 4000);
+    } finally {
+      setTimeout(() => setIsUpdating(false), 2000);
     }
   };
 
@@ -107,6 +124,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span>📱</span> Run this command in Termux:
                 </span>
                 <div className="flex items-center gap-2">
+                  {onUpdateDaemon && isDaemonOnline && (
+                    <button
+                      type="button"
+                      onClick={handleUpdate}
+                      disabled={isUpdating}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 ${
+                        updateSuccess
+                          ? 'bg-emerald-100 border-emerald-300 text-emerald-800'
+                          : 'bg-sky-50 hover:bg-sky-100 border-sky-300 text-sky-800'
+                      }`}
+                      title="Fetch latest updates from GitHub and restart"
+                    >
+                      <RotateCw
+                        className={`w-3.5 h-3.5 ${
+                          isUpdating
+                            ? 'animate-spin text-sky-600'
+                            : updateSuccess
+                            ? 'text-emerald-600'
+                            : 'text-sky-600'
+                        }`}
+                      />
+                      <span>
+                        {isUpdating
+                          ? 'Updating...'
+                          : updateSuccess
+                          ? 'Update Triggered!'
+                          : 'Update Engine'}
+                      </span>
+                    </button>
+                  )}
                   {onRestartDaemon && (
                     <button
                       type="button"
@@ -163,6 +210,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="text-[11px] text-slate-500 leading-relaxed flex items-center gap-1">
                 <span className="text-emerald-700 font-bold">✨ Auto-Sync:</span>
                 <span>Termux will automatically sync your tunnel to this dashboard with zero copy-pasting.</span>
+              </div>
+              <div className="text-[11px] text-slate-500 leading-relaxed flex items-center gap-1">
+                <span className="text-sky-700 font-bold">🔄 Quick Update:</span>
+                <span>In Termux, simply type <code className="px-1.5 py-0.5 rounded bg-slate-100 text-sky-800 font-mono font-bold">u</code> and press Enter, or click <b>Update Engine</b> above.</span>
               </div>
             </div>
           </div>

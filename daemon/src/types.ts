@@ -125,6 +125,8 @@ export type ClientMessage =
   | { type: 'UPDATE_SETTINGS'; payload: { botId: string; settings: Partial<BotSettings> } }
   | { type: 'REQUEST_SYNC'; payload?: { botId?: string } }
   | { type: 'VERIFY_ACCOUNT'; payload: { accountId: string; email?: string } }
+  | { type: 'UPDATE_DAEMON'; payload?: { reason?: string } }
+  | { type: 'RESTART_DAEMON'; payload?: { reason?: string } }
   | { type: 'PING' };
 
 // Daemon to Client Messages

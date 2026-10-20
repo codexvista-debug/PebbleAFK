@@ -105,6 +105,27 @@ sleep 1
 # Apply pure-JS high-speed RakNet transport patches for Android/Termux
 node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
 
+# Prepare native RakNet backend for Termux (enables full RakNet 11 + anti-DDoS cookie support)
+bash ./scripts/prepare-mobile-raknet.sh || true
+
+# Register 1-letter instant update command 'u' in Termux
+cat << 'EOF' > "$HOME/u"
+#!/data/data/com.termux/files/usr/bin/bash
+clear
+echo "🔄 Updating PebbleAFK from GitHub..."
+cd "$HOME/PebbleAFK" 2>/dev/null || cd "$HOME"
+git reset --hard HEAD 2>/dev/null || true
+git pull --force origin main
+cd daemon 2>/dev/null || true
+bash start.sh "$@"
+EOF
+chmod +x "$HOME/u" 2>/dev/null || true
+if [ -n "$PREFIX" ] && [ -d "$PREFIX/bin" ]; then
+  cp "$HOME/u" "$PREFIX/bin/u" 2>/dev/null || true
+  cp "$HOME/u" "$PREFIX/bin/update" 2>/dev/null || true
+  chmod +x "$PREFIX/bin/u" "$PREFIX/bin/update" 2>/dev/null || true
+fi
+
 cat << ENVEOF > .env
 PORT=8080
 PEBBLEAFK_OWNER=$APP_USER
@@ -185,10 +206,12 @@ echo -e "  ${GREEN}║${NC}   ${BOLD}✨ PebbleAFK Bedrock Daemon is RUNNING 24/
 echo -e "  ${GREEN}║${NC}   Connected to: ${CYAN}https://pebbleafk.vercel.app${NC}                    ${GREEN}║${NC}"
 echo -e "  ${GREEN}║${NC}   Live Tunnel : ${YELLOW}${WSS_URL}${NC}         ${GREEN}║${NC}"
 echo -e "  ${GREEN}╚═══════════════════════════════════════════════════════════════════╝${NC}"
-echo -e "\n  ${YELLOW}⚡ KEYBOARD SHORTCUTS:${NC}"
-echo -e "     • Press [${BOLD}${CYAN}Ctrl + N${NC}] 🔄 Update PebbleAFK from GitHub & restart"
-echo -e "     • Press [${BOLD}${RED}Ctrl + C${NC}] 🛑 Cleanly stop all services & quit"
-echo -e "     • Press [${BOLD}${YELLOW}R${NC}]       🔁 Quick restart Bedrock core"
+echo -e "\n  ${YELLOW}⚡ SHORTCUTS & UPDATES:${NC}"
+echo -e "     • Web Dashboard : Click [${BOLD}${CYAN}Update Engine${NC}] for 1-click remote update"
+echo -e "     • Termux CLI    : Type [${BOLD}${CYAN}u${NC}] and press Enter anytime to update"
+echo -e "     • Keyboard      : Press [${BOLD}${CYAN}U${NC}] or [${BOLD}${CYAN}Ctrl + N${NC}] 🔄 Update & restart"
+echo -e "     • Quick Quit    : Press [${BOLD}${RED}Ctrl + C${NC}] or [${BOLD}${RED}Q${NC}] 🛑 Cleanly stop all services"
+echo -e "     • Core Restart  : Press [${BOLD}${YELLOW}R${NC}]       🔁 Quick restart Bedrock core"
 echo -e "${GRAY}─────────────────────────────────────────────────────────────────────${NC}"
 echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 
@@ -280,7 +303,7 @@ stty -icanon min 1 time 0 -echo 2>/dev/null || true
 while true; do
   KEY=$(dd bs=1 count=1 2>/dev/null)
   case "$KEY" in
-    $'\x0e'|[nN])
+    $'\x0e'|[nN]|[uU])
       do_update_and_restart
       ;;
     $'\x03'|[qQ])

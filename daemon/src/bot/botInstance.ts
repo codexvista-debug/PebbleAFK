@@ -192,7 +192,7 @@ export class PebbleBotInstance {
         transport: 'raknet',
         raknetBackend: rakBackend,
         useRaknetWorkers: false,
-        skipPing: rakBackend === 'jsp-raknet',
+        skipPing: rakBackend === 'jsp-raknet' || !pingRes,
         connectTimeout: 45000,
         onMsaCode: (data: any) => {
           console.log(chalk.yellow(`[MS Auth] Code for ${this.config.username}: ${data.user_code}`));
