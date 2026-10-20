@@ -28,7 +28,6 @@ import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { MicrosoftAuthModal } from '@/components/MicrosoftAuthModal';
-import { AddAccountModal } from '@/components/AddAccountModal';
 import { useDaemonSocket } from '@/lib/useDaemonSocket';
 import { BedrockAccount } from '@/types';
 import { loadAccountsFromSupabase, syncAllToSupabase, deleteAccountFromSupabase } from '@/lib/supabaseSync';
@@ -46,11 +45,7 @@ export default function Home() {
   const [accountFilter, setAccountFilter] = useState('');
   const [copiedIgnId, setCopiedIgnId] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<BedrockAccount | null>(null);
-  const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
-  const [selectedEmail, setSelectedEmail] = useState('');
-  const [isWaitingForPopup, setIsWaitingForPopup] = useState(false);
   const [msAuthError, setMsAuthError] = useState<string | null>(null);
-  const popupRef = useRef<Window | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
 
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -113,15 +108,6 @@ export default function Home() {
         return updated;
       });
 
-      if (popupRef.current && !popupRef.current.closed) {
-        try {
-          popupRef.current.close();
-        } catch (_) {}
-      }
-      popupRef.current = null;
-      setIsWaitingForPopup(false);
-      setSelectedEmail('');
-      setIsAddAccountModalOpen(false);
       showToast(`Verified Bedrock account: @${verifiedIgn}`, 'success');
     },
     [currentUser, showToast]
@@ -244,41 +230,14 @@ export default function Home() {
     };
   }, [currentUser, daemonUrl, secretCode, authToken, setDaemonUrl, setAuthToken]);
 
-  // Open and update popup when MS Auth URL arrives
-  useEffect(() => {
-    if (msAuthData?.url && isWaitingForPopup) {
-      if (popupRef.current && !popupRef.current.closed) {
-        try {
-          popupRef.current.location.href = msAuthData.url;
-          popupRef.current.focus();
-        } catch (e) {
-          console.warn('Could not redirect popup:', e);
-        }
-      }
-    }
-  }, [msAuthData, isWaitingForPopup]);
-
-  const handleCloseAddAccountModal = useCallback(() => {
-    if (popupRef.current && !popupRef.current.closed) {
-      try {
-        popupRef.current.close();
-      } catch (_) {}
-    }
-    popupRef.current = null;
-    setIsWaitingForPopup(false);
-    setIsAddAccountModalOpen(false);
-    setSelectedEmail('');
-    setMsAuthData(null);
-  }, [setMsAuthData]);
-
-  // Start Microsoft OAuth login via daemon targeting exact email
-  const handleStartMicrosoftLogin = (targetEmail?: string) => {
+  // Microsoft OAuth Device Code Sign-In (Exact same flow as PocketAFK)
+  const handleStartMicrosoftLogin = (target?: BedrockAccount | string) => {
     if (!currentUser) {
       setIsAuthOpen(true);
       return;
     }
 
-    if (accounts.filter((a) => a.verified).length >= 5) {
+    if (accounts.filter((a) => a.verified).length >= 5 && !target) {
       showToast('Maximum account limit (5 accounts) reached.', 'error');
       return;
     }
@@ -289,80 +248,11 @@ export default function Home() {
       return;
     }
 
-    // If no email entered yet, open the Add Account modal matching MinecraftAFK
-    if (!targetEmail) {
-      setIsAddAccountModalOpen(true);
-      setIsWaitingForPopup(false);
-      return;
-    }
-
     setMsAuthError(null);
-    setSelectedEmail(targetEmail);
-    setIsWaitingForPopup(true);
-    setIsAddAccountModalOpen(true);
+    const targetId = typeof target === 'object' && target ? target.id : `acc_${Math.random().toString(36).substring(2, 9)}`;
+    const targetEmail = typeof target === 'string' ? target : (target?.username || '');
 
-    // Open popup window synchronously on the user's action to beat popup blocker
-    const width = 500;
-    const height = 680;
-    const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
-    const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
-
-    try {
-      const popup = window.open(
-        'about:blank',
-        'pebble_ms_auth',
-        `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no,toolbar=no`
-      );
-      if (popup) {
-        popup.document.write(`
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <title>Microsoft Sign-In</title>
-              <style>
-                body {
-                  margin: 0;
-                  background: #ffffff;
-                  color: #0f172a;
-                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                  display: flex;
-                  align-items: center;
-                  justify-content: center;
-                  height: 100vh;
-                  text-align: center;
-                  padding: 24px;
-                  box-sizing: border-box;
-                }
-                .spinner {
-                  width: 36px;
-                  height: 36px;
-                  border: 3px solid #e2e8f0;
-                  border-top-color: #059669;
-                  border-radius: 50%;
-                  animation: spin 0.8s linear infinite;
-                  margin: 0 auto 16px;
-                }
-                @keyframes spin { to { transform: rotate(360deg); } }
-                h2 { font-size: 16px; font-weight: 800; margin: 0 0 6px; }
-                p { font-size: 12px; color: #64748b; margin: 0; }
-              </style>
-            </head>
-            <body>
-              <div>
-                <div class="spinner"></div>
-                <h2>Connecting to Microsoft...</h2>
-                <p>Preparing authentication for <b>${targetEmail}</b></p>
-              </div>
-            </body>
-          </html>
-        `);
-        popupRef.current = popup;
-      }
-    } catch (err) {
-      console.warn('Popup blocked or failed:', err);
-    }
-
-    const targetId = `acc_${Math.random().toString(36).substring(2, 9)}`;
+    showToast('Requesting Microsoft sign-in via Termux daemon...', 'info');
     verifyAccount(targetId, targetEmail);
   };
 
@@ -1018,18 +908,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Add Account Email Modal (Matching MinecraftAFK) */}
-      <AddAccountModal
-        isOpen={isAddAccountModalOpen}
-        onClose={handleCloseAddAccountModal}
-        onSubmit={(email) => handleStartMicrosoftLogin(email)}
-        waitingForPopup={isWaitingForPopup}
-        targetEmail={selectedEmail}
-        userCode={msAuthData?.userCode}
-        authUrl={msAuthData?.url}
-        errorMessage={msAuthError}
-      />
-
       {/* Modern In-App Confirm Unlink Modal */}
       <ConfirmModal
         isOpen={Boolean(deletingAccount)}
@@ -1047,15 +925,12 @@ export default function Home() {
         onCancel={() => setDeletingAccount(null)}
       />
 
-      {/* Microsoft OAuth Device Code Modal Fallback (shown only if AddAccountModal is not active) */}
-      {msAuthData && !isAddAccountModalOpen && (
+      {/* Microsoft OAuth Device Code Modal (Exact same as PocketAFK) */}
+      {msAuthData && (
         <MicrosoftAuthModal
           authData={msAuthData}
-          accountEmail={selectedEmail || msAuthData.targetEmail}
-          onClose={() => {
-            setMsAuthData(null);
-            setSelectedEmail('');
-          }}
+          accountEmail={msAuthData.targetEmail}
+          onClose={() => setMsAuthData(null)}
           errorMessage={msAuthError}
         />
       )}

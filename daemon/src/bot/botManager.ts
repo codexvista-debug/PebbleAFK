@@ -240,26 +240,17 @@ export class BotManager {
         console.warn(chalk.yellow(`[Auth] Xbox profile lookup note: ${errXbox.message}`));
       }
 
-      // 3. Fallback: Check Minecraft Java profile if unified
+      // 3. Fallback: Query Xbox User XUID directly if needed
       if (!realGamertag) {
         try {
-          console.log(chalk.cyan(`[Auth] Checking Minecraft Java profile fallback...`));
-          const javaRes = await flow.getMinecraftJavaToken({ fetchProfile: true }).catch(() => null);
-          if (javaRes?.profile?.name) {
-            realGamertag = javaRes.profile.name;
-            xuid = javaRes.profile.id || xuid;
-            console.log(chalk.green(`[Auth] Retrieved Minecraft Profile: ${realGamertag}`));
-          }
+          const xboxRes = await flow.getXboxToken();
+          xuid = xuid || (xboxRes as any)?.userXUID || (xboxRes as any)?.xuid || '';
         } catch (_) {}
       }
 
-      // 4. Token manager fallback
-      if (!realGamertag) {
-        const xboxRes = await flow.getXboxToken();
-        xuid = xuid || (xboxRes as any)?.userXUID || (xboxRes as any)?.xuid || '';
-        if (email && !email.startsWith('bedrock_user_') && !email.startsWith('acc_')) {
-          realGamertag = email;
-        }
+      // Ensure Xbox gamerpic fallback for Bedrock
+      if (!xboxAvatarUrl && realGamertag) {
+        xboxAvatarUrl = `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(realGamertag)}/avatarpic-l.png`;
       }
 
       if (verificationId !== this.currentVerificationId) {
