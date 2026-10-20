@@ -23,6 +23,7 @@ export interface BedrockAccount {
   addedAt: number;
   authError?: string;
   expectedIgn?: string;
+  avatarUrl?: string;
   settings?: Record<string, any>;
 }
 

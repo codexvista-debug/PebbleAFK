@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import chalk from 'chalk';
 import { Authflow, Titles } from 'prismarine-auth';
 import { XboxClient } from 'prismarine-xbox-services';
@@ -138,7 +139,7 @@ export class BotManager {
 
   public async verifyAccount(accountId: string, email?: string) {
     const verificationId = ++this.currentVerificationId;
-    const isNew = !email || email === 'new_account' || email.startsWith('acc_');
+    const isNew = !email || email === 'new_account' || email.startsWith('acc_') || email.startsWith('bedrock_user_');
     const authKey = isNew ? `bedrock_user_${Date.now()}` : email;
     console.log(chalk.cyan(`[Auth] Initiating Bedrock/Xbox Device Verification for ${authKey}...`));
 
@@ -176,25 +177,56 @@ export class BotManager {
         });
       });
 
-      let realGamertag = email && !email.startsWith('bedrock_user_') ? email : '';
+      let realGamertag = '';
       let xuid = '';
+      let xboxAvatarUrl = '';
 
+      // 1. Primary: Generate EC key pair and retrieve Minecraft Bedrock authentication chain
       try {
-        const xbox = new XboxClient(flow as any);
+        const keyPair = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+        const clientX509 = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+        const loginData = await (flow as any).getMinecraftBedrockToken(clientX509);
+        const chains = loginData?.chain;
+        if (Array.isArray(chains) && chains.length >= 2) {
+          const jwt = chains[1];
+          const payloadStr = Buffer.from(jwt.split('.')[1], 'base64').toString('utf8');
+          const bedrockPayload = JSON.parse(payloadStr);
+          if (bedrockPayload?.extraData?.displayName) {
+            realGamertag = bedrockPayload.extraData.displayName;
+          }
+          if (bedrockPayload?.extraData?.XUID) {
+            xuid = String(bedrockPayload.extraData.XUID);
+          }
+        }
+      } catch (errBedrock: any) {
+        console.warn(chalk.yellow(`[Auth] Bedrock token lookup note: ${errBedrock.message}`));
+      }
+
+      // 2. Secondary: Query official Xbox Live profile for Gamertag and high-res Gamerpic
+      try {
+        const xbox = new XboxClient(flow as any, {
+          titleId: '896928775',
+          scid: '4fc10100-5f7a-4470-899b-280835760c07',
+          templateName: 'MinecraftLobby',
+        });
         const profile = await xbox.getProfile('me');
-        if (profile?.gamertag) {
+        if (profile?.gamertag && !realGamertag) {
           realGamertag = profile.gamertag;
         }
-        if (profile?.xuid) {
+        if (profile?.xuid && !xuid) {
           xuid = String(profile.xuid);
         }
-      } catch (errProfile: any) {
-        console.warn(chalk.yellow(`[Auth] Xbox profile lookup: ${errProfile.message}, fetching token directly...`));
-        const xboxRes = await flow.getXboxToken();
-        xuid = (xboxRes as any)?.userXUID || (xboxRes as any)?.xuid || '';
-        if (!realGamertag) {
-          realGamertag = email || authKey;
+        if (profile?.avatarUrl) {
+          xboxAvatarUrl = profile.avatarUrl;
         }
+      } catch (errXbox: any) {
+        console.warn(chalk.yellow(`[Auth] Xbox profile lookup note: ${errXbox.message}`));
+      }
+
+      // 3. Fallback: Parse XSTS tokens directly
+      if (!realGamertag) {
+        const xboxRes = await flow.getXboxToken();
+        xuid = xuid || (xboxRes as any)?.userXUID || (xboxRes as any)?.xuid || '';
       }
 
       if (verificationId !== this.currentVerificationId) {
@@ -202,8 +234,8 @@ export class BotManager {
         return;
       }
 
-      if (!realGamertag) {
-        realGamertag = email || authKey;
+      if (!realGamertag || realGamertag.startsWith('bedrock_user_')) {
+        throw new Error('Could not retrieve your official Xbox Gamertag. Please make sure your Microsoft account has an Xbox Live profile.');
       }
 
       // Ensure 90-day rolling token aliases are created
@@ -218,6 +250,7 @@ export class BotManager {
           email: authKey,
           ign: realGamertag,
           uuid: xuid,
+          avatarUrl: xboxAvatarUrl,
         },
       });
       console.log(chalk.green(`[Auth Success] Bedrock/Xbox verified as: ${realGamertag} (XUID: ${xuid})`));

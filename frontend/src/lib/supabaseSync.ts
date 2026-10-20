@@ -95,8 +95,8 @@ export async function loadAccountsFromSupabase(currentUser: string): Promise<Bed
 
     data.forEach((row) => {
       const botName = (row.bot_name || '').trim();
-      // Skip metadata rows
-      if (!botName || botName.startsWith('__')) return;
+      // Skip metadata rows and any legacy temporary names
+      if (!botName || botName.startsWith('__') || botName.startsWith('bedrock_user_')) return;
 
       const key = botName.toLowerCase();
       if (!seen.has(key)) {
@@ -106,6 +106,7 @@ export async function loadAccountsFromSupabase(currentUser: string): Promise<Bed
           username: botName,
           ign: botName,
           auth_type: 'microsoft',
+          avatarUrl: row.settings?.avatarUrl,
           verified: true,
           addedAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
           settings: row.settings || {},
@@ -155,7 +156,7 @@ export async function syncAllToSupabase(
     for (const acc of accounts) {
       if (!acc.verified) continue;
       const ign = (acc.ign || acc.username || '').trim();
-      if (!ign || ign.includes('@')) continue;
+      if (!ign || ign.includes('@') || ign.startsWith('bedrock_user_')) continue;
 
       if (!existingBotNames.has(ign.toLowerCase())) {
         const firstServer = servers[0];
@@ -167,7 +168,7 @@ export async function syncAllToSupabase(
             server_host: firstServer?.serverHost || 'play.cubecraft.net',
             server_port: firstServer?.serverPort || 19132,
             server_version: firstServer?.serverVersion || 'auto',
-            settings: acc.settings || {},
+            settings: { ...(acc.settings || {}), avatarUrl: acc.avatarUrl },
           },
         ]);
         existingBotNames.add(ign.toLowerCase());

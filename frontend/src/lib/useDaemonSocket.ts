@@ -5,7 +5,7 @@ import { BotLifecycleState, ChatMessage, Telemetry, ActivityLog, BedrockForm, So
 
 export function useDaemonSocket(
   currentUser: string | null,
-  onAccountVerified?: (payload: { botId: string; email: string; ign: string; uuid?: string }) => void
+  onAccountVerified?: (payload: { botId: string; email: string; ign: string; uuid?: string; avatarUrl?: string }) => void
 ) {
   const onAccountVerifiedRef = useRef(onAccountVerified);
   useEffect(() => {
