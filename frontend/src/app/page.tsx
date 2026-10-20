@@ -7,13 +7,14 @@ import {
   LayoutDashboard, 
   Server, 
   Users, 
-  Terminal, 
-  Check, 
-  Copy, 
-  Network, 
   Sparkles,
   Menu,
-  X
+  X,
+  ArrowRight,
+  ShieldCheck,
+  Radio,
+  Gamepad2,
+  HardDrive
 } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
@@ -26,33 +27,50 @@ export default function Home() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'servers' | 'accounts'>('dashboard');
-  const [copiedCmd, setCopiedCmd] = useState(false);
 
-  // Load saved session
+  // Load saved session and fetch secretCode
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedUser = localStorage.getItem('pebbleafk_current_user');
       if (savedUser) {
         setCurrentUser(savedUser);
-        const savedSecret = localStorage.getItem(`pebbleafk_secret_${savedUser.toLowerCase()}`) || '';
-        setSecretCode(savedSecret);
+        const cachedSecret = localStorage.getItem(`pebbleafk_secret_${savedUser.toLowerCase()}`) || '';
+        if (cachedSecret) {
+          setSecretCode(cachedSecret);
+        } else {
+          // Fetch secretCode from API
+          fetch(`/api/auth?username=${encodeURIComponent(savedUser)}`)
+            .then((r) => r.json())
+            .then((data) => {
+              if (data?.secretCode) {
+                setSecretCode(data.secretCode);
+                localStorage.setItem(`pebbleafk_secret_${savedUser.toLowerCase()}`, data.secretCode);
+              }
+            })
+            .catch(() => {});
+        }
       }
     }
   }, []);
 
-  const handleAuthSuccess = (username: string) => {
+  const handleAuthSuccess = (username: string, receivedSecret?: string) => {
     setCurrentUser(username);
     if (typeof window !== 'undefined') {
       localStorage.setItem('pebbleafk_current_user', username);
-      fetch(`/api/auth?username=${encodeURIComponent(username)}`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.secretCode) {
-            setSecretCode(data.secretCode);
-            localStorage.setItem(`pebbleafk_secret_${username.toLowerCase()}`, data.secretCode);
-          }
-        })
-        .catch(() => {});
+      if (receivedSecret) {
+        setSecretCode(receivedSecret);
+        localStorage.setItem(`pebbleafk_secret_${username.toLowerCase()}`, receivedSecret);
+      } else {
+        fetch(`/api/auth?username=${encodeURIComponent(username)}`)
+          .then((r) => r.json())
+          .then((data) => {
+            if (data?.secretCode) {
+              setSecretCode(data.secretCode);
+              localStorage.setItem(`pebbleafk_secret_${username.toLowerCase()}`, data.secretCode);
+            }
+          })
+          .catch(() => {});
+      }
     }
   };
 
@@ -76,7 +94,7 @@ export default function Home() {
     restartDaemon,
   } = useDaemonSocket(currentUser);
 
-  // 1-Click Termux Command
+  // 1-Click Termux Command with exact secretCode
   const termux1ClickCmd = currentUser
     ? `curl -sL https://pebbleafk.vercel.app/install | bash -s -- ${currentUser}${secretCode ? ` ${secretCode}` : ''}`
     : 'curl -sL https://pebbleafk.vercel.app/install | bash';
@@ -108,14 +126,6 @@ export default function Home() {
       clearInterval(interval);
     };
   }, [currentUser, daemonUrl, secretCode, authToken, setDaemonUrl, setAuthToken]);
-
-  const handleCopyCmd = () => {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(termux1ClickCmd);
-      setCopiedCmd(true);
-      setTimeout(() => setCopiedCmd(false), 2500);
-    }
-  };
 
   // Status dot style for daemon button
   const getDaemonRingStyle = () => {
@@ -184,10 +194,10 @@ export default function Home() {
     );
   }
 
-  // 2. LOGGED-IN VIEW: Responsive layout matching Image 2
+  // 2. LOGGED-IN VIEW: Matching Image 2
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* Mobile Top Header Bar (Shown only on small screens) */}
+      {/* Mobile Top Header Bar */}
       <div className="md:hidden flex items-center justify-between p-3.5 bg-white border-b border-slate-200/90 shrink-0 sticky top-0 z-30 shadow-2xs">
         <div className="flex items-center gap-2.5">
           <button
@@ -220,7 +230,7 @@ export default function Home() {
         </button>
       </div>
 
-      {/* Main Container */}
+      {/* Main Layout Container */}
       <div className="flex-1 flex flex-col md:flex-row md:min-h-screen">
         {/* Mobile Backdrop Overlay */}
         {isMobileSidebarOpen && (
@@ -230,7 +240,7 @@ export default function Home() {
           />
         )}
 
-        {/* LEFT SIDEBAR (Slide-out drawer on mobile, permanent sidebar on desktop) */}
+        {/* LEFT SIDEBAR */}
         <aside
           className={`fixed md:static inset-y-0 left-0 z-50 w-72 max-w-[85vw] md:w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 shadow-2xl md:shadow-none transition-transform duration-200 ease-in-out ${
             isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
@@ -264,7 +274,6 @@ export default function Home() {
                 </div>
               </button>
 
-              {/* Close Button on Mobile Drawer */}
               <button
                 type="button"
                 onClick={() => setIsMobileSidebarOpen(false)}
@@ -359,7 +368,7 @@ export default function Home() {
 
         {/* Desktop Header + Main View Area */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Desktop Top Header Bar (Hidden on Mobile) */}
+          {/* Desktop Top Header Bar */}
           <header className="hidden md:flex sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-6 py-2.5 items-center justify-between shadow-2xs">
             <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
               <span className="font-bold text-slate-800">Bedrock Core</span>
@@ -379,74 +388,87 @@ export default function Home() {
             </div>
           </header>
 
-          {/* Main Scrollable Content */}
+          {/* Main Scrollable Content: Clean Dashboard Placeholder */}
           <main className="flex-1 bg-grid-slate p-3 sm:p-6 overflow-y-auto">
-            <div className="max-w-3xl mx-auto space-y-5">
-              {/* 1-Click Termux Launcher Card */}
-              <div className="glass-panel p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-200/90 shadow-sm space-y-4">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-700 shadow-2xs shrink-0">
-                      <Terminal className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h2 className="text-sm font-bold text-slate-900">Android Termux 1-Click Launcher</h2>
-                      <p className="text-xs text-slate-500">Run this command on your phone to launch 24/7 Bedrock AFK</p>
-                    </div>
+            <div className="max-w-4xl mx-auto space-y-6">
+              {/* Hero Banner Placeholder */}
+              <div className="relative overflow-hidden rounded-3xl bg-white p-6 sm:p-8 border border-slate-200/90 shadow-xs">
+                <div className="space-y-3">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold tracking-wide">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>PebbleAFK v1.0 Bedrock Core • 24/7 Mobile AFK Engine</span>
                   </div>
 
-                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                    daemonStatus === 'AUTHENTICATED'
-                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-300'
-                      : 'bg-slate-100 text-slate-600 border border-slate-200'
-                  }`}>
-                    <span className={`w-2 h-2 rounded-full ${getDaemonInnerDot()}`} />
-                    {daemonStatus === 'AUTHENTICATED' ? 'Daemon Online' : 'Standby'}
-                  </span>
-                </div>
+                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-black tracking-tight text-slate-900">
+                    Bedrock AFK Operations Hub
+                  </h1>
 
-                {/* Command Box */}
-                <div className="bg-gradient-to-br from-emerald-50/70 via-white to-slate-50 p-3.5 sm:p-4 rounded-2xl border border-emerald-200/90 space-y-3 shadow-xs">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
-                      <span>📱</span> Copy &amp; paste into Termux:
-                    </span>
+                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed max-w-2xl">
+                    Run headless Minecraft Bedrock bots directly on Android via Termux or remote background daemons.
+                    Automate farming, keep chunks loaded, and manage multiple accounts around the clock.
+                  </p>
 
+                  <div className="flex items-center gap-3 pt-2 flex-wrap">
                     <button
-                      onClick={handleCopyCmd}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs cursor-pointer active:scale-95"
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
                     >
-                      {copiedCmd ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copiedCmd ? 'Copied!' : 'Copy Command'}</span>
+                      <Radio className="w-4 h-4" />
+                      <span>Termux Daemon Bridge</span>
+                      <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
                     </button>
                   </div>
+                </div>
+              </div>
 
-                  <div className="p-3 rounded-xl bg-white border border-slate-200/90 font-mono text-[11px] sm:text-xs text-slate-800 break-all select-all shadow-inner leading-relaxed">
-                    {termux1ClickCmd}
-                  </div>
-
-                  <div className="text-[11px] text-slate-500 leading-relaxed flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    <span>
-                      <strong className="text-emerald-700">Auto-Sync Enabled:</strong> Termux will automatically pair its secure Cloudflare tunnel to your account with zero manual copy-pasting.
+              {/* Quick Metrics Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Daemon</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${daemonStatus === 'AUTHENTICATED' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                    <span className="text-xs font-bold text-slate-900">
+                      {daemonStatus === 'AUTHENTICATED' ? 'Online' : 'Standby'}
                     </span>
                   </div>
                 </div>
 
-                {/* Latency and Tunnel status */}
-                {daemonStatus === 'AUTHENTICATED' && (
-                  <div className="p-3 rounded-xl bg-emerald-50/80 border border-emerald-200/80 flex items-center justify-between text-xs text-emerald-900 flex-wrap gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Network className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span className="font-mono text-[11px] break-all">{daemonUrl}</span>
-                    </div>
-                    {latency !== null && (
-                      <span className="font-mono text-[11px] font-bold bg-white px-2 py-0.5 rounded-md border border-emerald-200 shrink-0">
-                        {latency}ms
-                      </span>
-                    )}
+                <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Active Bots</span>
+                  <div className="flex items-center gap-1.5">
+                    <Gamepad2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-xs font-bold text-slate-900">0 Running</span>
                   </div>
-                )}
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Bedrock Accounts</span>
+                  <div className="flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-slate-500" />
+                    <span className="text-xs font-bold text-slate-900">0 / 5</span>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Engine Protocol</span>
+                  <div className="flex items-center gap-1.5">
+                    <HardDrive className="w-3.5 h-3.5 text-sky-600" />
+                    <span className="text-xs font-bold text-slate-900">RakNet UDP</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Server Profiles Placeholder */}
+              <div className="p-6 rounded-3xl bg-white border border-slate-200/80 shadow-2xs text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
+                  <Server className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-bold text-slate-900">No Server Profiles Yet</h3>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    Server profiles and multi-bot management are being configured. Click the circular daemon icon in the top header to pair your Termux runner.
+                  </p>
+                </div>
               </div>
             </div>
           </main>

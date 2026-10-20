@@ -2,6 +2,43 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabaseClient';
 import { hashPassword, generateSecretCode, USERNAME_REGEX } from '@/lib/authUtils';
 
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const username = searchParams.get('username')?.trim().toLowerCase();
+
+    if (!username) {
+      return NextResponse.json({ error: 'Username is required' }, { status: 400 });
+    }
+
+    if (supabase) {
+      const { data: users, error } = await supabase
+        .from('users')
+        .select('password_hash, username')
+        .ilike('username', username)
+        .order('created_at', { ascending: true })
+        .limit(1);
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+
+      const user = users?.[0];
+      if (user?.password_hash) {
+        const secretCode = generateSecretCode(user.username, user.password_hash);
+        return NextResponse.json({
+          username: user.username,
+          secretCode,
+        });
+      }
+    }
+
+    return NextResponse.json({ error: 'User not found' }, { status: 404 });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Server error' }, { status: 500 });
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { action, username, password } = await req.json();
@@ -29,7 +66,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'register') {
-      // Check if username already exists in Supabase
       const { data: existingList, error: checkError } = await supabase
         .from('users')
         .select('username')
@@ -44,7 +80,6 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'This username is already taken. Please choose another or sign in.' }, { status: 400 });
       }
 
-      // Insert new user into public.users
       const { error: insertError } = await supabase.from('users').insert([
         {
           username: cleanUsername,
