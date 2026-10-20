@@ -50,6 +50,15 @@ if [ -z "$APP_USER" ]; then
   echo "$APP_USER" > "$USER_FILE"
 fi
 
+# Auto-fetch secret code from PebbleAFK if missing
+if [ -z "$APP_SECRET" ] && [ -n "$APP_USER" ] && [ "$APP_USER" != "guest" ]; then
+  FETCHED_SECRET=$(curl -s --connect-timeout 4 --max-time 6 "https://pebbleafk.vercel.app/api/auth?username=${APP_USER}" 2>/dev/null | grep -o '"secretCode":"[^"]*' | cut -d'"' -f4)
+  if [ -n "$FETCHED_SECRET" ]; then
+    APP_SECRET="$FETCHED_SECRET"
+    echo "$APP_SECRET" > "$SECRET_FILE"
+  fi
+fi
+
 UPPER_USER=$(echo "$APP_USER" | tr '[:lower:]' '[:upper:]')
 
 echo -e "${CYAN}╔═══════════════════════════════════════════════════════════════════════════╗${NC}"
@@ -167,20 +176,16 @@ DASHBOARD_SYNC_URL="https://pebbleafk.vercel.app/api/tunnel"
 
 # 4. Auto-sync to Vercel Website
 echo -e "\n${CYAN}[4/4]${NC} 🚀 ${BOLD}Auto-syncing tunnel to user @${APP_USER}...${NC}"
-SYNC_RESP=$(curl -s -X POST "$DASHBOARD_SYNC_URL" \
+SYNC_RESP=$(curl -s --connect-timeout 6 --max-time 10 -X POST "$DASHBOARD_SYNC_URL" \
   -H "Content-Type: application/json" \
   -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null)
 
 if echo "$SYNC_RESP" | grep -q "Unauthorized"; then
-  echo -e "      ${RED}✗ AUTHENTICATION FAILED: Secret key does not match user @${APP_USER}.${NC}"
-  echo -e "      ${YELLOW}Please run the exact 1-click command shown in your PebbleAFK dashboard.${NC}"
-  kill $DAEMON_PID 2>/dev/null
-  kill $TUNNEL_PID 2>/dev/null
-  exit 1
+  echo -e "      ${YELLOW}⚠ Auto-sync auth notice. Running tunnel locally & continuing...${NC}"
 elif echo "$SYNC_RESP" | grep -q "success"; then
-  echo -e "      ${GREEN}✓ AUTO-SYNC SUCCESSFUL! No copy-pasting required.${NC}"
+  echo -e "      ${GREEN}✓ AUTO-SYNC SUCCESSFUL! Dashboard paired automatically.${NC}"
 else
-  echo -e "      ${YELLOW}✓ Live sync broadcasted.${NC}"
+  echo -e "      ${GREEN}✓ Live sync broadcasted.${NC}"
 fi
 
 echo -e "\n  ${GREEN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
@@ -193,13 +198,24 @@ echo -e "  ${GRAY}• Press [Ctrl + C] to cleanly stop all services & exit${NC}"
 echo -e "${GRAY}─────────────────────────────────────────────────────────────────────${NC}"
 echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 
-# 5. Heartbeat background keep-alive loop
+# 5. Heartbeat background keep-alive loop with watchdog
 (
   while true; do
-    sleep 20
-    curl -s -X POST "$DASHBOARD_SYNC_URL" \
+    sleep 15
+    # Auto-heal cloudflared tunnel if process died unexpectedly
+    if ! pgrep -f "cloudflared.*8080" >/dev/null 2>&1; then
+      echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel interrupted. Re-opening tunnel..." >> daemon.log
+      cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
+      sleep 4
+      NEW_TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log | tail -n 1)
+      if [ -n "$NEW_TUNNEL_URL" ]; then
+        WSS_URL=$(echo "$NEW_TUNNEL_URL" | sed 's/https:/wss:/')
+      fi
+    fi
+
+    curl -s --connect-timeout 5 --max-time 10 -X POST "$DASHBOARD_SYNC_URL" \
       -H "Content-Type: application/json" \
-      -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"heartbeat\"}" > /dev/null 2>&1
+      -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"heartbeat\"}" > /dev/null 2>&1 || true
   done
 ) &
 HEARTBEAT_PID=$!

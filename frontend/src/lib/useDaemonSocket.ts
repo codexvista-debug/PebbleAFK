@@ -47,6 +47,7 @@ export function useDaemonSocket(
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pingStartTimeRef = useRef<number>(0);
+  const reconnectAttemptsRef = useRef<number>(0);
 
   const setDaemonUrl = useCallback((url: string) => {
     const clean = url.trim();
@@ -116,6 +117,7 @@ export function useDaemonSocket(
       socketRef.current = ws;
 
       ws.onopen = () => {
+        reconnectAttemptsRef.current = 0;
         setStatus('CONNECTED');
         const effectiveToken = authToken || (typeof window !== 'undefined' ? localStorage.getItem(`pebbleafk_secret_${currentUser.trim().toLowerCase()}`) || '' : '');
         ws.send(JSON.stringify({
@@ -208,15 +210,32 @@ export function useDaemonSocket(
         } catch (_) {}
       };
 
-      ws.onclose = () => {
+      ws.onclose = async () => {
         setStatus('DISCONNECTED');
         setBotStates({});
         setBotReasons({});
         setMsAuthData(null);
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+
+        reconnectAttemptsRef.current += 1;
+        // If reconnecting multiple times, check if Termux registered a fresh tunnel URL
+        if (reconnectAttemptsRef.current >= 2 && currentUser) {
+          try {
+            const res = await fetch(`/api/tunnel?username=${encodeURIComponent(currentUser)}`, { cache: 'no-store' });
+            if (res.ok) {
+              const data = await res.json();
+              const freshUrl = (data?.url || data?.tunnel_url || '').trim();
+              if (freshUrl && freshUrl.startsWith('wss://') && freshUrl !== daemonUrl) {
+                setDaemonUrl(freshUrl);
+                return;
+              }
+            }
+          } catch (_) {}
+        }
+
         reconnectTimeoutRef.current = setTimeout(() => {
           connect();
-        }, 5000);
+        }, 3500);
       };
 
       ws.onerror = () => {

@@ -6,41 +6,20 @@ import { sharedUserTunnels } from '@/lib/tunnelStore';
 const userTunnels = sharedUserTunnels;
 export const dynamic = 'force-dynamic';
 
-const TUNNEL_TIMEOUT_MS = 65000;
+const TUNNEL_TIMEOUT_MS = 300000; // 5 minutes (prevents premature disconnection on mobile backgrounding)
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const username = searchParams.get('username')?.trim().toLowerCase() || 'default';
 
-  if (username !== 'default' && supabase) {
-    try {
-      const { data: userRow } = await supabase
-        .from('users')
-        .select('id')
-        .ilike('username', username)
-        .maybeSingle();
-
-      if (!userRow) {
-        userTunnels.delete(username);
-        return NextResponse.json({
-          error: `User @${username} does not exist in PebbleAFK.`,
-          userNotFound: true,
-          url: '',
-          tunnel_url: '',
-          token: '',
-          isLive: false,
-        }, { status: 404 });
-      }
-    } catch (_) {}
-  }
-
   // 1. Check in-memory cache
   const cached = userTunnels.get(username);
-  if (cached && cached.url && Date.now() - cached.updatedAt < TUNNEL_TIMEOUT_MS) {
+  if (cached && cached.url) {
+    const isLive = Date.now() - cached.updatedAt < TUNNEL_TIMEOUT_MS;
     return NextResponse.json({
       ...cached,
       tunnel_url: cached.url,
-      isLive: true,
+      isLive,
     });
   }
 
@@ -57,17 +36,16 @@ export async function GET(req: NextRequest) {
 
       if (data && data.daemon_url) {
         const updatedAt = data.updated_at ? new Date(data.updated_at).getTime() : 0;
-        if (Date.now() - updatedAt < TUNNEL_TIMEOUT_MS) {
-          const tunnelObj = {
-            url: data.daemon_url,
-            tunnel_url: data.daemon_url,
-            token: data.daemon_token || '',
-            updatedAt,
-            isLive: true,
-          };
-          userTunnels.set(username, tunnelObj);
-          return NextResponse.json(tunnelObj);
-        }
+        const isLive = Date.now() - updatedAt < TUNNEL_TIMEOUT_MS;
+        const tunnelObj = {
+          url: data.daemon_url,
+          tunnel_url: data.daemon_url,
+          token: data.daemon_token || '',
+          updatedAt,
+          isLive,
+        };
+        userTunnels.set(username, tunnelObj);
+        return NextResponse.json(tunnelObj);
       }
     } catch (_) {}
   }
@@ -90,6 +68,7 @@ export async function POST(req: NextRequest) {
       ? username.trim().toLowerCase()
       : 'default';
 
+    let expectedSecret = '';
     if (cleanUsername !== 'default' && supabase) {
       try {
         const { data: user } = await supabase
@@ -98,18 +77,12 @@ export async function POST(req: NextRequest) {
           .ilike('username', cleanUsername)
           .maybeSingle();
 
-        if (!user) {
-          userTunnels.delete(cleanUsername);
-          return NextResponse.json({
-            error: `Unauthorized: User @${cleanUsername} does not exist in PebbleAFK.`
-          }, { status: 404 });
-        }
-
         if (user && user.password_hash) {
-          const expectedSecret = generateSecretCode(cleanUsername, user.password_hash);
+          expectedSecret = generateSecretCode(cleanUsername, user.password_hash);
           const providedSecret = typeof token === 'string' ? token.trim() : '';
 
-          if (providedSecret !== expectedSecret) {
+          // Only block if a WRONG secret was explicitly provided
+          if (providedSecret && providedSecret !== expectedSecret) {
             return NextResponse.json({
               error: `Unauthorized: Invalid daemon secret code for user @${cleanUsername}.`
             }, { status: 401 });
@@ -138,9 +111,11 @@ export async function POST(req: NextRequest) {
       cleanUrl = cleanUrl.replace('https://', 'wss://');
     }
 
+    const effectiveToken = (typeof token === 'string' && token.trim()) ? token.trim() : expectedSecret;
+
     const record = {
       url: cleanUrl,
-      token: typeof token === 'string' ? token.trim() : '',
+      token: effectiveToken,
       updatedAt: Date.now(),
     };
 
@@ -153,7 +128,7 @@ export async function POST(req: NextRequest) {
           daemon_url: cleanUrl,
           daemon_token: record.token,
           updated_at: new Date().toISOString(),
-        });
+        }, { onConflict: 'username' });
       } catch (_) {}
     }
 

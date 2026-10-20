@@ -97,7 +97,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <Network className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="font-bold text-sm text-slate-900">Termux Daemon Bridge</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="font-bold text-sm text-slate-900">Termux Daemon Bridge</h2>
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1 ${
+                    isDaemonOnline
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                      : 'bg-slate-100 text-slate-500 border-slate-200'
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${isDaemonOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                  {isDaemonOnline ? 'Online' : 'Standby'}
+                </span>
+              </div>
               <p className="text-[11px] text-slate-500">Connect and sync your Android Termux Bedrock runner</p>
             </div>
           </div>
@@ -210,10 +222,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="text-[11px] text-slate-500 leading-relaxed flex items-center gap-1">
                 <span className="text-emerald-700 font-bold">✨ Auto-Sync:</span>
                 <span>Termux will automatically sync your tunnel to this dashboard with zero copy-pasting.</span>
-              </div>
-              <div className="text-[11px] text-slate-500 leading-relaxed flex items-center gap-1">
-                <span className="text-sky-700 font-bold">🔄 1-Click Update:</span>
-                <span>Click the <b>Update Engine</b> button above anytime to pull latest updates remotely.</span>
               </div>
             </div>
           </div>

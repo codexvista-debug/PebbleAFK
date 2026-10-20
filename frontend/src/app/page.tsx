@@ -468,7 +468,7 @@ export default function Home() {
     ? `curl -sL https://pebbleafk.vercel.app/install | bash -s -- ${currentUser}${secretCode ? ` ${secretCode}` : ''}`
     : 'curl -sL https://pebbleafk.vercel.app/install | bash';
 
-  // Auto-sync tunnel from Termux via /api/tunnel
+  // Auto-sync tunnel from Termux via /api/tunnel (high frequency when disconnected for instant pairing)
   useEffect(() => {
     if (!currentUser) return;
     let isMounted = true;
@@ -480,21 +480,26 @@ export default function Home() {
           const data = await res.json();
           const targetUrl = (data?.url || data?.tunnel_url || '').trim();
           const targetToken = (data?.token || secretCode || authToken || '').trim();
-          if (targetUrl && targetUrl.startsWith('wss://') && targetUrl !== daemonUrl) {
-            setDaemonUrl(targetUrl);
-            if (targetToken) setAuthToken(targetToken);
+          if (targetUrl && targetUrl.startsWith('wss://')) {
+            if (targetUrl !== daemonUrl) {
+              setDaemonUrl(targetUrl);
+              if (targetToken) setAuthToken(targetToken);
+            } else if (daemonStatus === 'DISCONNECTED') {
+              reconnect();
+            }
           }
         }
       } catch (_) {}
     };
 
     checkTunnel();
-    const interval = setInterval(checkTunnel, 8000);
+    const pollInterval = daemonStatus === 'AUTHENTICATED' ? 12000 : 2500;
+    const interval = setInterval(checkTunnel, pollInterval);
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [currentUser, daemonUrl, secretCode, authToken, setDaemonUrl, setAuthToken]);
+  }, [currentUser, daemonUrl, daemonStatus, secretCode, authToken, setDaemonUrl, setAuthToken, reconnect]);
 
   // Microsoft OAuth Device Code Sign-In (Exact same flow as PocketAFK)
   const handleStartMicrosoftLogin = (target?: BedrockAccount | string) => {
