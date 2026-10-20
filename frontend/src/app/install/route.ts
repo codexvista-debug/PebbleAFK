@@ -19,7 +19,7 @@ echo -e "\\033[0m"
 # 1. Dependency checks
 echo -e "\\033[1;34m[1/3]\\033[0m 📦 Checking environment & dependencies..."
 NEEDED_PKGS=()
-for pkg in git nodejs-lts npm cloudflared termux-api clang make cmake python build-essential; do
+for pkg in git nodejs-lts npm cloudflared termux-api; do
   if ! command -v $pkg >/dev/null 2>&1; then
     NEEDED_PKGS+=($pkg)
   fi
@@ -49,15 +49,11 @@ else
   echo -e "      \\033[1;32m✓ Cloned successfully.\\033[0m"
 fi
 
-# 3. Install packages & build native RakNet engine
+# 3. Install packages (fast pure JS RakNet mode for Android)
 cd daemon
-if [ ! -d "node_modules" ] || [ ! -d "node_modules/bedrock-protocol" ] || [ ! -f "node_modules/raknet-native/build/Release/node-raknet.node" ]; then
-  echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Configuring Bedrock RakNet engine..."
-  export FORCE_BUILD=true
-  npm install --no-audit --no-fund >/dev/null 2>&1 || npm install >/dev/null 2>&1 || true
-  if [ -d "node_modules/raknet-native" ] && [ ! -f "node_modules/raknet-native/build/Release/node-raknet.node" ]; then
-    (cd node_modules/raknet-native && npx cmake-js compile >/dev/null 2>&1 || true)
-  fi
+if [ ! -d "node_modules" ] || [ ! -d "node_modules/bedrock-protocol" ]; then
+  echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Installing Node modules..."
+  npm install --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 || npm install --ignore-scripts >/dev/null 2>&1 || true
   echo -e "      \\033[1;32m✓ Modules configured successfully.\\033[0m"
 else
   echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Modules verified."

@@ -102,14 +102,6 @@ if [ -f "$HOME/.pebbleafk_heartbeat.pid" ]; then
 fi
 sleep 1
 
-# Ensure RakNet native engine is compiled for this device architecture
-if [ -d "node_modules/raknet-native" ] && [ ! -f "node_modules/raknet-native/build/Release/node-raknet.node" ]; then
-  if command -v cmake &> /dev/null && command -v clang &> /dev/null; then
-    echo -e "      ${CYAN}Building high-performance native RakNet for Android ARM64...${NC}"
-    (cd node_modules/raknet-native && npx cmake-js compile >/dev/null 2>&1 || true)
-  fi
-fi
-
 cat << ENVEOF > .env
 PORT=8080
 PEBBLEAFK_OWNER=$APP_USER
