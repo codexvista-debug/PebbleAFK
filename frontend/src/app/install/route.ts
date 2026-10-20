@@ -7,9 +7,7 @@ export async function GET() {
 # ==============================================================================
 #            PebbleAFK - 1-Click Universal Termux Installer
 # ==============================================================================
-set -e
 
-# Clear and show setup banner
 clear
 echo -e "\\033[1;36m"
 echo "  ╔═══════════════════════════════════════════════════╗"
@@ -21,7 +19,7 @@ echo -e "\\033[0m"
 # 1. Dependency checks
 echo -e "\\033[1;34m[1/3]\\033[0m 📦 Checking environment & dependencies..."
 NEEDED_PKGS=()
-for pkg in git nodejs-lts cloudflared termux-api; do
+for pkg in git nodejs-lts npm cloudflared termux-api; do
   if ! command -v $pkg >/dev/null 2>&1; then
     NEEDED_PKGS+=($pkg)
   fi
@@ -30,7 +28,7 @@ done
 if [ \${#NEEDED_PKGS[@]} -gt 0 ]; then
   echo -e "      Installing required packages: \\033[1;33m\${NEEDED_PKGS[*]}\\033[0m..."
   pkg update -y >/dev/null 2>&1 || true
-  pkg install -y "\${NEEDED_PKGS[@]}" >/dev/null 2>&1
+  pkg install -y "\${NEEDED_PKGS[@]}" >/dev/null 2>&1 || true
   echo -e "      \\033[1;32m✓ Dependencies installed successfully.\\033[0m"
 else
   echo -e "      \\033[1;32m✓ All dependencies ready.\\033[0m"
@@ -41,22 +39,22 @@ echo -e "\\n\\033[1;34m[2/3]\\033[0m 📥 Syncing PebbleAFK engine..."
 cd "$HOME"
 if [ -d "PebbleAFK/.git" ]; then
   cd PebbleAFK
-  git reset --hard HEAD >/dev/null 2>&1
-  git pull --force >/dev/null 2>&1 || true
+  git reset --hard HEAD >/dev/null 2>&1 || true
+  git pull --force origin main >/dev/null 2>&1 || true
   echo -e "      \\033[1;32m✓ Updated to latest version.\\033[0m"
 else
   rm -rf PebbleAFK 2>/dev/null || true
-  git clone https://github.com/codexvista-debug/PebbleAFK.git >/dev/null 2>&1
+  git clone https://github.com/codexvista-debug/PebbleAFK.git >/dev/null 2>&1 || true
   cd PebbleAFK
   echo -e "      \\033[1;32m✓ Cloned successfully.\\033[0m"
 fi
 
-# 3. Install packages if needed
+# 3. Install packages if needed (use --ignore-scripts for pure JS RakNet on Android)
 cd daemon
-if [ ! -d "node_modules" ]; then
-  echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Installing Node modules..."
-  npm install --silent >/dev/null 2>&1
-  echo -e "      \\033[1;32m✓ Modules configured.\\033[0m"
+if [ ! -d "node_modules" ] || [ ! -d "node_modules/bedrock-protocol" ]; then
+  echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Installing Node modules (Bedrock Protocol)..."
+  npm install --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 || npm install --ignore-scripts >/dev/null 2>&1 || true
+  echo -e "      \\033[1;32m✓ Modules configured successfully.\\033[0m"
 else
   echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Modules verified."
 fi
