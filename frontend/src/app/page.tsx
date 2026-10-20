@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   LogIn, 
   LogOut, 
@@ -24,8 +24,10 @@ import {
   Search,
   Copy,
   Plus,
+  Minus,
   Play,
   Square,
+  Clock,
   Home as HomeIcon,
   MessageSquare,
   Sliders,
@@ -62,10 +64,39 @@ export default function Home() {
   // Accounts state & unlink confirmation
   const [accounts, setAccounts] = useState<BedrockAccount[]>([]);
   const [accountFilter, setAccountFilter] = useState('');
+  const [accountNotes, setAccountNotes] = useState<Record<string, string>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const u = localStorage.getItem('pebbleafk_current_user') || 'guest';
+        const saved = localStorage.getItem(`pebbleafk_notes_${u}`);
+        if (saved) return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return {};
+  });
+  const [sessionStartTimes, setSessionStartTimes] = useState<Record<string, number>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const u = localStorage.getItem('pebbleafk_current_user') || 'guest';
+        const saved = localStorage.getItem(`pebbleafk_sessions_${u}`);
+        if (saved) return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return {};
+  });
+  const [nowTick, setNowTick] = useState<number>(Date.now());
   const [copiedIgnId, setCopiedIgnId] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<BedrockAccount | null>(null);
   const [msAuthError, setMsAuthError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
+
+  // Live 1-second ticker for precise uptime formatting
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowTick(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Servers state & active views (Matching PocketAFK)
   const [servers, setServers] = useState<ServerProfile[]>([]);
@@ -255,6 +286,8 @@ export default function Home() {
     setSecretCode('');
     setAccounts([]);
     setServers([]);
+    setAccountNotes({});
+    setSessionStartTimes({});
     setActiveServerId(null);
     setActiveTab('dashboard');
     setIsMobileSidebarOpen(false);
@@ -405,6 +438,145 @@ export default function Home() {
     handleUpdateActiveServer({ settings: updatedSettings });
   };
 
+  // Accounts assigned to current Server Profile (strictly filtered to existing accounts)
+  const profileAccountIds = useMemo(() => {
+    if (!activeServer) return [];
+    const validAccountIds = new Set(accounts.map((a) => a.id));
+    if (Array.isArray(activeServer.assignedAccountIds)) {
+      return activeServer.assignedAccountIds.filter((id) => validAccountIds.has(id));
+    }
+    return activeServer.accountId && validAccountIds.has(activeServer.accountId)
+      ? [activeServer.accountId]
+      : [];
+  }, [activeServer, accounts]);
+
+  const assignedAccounts = useMemo(() => {
+    return accounts.filter((a) => {
+      if (!profileAccountIds.includes(a.id)) return false;
+      const q = accountFilter.toLowerCase().trim();
+      if (!q) return true;
+      const ign = (a.ign || a.username).toLowerCase();
+      const note = (accountNotes[a.id] || (a.ign ? accountNotes[a.ign.toLowerCase()] : '') || '').toLowerCase();
+      return ign.includes(q) || note.includes(q);
+    });
+  }, [accounts, profileAccountIds, accountFilter, accountNotes]);
+
+  const availableAccounts = useMemo(() => {
+    return accounts.filter((a) => {
+      if (profileAccountIds.includes(a.id)) return false;
+      const q = accountFilter.toLowerCase().trim();
+      if (!q) return true;
+      const ign = (a.ign || a.username).toLowerCase();
+      const note = (accountNotes[a.id] || (a.ign ? accountNotes[a.ign.toLowerCase()] : '') || '').toLowerCase();
+      return ign.includes(q) || note.includes(q);
+    });
+  }, [accounts, profileAccountIds, accountFilter, accountNotes]);
+
+  // Reset selection when changing active server
+  useEffect(() => {
+    setSelectedAccountIds([]);
+  }, [activeServerId]);
+
+  // Update notes locally & in state
+  const handleUpdateNote = (accId: string, noteText: string, ign?: string) => {
+    const updated: Record<string, string> = { ...accountNotes, [accId]: noteText };
+    if (ign) {
+      updated[ign.toLowerCase()] = noteText;
+    }
+    setAccountNotes(updated);
+    if (typeof window !== 'undefined') {
+      const u = currentUser || 'guest';
+      localStorage.setItem(`pebbleafk_notes_${u}`, JSON.stringify(updated));
+    }
+  };
+
+  // Human readable uptime formatting
+  const formatUptime = (seconds: number): string => {
+    if (!seconds || seconds <= 0) return '0s';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) {
+      return `${h}h ${m < 10 ? '0' : ''}${m}m ${s < 10 ? '0' : ''}${s}s`;
+    }
+    if (m > 0) {
+      return `${m}m ${s < 10 ? '0' : ''}${s}s`;
+    }
+    return `${s}s`;
+  };
+
+  // Sync session start times when bot state changes
+  useEffect(() => {
+    if (daemonStatus !== 'AUTHENTICATED') return;
+    setSessionStartTimes((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      const now = Date.now();
+      Object.entries(botStates).forEach(([botId, st]) => {
+        if (st === 'SPAWNED' || st === 'LOGGED_IN') {
+          if (!next[botId]) {
+            next[botId] = now;
+            changed = true;
+          }
+        } else if (st === 'DISCONNECTED' || st === 'ERROR' || st === 'KICKED') {
+          if (next[botId]) {
+            delete next[botId];
+            changed = true;
+          }
+        }
+      });
+      if (changed) {
+        if (typeof window !== 'undefined') {
+          const u = currentUser || 'guest';
+          localStorage.setItem(`pebbleafk_sessions_${u}`, JSON.stringify(next));
+        }
+        return next;
+      }
+      return prev;
+    });
+  }, [botStates, daemonStatus, currentUser]);
+
+  // Add / Remove account to/from active server profile (NEVER deletes from global accounts list)
+  const handleRemoveAccountFromProfile = (accId: string) => {
+    if (!activeServer) return;
+    const targetAcc = accounts.find((a) => a.id === accId);
+    const botId = `${activeServer.id}__${accId}`;
+    stopBot(botId);
+    setSessionStartTimes((prev) => {
+      const next = { ...prev };
+      delete next[botId];
+      return next;
+    });
+    const updatedIds = profileAccountIds.filter((id) => id !== accId);
+    const updatedServer: ServerProfile = {
+      ...activeServer,
+      assignedAccountIds: updatedIds,
+      accountId: activeServer.accountId === accId ? (updatedIds[0] || '') : activeServer.accountId,
+    };
+    handleSaveServer(updatedServer);
+    setSelectedAccountIds((prev) => prev.filter((id) => id !== accId));
+    showToast(`Removed @${targetAcc?.ign || targetAcc?.username || 'account'} from ${activeServer.name}`, 'info');
+  };
+
+  const handleAddAccountToProfile = (accId: string) => {
+    if (!activeServer) return;
+    const targetAcc = accounts.find((a) => a.id === accId);
+    const updatedIds = Array.from(new Set([...profileAccountIds, accId]));
+    const updatedServer: ServerProfile = {
+      ...activeServer,
+      assignedAccountIds: updatedIds,
+      accountId: activeServer.accountId || accId,
+    };
+    handleSaveServer(updatedServer);
+    showToast(`Added @${targetAcc?.ign || targetAcc?.username || 'account'} to ${activeServer.name}`, 'success');
+  };
+
+  const isActiveServerRunning = assignedAccounts.some((acc) => {
+    const botId = `${activeServer?.id}__${acc.id}`;
+    const st = botStates[botId];
+    return st === 'SPAWNED' || st === 'LOGGED_IN' || st === 'CONNECTING';
+  });
+
   // Connect / Disconnect individual account to server
   const handleConnectAccount = (acc: BedrockAccount, srv: ServerProfile) => {
     if (daemonStatus !== 'AUTHENTICATED') {
@@ -413,6 +585,15 @@ export default function Home() {
       return;
     }
     const botId = `${srv.id}__${acc.id}`;
+    const now = Date.now();
+    setSessionStartTimes((prev) => {
+      const next = { ...prev, [botId]: now };
+      if (typeof window !== 'undefined') {
+        const u = currentUser || 'guest';
+        localStorage.setItem(`pebbleafk_sessions_${u}`, JSON.stringify(next));
+      }
+      return next;
+    });
     const botConfig = {
       id: botId,
       username: acc.ign || acc.username,
@@ -430,15 +611,24 @@ export default function Home() {
   const handleDisconnectAccount = (acc: BedrockAccount, srv: ServerProfile) => {
     const botId = `${srv.id}__${acc.id}`;
     stopBot(botId);
+    setSessionStartTimes((prev) => {
+      const next = { ...prev };
+      delete next[botId];
+      if (typeof window !== 'undefined') {
+        const u = currentUser || 'guest';
+        localStorage.setItem(`pebbleafk_sessions_${u}`, JSON.stringify(next));
+      }
+      return next;
+    });
     showToast(`Disconnecting @${acc.ign || acc.username}...`, 'info');
   };
 
   // Connect / Disconnect all checked accounts
   const handleConnectSelected = () => {
     if (!activeServer) return;
-    const targetAccounts = accounts.filter((a) => selectedAccountIds.includes(a.id));
+    const targetAccounts = assignedAccounts.filter((a) => selectedAccountIds.includes(a.id));
     if (targetAccounts.length === 0) {
-      showToast('Please select at least one Bedrock account.', 'error');
+      showToast('Please select at least one assigned Bedrock account.', 'error');
       return;
     }
     targetAccounts.forEach((acc) => handleConnectAccount(acc, activeServer));
@@ -446,16 +636,16 @@ export default function Home() {
 
   const handleDisconnectSelected = () => {
     if (!activeServer) return;
-    const targetAccounts = accounts.filter((a) => selectedAccountIds.includes(a.id));
+    const targetAccounts = assignedAccounts.filter((a) => selectedAccountIds.includes(a.id));
     targetAccounts.forEach((acc) => handleDisconnectAccount(acc, activeServer));
   };
 
   // Select all toggle
   const handleToggleSelectAll = () => {
-    if (selectedAccountIds.length === accounts.length) {
+    if (selectedAccountIds.length > 0 && selectedAccountIds.length === assignedAccounts.length) {
       setSelectedAccountIds([]);
     } else {
-      setSelectedAccountIds(accounts.map((a) => a.id));
+      setSelectedAccountIds(assignedAccounts.map((a) => a.id));
     }
   };
 
@@ -476,8 +666,9 @@ export default function Home() {
     e.preventDefault();
     if (!chatInput.trim() || !activeServer) return;
     const msg = chatInput.trim();
+    const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
     if (selectedChatReceiver === 'all') {
-      accounts.forEach((acc) => {
+      targetAccounts.forEach((acc) => {
         const botId = `${activeServer.id}__${acc.id}`;
         sendChat(botId, msg);
       });
@@ -760,13 +951,19 @@ export default function Home() {
                 <div className="space-y-1">
                   {servers.map((srv) => {
                     const isSelected = activeTab === 'servers' && activeServer?.id === srv.id;
+                    const srvAssignedIds = Array.isArray(srv.assignedAccountIds)
+                      ? srv.assignedAccountIds
+                      : (srv.accountId ? [srv.accountId] : []);
+                    const srvAssignedCount = accounts.filter((a) => srvAssignedIds.includes(a.id)).length;
                     const onlineCount = accounts.filter(
                       (acc) =>
-                        botStates[`${srv.id}__${acc.id}`] === 'SPAWNED' ||
-                        botStates[`${srv.id}__${acc.id}`] === 'LOGGED_IN' ||
-                        botStates[acc.id] === 'SPAWNED' ||
-                        botStates[acc.id] === 'LOGGED_IN'
+                        srvAssignedIds.includes(acc.id) &&
+                        (botStates[`${srv.id}__${acc.id}`] === 'SPAWNED' ||
+                         botStates[`${srv.id}__${acc.id}`] === 'LOGGED_IN' ||
+                         botStates[acc.id] === 'SPAWNED' ||
+                         botStates[acc.id] === 'LOGGED_IN')
                     ).length;
+                    const totalSlots = Math.max(srvAssignedCount, onlineCount);
 
                     return (
                       <div key={srv.id} className="space-y-1">
@@ -791,7 +988,7 @@ export default function Home() {
                             onlineCount > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
                           }`}>
                             <Radio className={`w-2.5 h-2.5 ${onlineCount > 0 ? 'text-emerald-600 animate-pulse' : 'text-slate-400'}`} />
-                            <span>{onlineCount}/{accounts.length}</span>
+                            <span>{onlineCount}/{totalSlots}</span>
                           </span>
                         </button>
 
@@ -1307,12 +1504,12 @@ export default function Home() {
                       <div className="space-y-4">
                         {/* Top Action Bar */}
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2.5">
                             <button
                               type="button"
                               onClick={handleConnectSelected}
-                              disabled={selectedAccountIds.length === 0}
-                              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold transition shadow-xs cursor-pointer"
+                              disabled={daemonStatus !== 'AUTHENTICATED' || selectedAccountIds.length === 0}
+                              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold transition shadow-xs cursor-pointer"
                             >
                               <Play className="w-3.5 h-3.5 fill-current" />
                               <span>Connect Selected</span>
@@ -1320,8 +1517,8 @@ export default function Home() {
                             <button
                               type="button"
                               onClick={handleDisconnectSelected}
-                              disabled={selectedAccountIds.length === 0}
-                              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold transition shadow-xs cursor-pointer"
+                              disabled={!isActiveServerRunning}
+                              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold transition shadow-xs cursor-pointer"
                             >
                               <Square className="w-3.5 h-3.5 fill-current" />
                               <span>Disconnect Selected</span>
@@ -1341,115 +1538,155 @@ export default function Home() {
                         </div>
 
                         {/* Accounts Table for this Server Profile */}
-                        <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
+                        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
                           <div className="overflow-x-auto touch-pan-x">
-                            <table className="w-full text-left text-xs min-w-[620px]">
-                              <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-extrabold">
+                            <table className="w-full text-left text-xs min-w-[680px]">
+                              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase text-[10px] tracking-wider font-bold">
                                 <tr>
-                                  <th className="p-3.5 w-10 text-center">
+                                  <th className="p-3 w-8 text-center">
                                     <input
                                       type="checkbox"
-                                      checked={accounts.length > 0 && selectedAccountIds.length === accounts.length}
+                                      checked={assignedAccounts.length > 0 && selectedAccountIds.length === assignedAccounts.length}
                                       onChange={handleToggleSelectAll}
-                                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/20 cursor-pointer"
+                                      className="rounded bg-white border-slate-300 text-emerald-600 focus:ring-0 cursor-pointer"
                                     />
                                   </th>
-                                  <th className="p-3.5">Account Name</th>
-                                  <th className="p-3.5">Status</th>
-                                  <th className="p-3.5 text-right">Actions</th>
+                                  <th className="p-3">Account Name</th>
+                                  <th className="p-3">Status</th>
+                                  <th className="p-3">Uptime</th>
+                                  <th className="p-3">Note</th>
+                                  <th className="p-3 text-right">Actions</th>
                                 </tr>
                               </thead>
-                              <tbody className="divide-y divide-slate-100 font-medium">
-                                {accounts.length === 0 ? (
+                              <tbody className="divide-y divide-slate-100">
+                                {assignedAccounts.length === 0 ? (
                                   <tr>
-                                    <td colSpan={4} className="p-8 text-center text-slate-400">
-                                      <p className="text-xs font-semibold">No Bedrock accounts linked yet.</p>
-                                      <p className="text-[11px] text-slate-400 mt-1">
-                                        Go to the <b>Accounts</b> tab to link your Microsoft Bedrock account first.
-                                      </p>
+                                    <td colSpan={6} className="p-8 text-center text-slate-500">
+                                      <div className="space-y-2">
+                                        <p className="text-xs font-semibold">No accounts assigned to this server profile yet.</p>
+                                        {availableAccounts.length > 0 && (
+                                          <p className="text-[11px] text-slate-400">Click &ldquo;+ Add to Profile&rdquo; below on any available account to assign it.</p>
+                                        )}
+                                        {accounts.length === 0 && (
+                                          <button
+                                            onClick={() => handleStartMicrosoftLogin()}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition cursor-pointer shadow-xs"
+                                          >
+                                            <Plus className="w-3.5 h-3.5" /> Link Bedrock Microsoft Account
+                                          </button>
+                                        )}
+                                      </div>
                                     </td>
                                   </tr>
                                 ) : (
-                                  accounts
-                                    .filter((acc) => {
-                                      if (!accountFilter.trim()) return true;
-                                      const term = accountFilter.toLowerCase();
-                                      return (
-                                        (acc.ign && acc.ign.toLowerCase().includes(term)) ||
-                                        (acc.username && acc.username.toLowerCase().includes(term))
-                                      );
-                                    })
-                                    .map((acc) => {
-                                      const botId = `${activeServer.id}__${acc.id}`;
-                                      const botState = botStates[botId] || botStates[acc.id] || 'DISCONNECTED';
-                                      const isConnected = botState === 'SPAWNED' || botState === 'LOGGED_IN';
-                                      const isConnecting = botState === 'CONNECTING' || botState === 'RECONNECTING';
-                                      const isChecked = selectedAccountIds.includes(acc.id);
+                                  assignedAccounts.map((acc) => {
+                                    const botId = `${activeServer.id}__${acc.id}`;
+                                    const botState = botStates[botId] || botStates[acc.id] || 'DISCONNECTED';
+                                    const isConnected = botState === 'SPAWNED' || botState === 'LOGGED_IN';
+                                    const isConnecting = botState === 'CONNECTING' || botState === 'RECONNECTING';
+                                    const isChecked = selectedAccountIds.includes(acc.id);
 
-                                      return (
-                                        <tr key={acc.id} className="hover:bg-slate-50/60 transition">
-                                          <td className="p-3.5 text-center">
-                                            <input
-                                              type="checkbox"
-                                              checked={isChecked}
-                                              onChange={() => handleToggleSelectAccount(acc.id)}
-                                              className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/20 cursor-pointer"
-                                            />
-                                          </td>
-                                          <td className="p-3.5">
-                                            <div className="flex items-center gap-3">
-                                              <div className="w-8 h-8 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
-                                                <img
-                                                  src={acc.avatarUrl || `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(acc.ign || acc.username)}/avatarpic-l.png`}
-                                                  alt="Gamerpic"
-                                                  className="w-full h-full object-cover"
-                                                  onError={(e) => {
-                                                    (e.currentTarget as HTMLImageElement).src = 'https://raw.githubusercontent.com/InventivetalentDev/MineRender/master/dist/steve.png';
-                                                  }}
-                                                />
+                                    const srvStart = sessionStartTimes[botId];
+                                    const localSec = srvStart ? Math.max(0, Math.floor((nowTick - srvStart) / 1000)) : 0;
+                                    const srvTel = telemetries?.[botId];
+                                    const daemonUptime =
+                                      srvTel && typeof srvTel.uptime === 'number' && srvTel.uptime > 0
+                                        ? srvTel.uptime
+                                        : srvTel && typeof srvTel.connectedAt === 'number' && srvTel.connectedAt > 0
+                                        ? Math.max(0, Math.floor((nowTick - srvTel.connectedAt) / 1000))
+                                        : 0;
+                                    const accountUptime = (daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0;
+
+                                    return (
+                                      <tr
+                                        key={acc.id}
+                                        className={`hover:bg-slate-50/80 transition ${
+                                          isChecked ? 'bg-emerald-50/30' : ''
+                                        }`}
+                                      >
+                                        <td className="p-3 text-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={() => handleToggleSelectAccount(acc.id)}
+                                            className="rounded bg-white border-slate-300 text-emerald-600 focus:ring-0 cursor-pointer"
+                                          />
+                                        </td>
+                                        <td className="p-3">
+                                          <div className="flex items-center gap-2.5">
+                                            <div className="w-7 h-7 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                              <img
+                                                src={acc.avatarUrl || `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(acc.ign || acc.username)}/avatarpic-l.png`}
+                                                alt="Gamerpic"
+                                                className="w-full h-full object-cover"
+                                                onError={(e) => {
+                                                  (e.currentTarget as HTMLImageElement).src = 'https://raw.githubusercontent.com/InventivetalentDev/MineRender/master/dist/steve.png';
+                                                }}
+                                              />
+                                            </div>
+                                            <div>
+                                              <div className="font-bold text-slate-900 font-mono flex items-center gap-1.5">
+                                                <span>@{acc.ign || acc.username}</span>
+                                                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
                                               </div>
-                                              <div>
-                                                <div className="font-bold text-slate-900 font-mono">
-                                                  @{acc.ign || acc.username}
-                                                </div>
-                                                <div className="text-[10px] text-slate-400">
-                                                  Bedrock Edition
-                                                </div>
+                                              <div className="text-[10px] text-slate-400">
+                                                Bedrock Edition
                                               </div>
                                             </div>
-                                          </td>
-                                          <td className="p-3.5">
+                                          </div>
+                                        </td>
+                                        <td className="p-3">
+                                          <span
+                                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                                              isConnected
+                                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                                : isConnecting
+                                                ? 'bg-sky-50 text-sky-700 border border-sky-200 animate-pulse'
+                                                : botState === 'ERROR' || botState === 'KICKED'
+                                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                            }`}
+                                          >
                                             <span
-                                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                                              className={`w-1.5 h-1.5 rounded-full ${
                                                 isConnected
-                                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                                  ? 'bg-emerald-500 animate-pulse'
                                                   : isConnecting
-                                                  ? 'bg-sky-50 text-sky-700 border border-sky-200 animate-pulse'
+                                                  ? 'bg-sky-500'
                                                   : botState === 'ERROR' || botState === 'KICKED'
-                                                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                                  ? 'bg-rose-500'
+                                                  : 'bg-slate-400'
                                               }`}
-                                            >
-                                              <span
-                                                className={`w-1.5 h-1.5 rounded-full ${
-                                                  isConnected
-                                                    ? 'bg-emerald-500 animate-pulse'
-                                                    : isConnecting
-                                                    ? 'bg-sky-500'
-                                                    : botState === 'ERROR' || botState === 'KICKED'
-                                                    ? 'bg-rose-500'
-                                                    : 'bg-slate-400'
-                                                }`}
-                                              />
-                                              <span>{isConnected ? 'ONLINE' : botState}</span>
-                                            </span>
-                                          </td>
-                                          <td className="p-3.5 text-right">
+                                            />
+                                            <span>{isConnected ? 'ONLINE' : botState}</span>
+                                          </span>
+                                        </td>
+                                        <td className="p-3">
+                                          {isConnected ? (
+                                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-mono text-xs font-bold shadow-2xs">
+                                              <Clock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                              <span>{formatUptime(accountUptime)}</span>
+                                            </div>
+                                          ) : (
+                                            <span className="text-xs font-mono text-slate-400 font-medium px-2">-</span>
+                                          )}
+                                        </td>
+                                        <td className="p-3">
+                                          <input
+                                            type="text"
+                                            placeholder="Add Note"
+                                            value={accountNotes[acc.id] || (acc.ign ? accountNotes[acc.ign.toLowerCase()] : '') || ''}
+                                            onChange={(e) => handleUpdateNote(acc.id, e.target.value, acc.ign)}
+                                            className="w-full max-w-xs px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-emerald-500"
+                                          />
+                                        </td>
+                                        <td className="p-3 text-right">
+                                          <div className="flex items-center justify-end gap-1.5">
                                             {isConnected ? (
                                               <button
                                                 type="button"
                                                 onClick={() => handleDisconnectAccount(acc, activeServer)}
-                                                className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition cursor-pointer flex items-center gap-1.5 ml-auto shadow-2xs"
+                                                className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
                                                 title="Disconnect bot"
                                               >
                                                 <Square className="w-3 h-3 fill-current" />
@@ -1459,21 +1696,104 @@ export default function Home() {
                                               <button
                                                 type="button"
                                                 onClick={() => handleConnectAccount(acc, activeServer)}
-                                                className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold text-xs transition cursor-pointer flex items-center gap-1.5 ml-auto shadow-2xs"
+                                                className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold text-xs transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
                                                 title="Connect bot"
                                               >
                                                 <Play className="w-3 h-3 fill-current" />
                                                 <span>Start</span>
                                               </button>
                                             )}
-                                          </td>
-                                        </tr>
-                                      );
-                                    })
+
+                                            {/* Remove from server profile (-) */}
+                                            <button
+                                              type="button"
+                                              onClick={() => handleRemoveAccountFromProfile(acc.id)}
+                                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer border border-transparent hover:border-rose-200"
+                                              title="Remove from this server profile"
+                                            >
+                                              <Minus className="w-3.5 h-3.5" />
+                                            </button>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })
                                 )}
                               </tbody>
                             </table>
                           </div>
+                        </div>
+
+                        {/* Available Accounts to Add (+) to this Server Profile */}
+                        {availableAccounts.length > 0 && (
+                          <div className="space-y-2 pt-2">
+                            <div className="flex items-center justify-between px-1">
+                              <span className="text-xs font-bold text-slate-700">Available Accounts (Not in this profile)</span>
+                              <span className="text-[11px] text-slate-400 font-medium">Click &ldquo;+ Add to Profile&rdquo; to assign</span>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                              <div className="overflow-x-auto touch-pan-x">
+                                <table className="w-full text-left text-xs min-w-[480px]">
+                                  <tbody className="divide-y divide-slate-100">
+                                    {availableAccounts.map((acc) => (
+                                      <tr key={acc.id} className="hover:bg-slate-50/80 transition">
+                                        <td className="p-3">
+                                          <div className="flex items-center gap-2.5">
+                                            <div className="w-7 h-7 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                              <img
+                                                src={acc.avatarUrl || `https://avatar-ssl.xboxlive.com/avatar/${encodeURIComponent(acc.ign || acc.username)}/avatarpic-l.png`}
+                                                alt="Gamerpic"
+                                                className="w-full h-full object-cover"
+                                                onError={(e) => {
+                                                  (e.currentTarget as HTMLImageElement).src = 'https://raw.githubusercontent.com/InventivetalentDev/MineRender/master/dist/steve.png';
+                                                }}
+                                              />
+                                            </div>
+                                            <div className="font-bold text-slate-900 flex items-center gap-1.5 font-mono">
+                                              <span>@{acc.ign || acc.username}</span>
+                                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                            </div>
+                                          </div>
+                                        </td>
+                                        <td className="p-3">
+                                          <input
+                                            type="text"
+                                            placeholder="Add Note"
+                                            value={accountNotes[acc.id] || (acc.ign ? accountNotes[acc.ign.toLowerCase()] : '') || ''}
+                                            onChange={(e) => handleUpdateNote(acc.id, e.target.value, acc.ign)}
+                                            className="w-full max-w-xs px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-emerald-500"
+                                          />
+                                        </td>
+                                        <td className="p-3 text-right">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleAddAccountToProfile(acc.id)}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition cursor-pointer shadow-2xs"
+                                            title="Add to this server profile"
+                                          >
+                                            <Plus className="w-3.5 h-3.5" />
+                                            <span>Add to Profile</span>
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Add Account Button at Bottom of Table */}
+                        <div className="flex justify-start pt-1">
+                          <button
+                            type="button"
+                            disabled={accounts.length >= 10}
+                            onClick={() => handleStartMicrosoftLogin()}
+                            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-emerald-700 text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-40"
+                          >
+                            <Plus className="w-4 h-4" /> Link Another Microsoft Bedrock Account ({accounts.length}/10)
+                          </button>
                         </div>
                       </div>
                     )}
@@ -1490,8 +1810,10 @@ export default function Home() {
                               onChange={(e) => setSelectedChatReceiver(e.target.value)}
                               className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 cursor-pointer"
                             >
-                              <option value="all">All Accounts ({accounts.length})</option>
-                              {accounts.map((acc) => (
+                              <option value="all">
+                                All {assignedAccounts.length > 0 ? 'Assigned ' : ''}Accounts ({assignedAccounts.length > 0 ? assignedAccounts.length : accounts.length})
+                              </option>
+                              {(assignedAccounts.length > 0 ? assignedAccounts : accounts).map((acc) => (
                                 <option key={acc.id} value={acc.id}>
                                   @{acc.ign || acc.username}
                                 </option>
@@ -1504,8 +1826,9 @@ export default function Home() {
                         <div className="h-[460px] bg-white border border-slate-200/90 rounded-2xl p-4 overflow-y-auto space-y-2 shadow-xs font-mono text-xs">
                           {(() => {
                             const chatList: ChatMessage[] = [];
+                            const chatAccs = assignedAccounts.length > 0 ? assignedAccounts : accounts;
                             if (selectedChatReceiver === 'all') {
-                              accounts.forEach((acc) => {
+                              chatAccs.forEach((acc) => {
                                 const botId = `${activeServer.id}__${acc.id}`;
                                 const msgs = messagesByBot[botId] || messagesByBot[acc.id] || [];
                                 chatList.push(...msgs);
