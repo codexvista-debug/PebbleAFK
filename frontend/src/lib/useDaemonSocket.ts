@@ -118,8 +118,25 @@ export function useDaemonSocket(
     const cleanSaved = (savedUrl.includes('localhost') || savedUrl.includes('127.0.0.1')) ? '' : savedUrl;
     const savedToken = localStorage.getItem(`pebbleafk_daemon_token_${u}`) || localStorage.getItem(`pebbleafk_secret_${u}`) || '';
     
+    // Sever previous user's socket immediately
+    if (socketRef.current) {
+      safeClose(socketRef.current);
+      socketRef.current = null;
+    }
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    if (pingIntervalRef.current) {
+      clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = null;
+    }
+
     setDaemonUrlState(cleanSaved);
+    daemonUrlRef.current = cleanSaved;
     setAuthTokenState(savedToken);
+    authTokenRef.current = savedToken;
+
     try {
       const storedChat = localStorage.getItem(`pebbleafk_chat_${u}`);
       if (storedChat) setMessagesByBot(JSON.parse(storedChat));
@@ -127,6 +144,16 @@ export function useDaemonSocket(
     } catch (_) {
       setMessagesByBot({});
     }
+
+    // Flush all logs, bot states, and telemetry from previous user
+    setTerminalLogs([]);
+    setBotStates({});
+    setBotReasons({});
+    setTelemetries({});
+    setActivityLogs({});
+    setBedrockForms({});
+    setMsAuthData(null);
+    setLatency(null);
     setStatus('DISCONNECTED');
   }, [currentUser]);
 

@@ -432,6 +432,17 @@ export default function Home() {
   }, []);
 
   const handleAuthSuccess = (username: string, receivedSecret?: string) => {
+    // Reset state from previous user
+    clearTerminalLogs();
+    setAccounts([]);
+    setServers([]);
+    setAccountNotes({});
+    setSessionStartTimes({});
+    setActiveServerId(null);
+    setSelectedAccountIds([]);
+    setSelectedLogsAccount(null);
+    setAccountLogsMap({});
+
     setCurrentUser(username);
     if (typeof window !== 'undefined') {
       localStorage.setItem('pebbleafk_current_user', username);
@@ -467,6 +478,7 @@ export default function Home() {
   };
 
   const handleLogout = () => {
+    clearTerminalLogs();
     setCurrentUser(null);
     setSecretCode('');
     setAccounts([]);
@@ -474,6 +486,9 @@ export default function Home() {
     setAccountNotes({});
     setSessionStartTimes({});
     setActiveServerId(null);
+    setSelectedAccountIds([]);
+    setSelectedLogsAccount(null);
+    setAccountLogsMap({});
     setActiveTab('dashboard');
     setIsMobileSidebarOpen(false);
     if (typeof window !== 'undefined') {
