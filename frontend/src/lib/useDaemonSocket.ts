@@ -59,27 +59,55 @@ export function useDaemonSocket(
   const pingStartTimeRef = useRef<number>(0);
   const reconnectAttemptsRef = useRef<number>(0);
 
+  const currentUserRef = useRef(currentUser);
+  currentUserRef.current = currentUser;
+  const daemonUrlRef = useRef(daemonUrl);
+  daemonUrlRef.current = daemonUrl;
+  const authTokenRef = useRef(authToken);
+  authTokenRef.current = authToken;
+
+  const safeClose = (ws: WebSocket | null) => {
+    if (!ws) return;
+    try {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+    } catch (_) {}
+  };
+
   const setDaemonUrl = useCallback((url: string) => {
     const clean = url.trim();
     if (clean.includes('localhost') || clean.includes('127.0.0.1')) {
       // Ignore localhost
       return;
     }
+    if (clean === daemonUrlRef.current) {
+      return;
+    }
+    daemonUrlRef.current = clean;
     setDaemonUrlState(clean);
     if (typeof window !== 'undefined') {
-      const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
+      const u = currentUserRef.current ? currentUserRef.current.trim().toLowerCase() : 'guest';
       localStorage.setItem(`pebbleafk_daemon_url_${u}`, clean);
     }
-  }, [currentUser]);
+  }, []);
 
   const setAuthToken = useCallback((token: string) => {
     const clean = token.trim();
+    if (clean === authTokenRef.current) {
+      return;
+    }
+    authTokenRef.current = clean;
     setAuthTokenState(clean);
     if (typeof window !== 'undefined') {
-      const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
+      const u = currentUserRef.current ? currentUserRef.current.trim().toLowerCase() : 'guest';
       localStorage.setItem(`pebbleafk_daemon_token_${u}`, clean);
     }
-  }, [currentUser]);
+  }, []);
 
   // Clean user switching
   useEffect(() => {
@@ -101,45 +129,59 @@ export function useDaemonSocket(
     setStatus('DISCONNECTED');
   }, [currentUser]);
 
-  const connect = useCallback(() => {
-    if (!currentUser) {
+  const connect = useCallback((force = false) => {
+    const user = currentUserRef.current;
+    const url = (daemonUrlRef.current || '').trim();
+
+    if (!user || !url || url.includes('localhost') || url.includes('127.0.0.1')) {
       if (socketRef.current) {
-        try { socketRef.current.close(); } catch (_) {}
+        safeClose(socketRef.current);
         socketRef.current = null;
       }
       setStatus('DISCONNECTED');
       return;
     }
 
-    if (socketRef.current) {
-      try { socketRef.current.close(); } catch (_) {}
-      socketRef.current = null;
+    // Do NOT destroy an active or connecting socket unless forced
+    if (!force && socketRef.current) {
+      if (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING) {
+        return;
+      }
     }
+
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
+    if (pingIntervalRef.current) {
+      clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = null;
+    }
 
-    const cleanUrl = daemonUrl.trim();
-    // Do NOT connect to localhost or empty URLs
-    if (!cleanUrl || cleanUrl.includes('localhost') || cleanUrl.includes('127.0.0.1')) {
-      setStatus('DISCONNECTED');
-      return;
+    if (socketRef.current) {
+      safeClose(socketRef.current);
+      socketRef.current = null;
     }
 
     setStatus('CONNECTING');
 
     try {
-      const ws = new WebSocket(cleanUrl);
+      const ws = new WebSocket(url);
       socketRef.current = ws;
 
       ws.onopen = () => {
+        if (socketRef.current !== ws) return;
         reconnectAttemptsRef.current = 0;
         setStatus('CONNECTED');
-        const effectiveToken = authToken || (typeof window !== 'undefined' ? localStorage.getItem(`pebbleafk_secret_${currentUser.trim().toLowerCase()}`) || '' : '');
+        const effectiveToken =
+          authTokenRef.current ||
+          (typeof window !== 'undefined'
+            ? localStorage.getItem(`pebbleafk_secret_${user.trim().toLowerCase()}`) || ''
+            : '');
+
         ws.send(JSON.stringify({
           type: 'AUTH',
-          payload: { token: effectiveToken, username: currentUser },
+          payload: { token: effectiveToken, username: user },
         }));
 
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
@@ -148,10 +190,11 @@ export function useDaemonSocket(
             pingStartTimeRef.current = Date.now();
             ws.send(JSON.stringify({ type: 'PING' }));
           }
-        }, 10000);
+        }, 12000);
       };
 
       ws.onmessage = (event) => {
+        if (socketRef.current !== ws) return;
         try {
           const msg = JSON.parse(event.data);
 
@@ -160,10 +203,8 @@ export function useDaemonSocket(
               setStatus('AUTHENTICATED');
             } else {
               setStatus('AUTH_ERROR');
-              if (socketRef.current) {
-                try { socketRef.current.close(); } catch (_) {}
-                socketRef.current = null;
-              }
+              safeClose(ws);
+              if (socketRef.current === ws) socketRef.current = null;
             }
           }
 
@@ -202,7 +243,7 @@ export function useDaemonSocket(
               const updated = [...currentList.slice(-150), msg.payload];
               const nextMap = { ...prev, [msg.payload.botId]: updated };
               if (typeof window !== 'undefined') {
-                const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
+                const u = currentUserRef.current ? currentUserRef.current.trim().toLowerCase() : 'guest';
                 try {
                   localStorage.setItem(`pebbleafk_chat_${u}`, JSON.stringify(nextMap));
                 } catch (_) {}
@@ -251,6 +292,8 @@ export function useDaemonSocket(
       };
 
       ws.onclose = async () => {
+        if (socketRef.current !== ws) return;
+        socketRef.current = null;
         setStatus('DISCONNECTED');
         setBotStates({});
         setBotReasons({});
@@ -258,46 +301,40 @@ export function useDaemonSocket(
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
 
         reconnectAttemptsRef.current += 1;
-        // If reconnecting multiple times, check if Termux registered a fresh tunnel URL
-        if (reconnectAttemptsRef.current >= 2 && currentUser) {
-          try {
-            const res = await fetch(`/api/tunnel?username=${encodeURIComponent(currentUser)}`, { cache: 'no-store' });
-            if (res.ok) {
-              const data = await res.json();
-              const freshUrl = (data?.url || data?.tunnel_url || '').trim();
-              if (freshUrl && freshUrl.startsWith('wss://') && freshUrl !== daemonUrl) {
-                setDaemonUrl(freshUrl);
-                return;
-              }
-            }
-          } catch (_) {}
-        }
-
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = setTimeout(() => {
-          connect();
-        }, 3500);
+          connect(false);
+        }, 4000);
       };
 
       ws.onerror = () => {
-        setStatus('DISCONNECTED');
-        setBotStates({});
-        setBotReasons({});
+        if (socketRef.current !== ws) return;
       };
     } catch (_) {
       setStatus('DISCONNECTED');
     }
-  }, [currentUser, daemonUrl, authToken]);
+  }, []);
 
   useEffect(() => {
-    connect();
-    return () => {
+    if (currentUser && daemonUrl) {
+      connect(true);
+    } else {
       if (socketRef.current) {
-        try { socketRef.current.close(); } catch (_) {}
+        safeClose(socketRef.current);
+        socketRef.current = null;
       }
+      setStatus('DISCONNECTED');
+    }
+
+    return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+      if (socketRef.current) {
+        safeClose(socketRef.current);
+        socketRef.current = null;
+      }
     };
-  }, [connect]);
+  }, [currentUser, daemonUrl, connect]);
 
   const send = useCallback((msg: any) => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {

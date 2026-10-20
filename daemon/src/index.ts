@@ -45,21 +45,19 @@ const authenticatedClients = new Set<WebSocket>();
 
 const terminalLogs: string[] = [];
 const MAX_LOGS = 500;
+let isAppendingLog = false;
 
 function appendTerminalLog(rawText: string) {
-  const line = `[${new Date().toLocaleTimeString()}] ${rawText}`;
-  terminalLogs.push(line);
-  if (terminalLogs.length > MAX_LOGS) {
-    terminalLogs.shift();
-  }
-  const payload = JSON.stringify({
-    type: 'TERMINAL_LOG_LINE',
-    payload: { line, timestamp: Date.now() },
-  });
-  for (const client of authenticatedClients) {
-    if (client.readyState === WebSocket.OPEN) {
-      try { client.send(payload); } catch (_) {}
+  if (isAppendingLog) return;
+  isAppendingLog = true;
+  try {
+    const line = `[${new Date().toLocaleTimeString()}] ${rawText}`;
+    terminalLogs.push(line);
+    if (terminalLogs.length > MAX_LOGS) {
+      terminalLogs.shift();
     }
+  } finally {
+    isAppendingLog = false;
   }
 }
 

@@ -417,7 +417,6 @@ export class PebbleBotInstance {
       if (message.startsWith('/')) {
         // Send as Bedrock command
         const uuid = randomUUID();
-        let cmdSent = false;
         try {
           this.client.write('command_request', {
             command: message,
@@ -430,23 +429,21 @@ export class PebbleBotInstance {
             internal: false,
             version: '',
           });
-          cmdSent = true;
         } catch (err: any) {
-          console.warn(chalk.yellow(`[PebbleAFK] command_request notice: ${err?.message}, attempting text fallback`));
+          console.warn(chalk.yellow(`[PebbleAFK] command_request notice: ${err?.message}`));
         }
 
-        if (!cmdSent) {
-          try {
-            this.client.write('text', {
-              type: 'chat',
-              needs_translation: false,
-              source_name: this.client.username || this.config.username,
-              message,
-              xuid: '',
-              platform_chat_id: '',
-            });
-          } catch (_) {}
-        }
+        // Also send as chat packet for Geyser / Bungee / Velocity proxies that parse chat slash commands
+        try {
+          this.client.write('text', {
+            type: 'chat',
+            needs_translation: false,
+            source_name: this.client.username || this.config.username,
+            message,
+            xuid: '',
+            platform_chat_id: '',
+          });
+        } catch (_) {}
       } else {
         // Send as regular chat
         this.client.write('text', {
@@ -591,6 +588,11 @@ export class PebbleBotInstance {
     let sender = packet.source_name || '';
     let isSystem = false;
 
+    // If message is empty but parameters array has values, join them
+    if (!rawMsg && Array.isArray(packet.parameters) && packet.parameters.length > 0) {
+      rawMsg = packet.parameters.join(' ');
+    }
+
     // 1. Handle JSON / rawtext
     if (typeof rawMsg === 'string' && (rawMsg.startsWith('{') || rawMsg.startsWith('['))) {
       try {
@@ -626,22 +628,38 @@ export class PebbleBotInstance {
       } else if (params.length > 0) {
         rawMsg = params.join(' ');
       }
-    } else if (packet.type === 'system' || packet.type === 'announcement') {
+    } else if (packet.type === 'system' || packet.type === 'announcement' || packet.type === 'popup' || packet.type === 'tip') {
       isSystem = true;
       if (!sender) sender = 'System';
     } else if (packet.type === 'chat' || packet.type === 'whisper') {
-      if (!sender) sender = packet.source_name || 'Player';
-    }
-
-    if (!sender) {
-      sender = isSystem ? 'System' : 'Server';
+      if (!sender) sender = packet.source_name || '';
     }
 
     // Clean section signs (§) for clean readable text
-    const cleanSender = sender.replace(/§[0-9a-fk-or]/gi, '').trim();
-    const cleanText = (rawMsg || '').replace(/§[0-9a-fk-or]/gi, '').trim();
+    let cleanSender = sender.replace(/§[0-9a-fk-or]/gi, '').trim();
+    let cleanText = (rawMsg || '').replace(/§[0-9a-fk-or]/gi, '').trim();
 
     if (!cleanText) return;
+
+    // Pattern recognition: extract player sender if embedded in message (e.g., "<Player> Hi" or "[Rank] Player: Hi" or "Player » Hi")
+    if (!cleanSender || cleanSender === 'Server' || cleanSender === 'System') {
+      const matchBracket = cleanText.match(/^<([a-zA-Z0-9_]{3,16})>\s*(.*)$/);
+      const matchColon = cleanText.match(/^(?:\[[^\]]+\]\s*)*([a-zA-Z0-9_]{3,16})\s*[:»>]\s*(.*)$/);
+
+      if (matchBracket) {
+        cleanSender = matchBracket[1];
+        cleanText = matchBracket[2];
+        isSystem = false;
+      } else if (matchColon) {
+        cleanSender = matchColon[1];
+        cleanText = matchColon[2];
+        isSystem = false;
+      }
+    }
+
+    if (!cleanSender) {
+      cleanSender = isSystem ? 'System' : 'Server';
+    }
 
     this.pushChat({
       botId: this.config.id,

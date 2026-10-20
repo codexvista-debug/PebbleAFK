@@ -258,6 +258,12 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
                   ▼
                 </div>
               </div>
+              {(!serverVersion || serverVersion === 'auto') && (
+                <p className="text-[11px] text-emerald-700 font-semibold mt-1 flex items-center gap-1">
+                  <span>✓ Auto-resolved Bedrock protocol:</span>
+                  <span className="font-bold underline">{getAutoDetectedBedrockVersion(serverHost)}</span>
+                </p>
+              )}
             </div>
 
             {/* Bedrock port */}

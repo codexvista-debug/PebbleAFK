@@ -479,7 +479,15 @@ export default function Home() {
     ? `curl -sL https://pebbleafk.vercel.app/install | bash -s -- ${currentUser}${secretCode ? ` ${secretCode}` : ''}`
     : 'curl -sL https://pebbleafk.vercel.app/install | bash';
 
-  // Auto-sync tunnel from Termux via /api/tunnel (high frequency when disconnected for instant pairing)
+  // Track socket values via refs to avoid re-triggering tunnel sync effect
+  const daemonStatusRef = useRef(daemonStatus);
+  daemonStatusRef.current = daemonStatus;
+  const daemonUrlRef = useRef(daemonUrl);
+  daemonUrlRef.current = daemonUrl;
+  const authTokenRef = useRef(authToken);
+  authTokenRef.current = authToken;
+
+  // Auto-sync tunnel from Termux via /api/tunnel
   useEffect(() => {
     if (!currentUser) return;
     let isMounted = true;
@@ -490,12 +498,12 @@ export default function Home() {
         if (res.ok && isMounted) {
           const data = await res.json();
           const targetUrl = (data?.url || data?.tunnel_url || '').trim();
-          const targetToken = (data?.token || secretCode || authToken || '').trim();
+          const targetToken = (data?.token || secretCode || authTokenRef.current || '').trim();
           if (targetUrl && targetUrl.startsWith('wss://')) {
-            if (targetUrl !== daemonUrl) {
+            if (targetUrl !== daemonUrlRef.current) {
               setDaemonUrl(targetUrl);
               if (targetToken) setAuthToken(targetToken);
-            } else if (daemonStatus === 'DISCONNECTED') {
+            } else if (daemonStatusRef.current === 'DISCONNECTED') {
               reconnect();
             }
           }
@@ -504,13 +512,12 @@ export default function Home() {
     };
 
     checkTunnel();
-    const pollInterval = daemonStatus === 'AUTHENTICATED' ? 12000 : 2500;
-    const interval = setInterval(checkTunnel, pollInterval);
+    const interval = setInterval(checkTunnel, 8000);
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [currentUser, daemonUrl, daemonStatus, secretCode, authToken, setDaemonUrl, setAuthToken, reconnect]);
+  }, [currentUser, secretCode, setDaemonUrl, setAuthToken, reconnect]);
 
   // Microsoft OAuth Device Code Sign-In (Exact same flow as PocketAFK)
   const handleStartMicrosoftLogin = (target?: BedrockAccount | string) => {
