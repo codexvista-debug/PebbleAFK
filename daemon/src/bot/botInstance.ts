@@ -149,6 +149,23 @@ export function stripMinecraftFormatting(text: string): string {
     .trim();
 }
 
+const BEDROCK_DISCONNECT_REASONS: Record<number, string> = {
+  0: 'Unknown disconnect',
+  1: 'Outdated client / version mismatch',
+  2: 'Outdated server',
+  3: 'Server full',
+  4: 'Kicked by admin or moderator',
+  5: 'Kicked by anti-cheat / movement packet check',
+  6: 'Kicked: client timed out / no response',
+  7: 'Server shutting down / restart',
+  8: 'Invalid authentication or Xbox token expired',
+  9: 'Kicked: world corruption or chunk loading error',
+  10: 'Kicked: duplicate login (account logged in from elsewhere)',
+  11: 'Kicked: subserver transfer initiated',
+  12: 'Kicked: idle / AFK timeout exceeded',
+  13: 'Kicked: server whitelist active',
+};
+
 export class PebbleBotInstance {
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
@@ -166,6 +183,12 @@ export class PebbleBotInstance {
   private autoVersionOverride: string | null = null;
   private reconnectAttemptCount: number = 0;
   private currentVersionCandidate: string | null = null;
+  private originalHost: string;
+  private originalPort: number;
+  private isTransferring: boolean = false;
+  private hasSpawnedPosition: boolean = false;
+  private lastServerNotice: string = '';
+  private lastDisconnectReason: string = '';
 
   // Telemetry cache
   private position = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -176,6 +199,8 @@ export class PebbleBotInstance {
 
   constructor(config: BotConfig, broadcastFn: (msg: DaemonMessage) => void) {
     this.config = config;
+    this.originalHost = config.host;
+    this.originalPort = config.port || 19132;
     this.broadcastFn = broadcastFn;
   }
 
@@ -269,30 +294,6 @@ export class PebbleBotInstance {
       this.applyFastPath(client);
       client.once('connect_allowed', () => this.applyFastPath(client));
 
-      // Overcome Bedrock's resource pack handshake requirement
-      let initialPackOfferHandled = false;
-      const writePacket = client.write.bind(client);
-      client.write = (packetName: string, params: any) => {
-        if (
-          packetName === 'resource_pack_client_response' &&
-          params?.response_status === 'completed' &&
-          !initialPackOfferHandled
-        ) {
-          initialPackOfferHandled = true;
-          this.logActivity('status', 'Accepted Bedrock resource pack offer (headless client mode).');
-          return writePacket(packetName, {
-            ...params,
-            response_status: 'have_all_packs',
-            response_status_name: 'downloadingfinished',
-          });
-        }
-        return writePacket(packetName, params);
-      };
-
-      client.on('resource_packs_info', () => {
-        initialPackOfferHandled = false;
-      });
-
       // Session event: Microsoft/Xbox authentication finished
       client.once('session', () => {
         this.applyFastPath(client);
@@ -323,7 +324,7 @@ export class PebbleBotInstance {
         this.autoVersionOverride = targetVersion;
         SERVER_VERSION_CACHE.set(cleanHost, targetVersion);
 
-        // Start Bedrock auth input and tick sync keepalive loops to prevent timeout kicks
+        // Start Bedrock authoritative input keepalive loops
         this.startTickSyncLoop(client);
         this.startPlayerAuthInputLoop(client);
 
@@ -335,12 +336,13 @@ export class PebbleBotInstance {
       client.on('start_game', (packet: any) => {
         if (packet?.player_position) {
           this.position = {
-            x: Math.round(packet.player_position.x * 10) / 10,
-            y: Math.round(packet.player_position.y * 10) / 10,
-            z: Math.round(packet.player_position.z * 10) / 10,
+            x: Math.round(packet.player_position.x * 100) / 100,
+            y: Math.round(packet.player_position.y * 100) / 100,
+            z: Math.round(packet.player_position.z * 100) / 100,
             yaw: Math.round((packet.rotation?.z ?? 0) * 10) / 10,
             pitch: Math.round((packet.rotation?.x ?? 0) * 10) / 10,
           };
+          this.hasSpawnedPosition = true;
           this.emitTelemetry();
         }
         try {
@@ -379,9 +381,10 @@ export class PebbleBotInstance {
 
       client.on('respawn', (packet: any) => {
         if (packet?.position) {
-          this.position.x = Math.round(packet.position.x * 10) / 10;
-          this.position.y = Math.round(packet.position.y * 10) / 10;
-          this.position.z = Math.round(packet.position.z * 10) / 10;
+          this.position.x = Math.round(packet.position.x * 100) / 100;
+          this.position.y = Math.round(packet.position.y * 100) / 100;
+          this.position.z = Math.round(packet.position.z * 100) / 100;
+          this.hasSpawnedPosition = true;
         }
         try {
           client.write('player_action', {
@@ -395,14 +398,38 @@ export class PebbleBotInstance {
         } catch (_) {}
       });
 
-      // Move Player packet: updates bot position
+      // Move Player packet: updates bot position & acknowledges server teleports
       client.on('move_player', (packet: any) => {
         if (packet?.position) {
-          this.position.x = Math.round(packet.position.x * 10) / 10;
-          this.position.y = Math.round(packet.position.y * 10) / 10;
-          this.position.z = Math.round(packet.position.z * 10) / 10;
+          this.position.x = Math.round(packet.position.x * 100) / 100;
+          this.position.y = Math.round(packet.position.y * 100) / 100;
+          this.position.z = Math.round(packet.position.z * 100) / 100;
           if (packet.yaw !== undefined) this.position.yaw = Math.round(packet.yaw * 10) / 10;
           if (packet.pitch !== undefined) this.position.pitch = Math.round(packet.pitch * 10) / 10;
+          this.hasSpawnedPosition = true;
+
+          // Acknowledge server-initiated teleports / subserver transitions immediately
+          if (packet.mode === 'teleport' || packet.mode === 'reset') {
+            try {
+              client.write('player_auth_input', {
+                pitch: this.position.pitch || 0,
+                yaw: this.position.yaw || 0,
+                position: { ...this.position },
+                move_vector: { x: 0, z: 0 },
+                head_yaw: this.position.yaw || 0,
+                input_data: {},
+                input_mode: 'touch',
+                play_mode: 'normal',
+                interaction_model: 'classic',
+                interact_rotation: { x: 0, z: 0 },
+                tick: this.clientTick,
+                delta: { x: 0, y: 0, z: 0 },
+                analogue_move_vector: { x: 0, z: 0 },
+                camera_orientation: { x: 0, y: 0, z: 0 },
+                raw_move_vector: { x: 0, z: 0 },
+              });
+            } catch (_) {}
+          }
         }
       });
 
@@ -420,21 +447,48 @@ export class PebbleBotInstance {
       client.on('set_title', (packet: any) => {
         const titleText = (packet.text || packet.message || '').trim();
         if (titleText) {
-          this.handleSystemMessage(`📢 ${titleText}`);
+          const clean = stripMinecraftFormatting(titleText);
+          this.lastServerNotice = clean;
+          this.handleSystemMessage(`📢 ${clean}`);
         }
       });
 
       // Subserver Transfer request (e.g. /lifesteal gateway)
       client.on('transfer', (packet: any) => {
-        console.log(chalk.cyan(`[PebbleAFK] Server requested transfer for ${this.config.username} -> ${packet.server_address}:${packet.port}`));
-        this.handleSystemMessage(`🔄 Server transferring to subserver ${packet.server_address}:${packet.port}...`);
+        const targetHost = packet.server_address || this.config.host;
+        const targetPort = packet.port || 19132;
+        console.log(chalk.cyan(`[PebbleAFK] 🔄 Subserver transfer requested for @${this.config.username} -> ${targetHost}:${targetPort}`));
+        this.logActivity('status', `🔄 Transferring to subserver (${targetHost}:${targetPort})...`);
+        this.handleSystemMessage(`🔄 Server transferring to subserver ${targetHost}:${targetPort}...`);
+
+        this.isTransferring = true;
+        this.cleanup();
+        try {
+          client.close();
+        } catch (_) {}
+
+        this.config.host = targetHost;
+        this.config.port = targetPort;
+        setTimeout(() => {
+          this.isTransferring = false;
+          this.start();
+        }, 600);
       });
 
-      let lastDisconnectReason = '';
-
-      const handleDisconnect = (reason: string, isError = false) => {
+      const handleDisconnect = (rawReason: string, isError = false) => {
+        if (this.isTransferring) return;
         if (this.state === 'DISCONNECTED') return;
-        lastDisconnectReason = reason;
+
+        let reason = rawReason || '';
+        if (this.lastDisconnectReason && this.lastDisconnectReason !== 'Server closed connection / session ended') {
+          reason = this.lastDisconnectReason;
+        } else if (this.lastServerNotice) {
+          reason = reason ? `${reason} (Last server notice: "${this.lastServerNotice}")` : this.lastServerNotice;
+        }
+        if (!reason) {
+          reason = 'Server closed connection / session ended';
+        }
+        this.lastDisconnectReason = reason;
 
         // Auto-detect version requirement if server reports client is outdated
         const versionMatch = reason.match(/(?:supports|requires|versions?:?)[\s:]*([0-9.]+)/i);
@@ -447,8 +501,8 @@ export class PebbleBotInstance {
           this.logActivity('status', `🔄 Server requested version ${reqVer}. Auto-adjusting target version...`);
         }
 
-        console.log(chalk.red(`[PebbleAFK] Bot @${this.config.username} disconnected: ${reason}`));
-        this.logActivity('disconnect', `Disconnected: ${reason}`);
+        console.log(chalk.red(`[PebbleAFK] ❌ Bot @${this.config.username} disconnected from ${cleanHost}:${cleanPort}: ${reason}`));
+        this.logActivity('disconnect', `Disconnected from ${cleanHost}: ${reason}`);
         this.cleanup();
         this.updateState(isError ? 'ERROR' : 'DISCONNECTED', reason);
         this.handleAutoReconnect();
@@ -456,18 +510,35 @@ export class PebbleBotInstance {
 
       // 1. Kick event from bedrock-protocol
       client.on('kick', (packet: any) => {
-        const reason = packet?.message || packet?.reason || 'Kicked by server';
-        handleDisconnect(reason, false);
+        if (this.isTransferring) return;
+        let reason = '';
+        if (packet?.message) {
+          reason = stripMinecraftFormatting(packet.message);
+        } else if (packet?.filtered_message) {
+          reason = stripMinecraftFormatting(packet.filtered_message);
+        } else if (packet?.reason != null) {
+          reason = BEDROCK_DISCONNECT_REASONS[Number(packet.reason)] || `Kick code #${packet.reason}`;
+        }
+        handleDisconnect(reason || 'Kicked by server', false);
       });
 
       // 2. Disconnect packet from server
       client.on('disconnect', (packet: any) => {
-        const reason = packet?.message || packet?.reason || 'Disconnected from server';
-        handleDisconnect(reason, false);
+        if (this.isTransferring) return;
+        let reason = '';
+        if (packet?.message) {
+          reason = stripMinecraftFormatting(packet.message);
+        } else if (packet?.filtered_message) {
+          reason = stripMinecraftFormatting(packet.filtered_message);
+        } else if (packet?.reason != null) {
+          reason = BEDROCK_DISCONNECT_REASONS[Number(packet.reason)] || `Disconnect code #${packet.reason}`;
+        }
+        handleDisconnect(reason || 'Disconnected from server', false);
       });
 
       // 3. Error event
       client.on('error', (err: any) => {
+        if (this.isTransferring) return;
         const errMsg = err?.message || String(err);
         let descriptiveReason = errMsg;
         if (errMsg.includes('Connect timed out') || errMsg.includes('timed out')) {
@@ -478,8 +549,9 @@ export class PebbleBotInstance {
 
       // 4. Close event
       client.on('close', () => {
+        if (this.isTransferring) return;
         if (this.state !== 'DISCONNECTED' && this.state !== 'ERROR') {
-          handleDisconnect(lastDisconnectReason || 'Server closed connection / session ended');
+          handleDisconnect(this.lastDisconnectReason || 'Server closed connection / session ended');
         }
       });
 
@@ -615,7 +687,7 @@ export class PebbleBotInstance {
   private startPlayerAuthInputLoop(client: any) {
     if (this.playerAuthInterval) clearInterval(this.playerAuthInterval);
     this.playerAuthInterval = setInterval(() => {
-      if (this.client !== client || (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN')) return;
+      if (this.client !== client || (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN') || !this.hasSpawnedPosition) return;
       try {
         this.clientTick += 2n;
 
@@ -623,11 +695,7 @@ export class PebbleBotInstance {
         client.write('player_auth_input', {
           pitch: this.position.pitch || 0,
           yaw: this.position.yaw || 0,
-          position: {
-            x: this.position.x || 0,
-            y: this.position.y || 64,
-            z: this.position.z || 0,
-          },
+          position: { ...this.position },
           move_vector: { x: 0, z: 0 },
           head_yaw: this.position.yaw || 0,
           input_data: {},
@@ -653,34 +721,36 @@ export class PebbleBotInstance {
     let step = 0;
 
     this.antiAfkInterval = setInterval(() => {
-      if (!this.client || this.state !== 'SPAWNED') return;
+      if (!this.client || this.state !== 'SPAWNED' || !this.hasSpawnedPosition) return;
       try {
         step++;
         // Subtle yaw perturbation
-        const deltaYaw = (step % 2 === 0 ? 5 : -5);
+        const deltaYaw = (step % 2 === 0 ? 3 : -3);
         this.position.yaw = (this.position.yaw + deltaYaw) % 360;
 
-        // Bedrock animate swing
+        // Bedrock animate swing (arm swing is standard anti-AFK recognized by servers)
         this.client.write('animate', {
           action_id: 1, // Swing arm
           runtime_entity_id: this.client.entityId || 1n,
         });
 
-        // Bedrock move_player packet ensures server anticheats and watchdog track active movement
-        this.client.write('move_player', {
-          runtime_id: this.client.entityId || 1n,
-          position: {
-            x: this.position.x || 0,
-            y: this.position.y || 64,
-            z: this.position.z || 0,
-          },
+        // Send rotation and tick update via player_auth_input (NO move_player packet to avoid anti-cheat kicks!)
+        this.client.write('player_auth_input', {
           pitch: this.position.pitch || 0,
           yaw: this.position.yaw || 0,
+          position: { ...this.position },
+          move_vector: { x: 0, z: 0 },
           head_yaw: this.position.yaw || 0,
-          mode: 'normal',
-          on_ground: true,
-          ridden_runtime_id: 0,
+          input_data: {},
+          input_mode: 'touch',
+          play_mode: 'normal',
+          interaction_model: 'classic',
+          interact_rotation: { x: 0, z: 0 },
           tick: this.clientTick,
+          delta: { x: 0, y: 0, z: 0 },
+          analogue_move_vector: { x: 0, z: 0 },
+          camera_orientation: { x: 0, y: 0, z: 0 },
+          raw_move_vector: { x: 0, z: 0 },
         });
       } catch (_) {}
     }, intervalSec * 1000);
@@ -739,6 +809,11 @@ export class PebbleBotInstance {
   }
 
   public handleSystemMessage(text: string) {
+    const clean = stripMinecraftFormatting(text);
+    if (clean.toLowerCase().includes('server') || clean.toLowerCase().includes('kick') || clean.toLowerCase().includes('afk')) {
+      this.lastServerNotice = clean;
+    }
+
     this.pushChat({
       botId: this.config.id,
       serverId: this.config.serverId,
@@ -840,6 +915,10 @@ export class PebbleBotInstance {
       cleanSender = isSystem ? 'System' : 'Server';
     }
 
+    if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk')) {
+      this.lastServerNotice = cleanText;
+    }
+
     this.pushChat({
       botId: this.config.id,
       serverId: this.config.serverId,
@@ -934,6 +1013,31 @@ export class PebbleBotInstance {
       }
 
       const conn = client.connection;
+      if (conn && !conn._disconnectReasonHooked) {
+        conn._disconnectReasonHooked = true;
+        const origOnClose = conn.onCloseConnection;
+        conn.onCloseConnection = (reason: any) => {
+          if (reason) {
+            const reasonStr = typeof reason === 'object' ? (reason?.message || JSON.stringify(reason)) : String(reason);
+            this.lastDisconnectReason = reasonStr;
+          }
+          if (typeof origOnClose === 'function') {
+            origOnClose(reason);
+          }
+        };
+      }
+
+      if (conn?.raknet && !conn.raknet._disconnectHooked) {
+        conn.raknet._disconnectHooked = true;
+        conn.raknet.on('disconnect', (ev: any) => {
+          const r = ev?.reason || ev?.message || ev;
+          if (r) {
+            const reasonStr = typeof r === 'object' ? (r?.message || JSON.stringify(r)) : String(r);
+            this.lastDisconnectReason = reasonStr;
+          }
+        });
+      }
+
       if (conn && !conn._immediateSendReliablePatched) {
         conn._immediateSendReliablePatched = true;
         if (typeof conn.sendReliable === 'function') {

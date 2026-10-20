@@ -199,8 +199,9 @@ export default function Home() {
         const currentList = prev[cleanName] || [];
         if (
           currentList.length > 0 &&
-          currentList[0].message === message &&
-          Date.now() - currentList[0].timestamp < 2000
+          Date.now() - currentList[0].timestamp < 3000 &&
+          (currentList[0].message === message ||
+            (type === 'disconnected' && currentList[0].type === 'disconnected'))
         ) {
           return prev;
         }
