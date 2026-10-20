@@ -4,6 +4,111 @@ const bedrock = require('bedrock-protocol');
 import { BotConfig, BotLifecycleState, DaemonMessage, TelemetryPayload } from '../types';
 import { getAndSyncTokenFolder } from './tokenManager';
 
+function pingBedrockJsp(host: string, port: number, timeoutMs = 2000): Promise<{ version?: string; motd?: string; protocol?: string } | null> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    let timer: NodeJS.Timeout | null = null;
+    let rakClient: any = null;
+    try {
+      const jspRaknet = (eval('require'))('jsp-raknet');
+      rakClient = new jspRaknet.Client(host, port);
+      timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          try { rakClient?.close(); } catch (_) {}
+          resolve(null);
+        }
+      }, timeoutMs);
+      rakClient.ping((data: any) => {
+        if (resolved) return;
+        resolved = true;
+        if (timer) clearTimeout(timer);
+        try { rakClient?.close(); } catch (_) {}
+        try {
+          const str = typeof data === 'string' ? data : (data?.toString?.() || '');
+          const parts = str.split(';');
+          if (parts.length >= 4) {
+            resolve({ motd: parts[1], protocol: parts[2], version: parts[3] });
+            return;
+          }
+        } catch (_) {}
+        resolve(null);
+      });
+    } catch (_) {
+      if (timer) clearTimeout(timer);
+      resolve(null);
+    }
+  });
+}
+
+function getBedrockSupportedVersions(): { versions: Record<string, number>; currentVersion: string } {
+  try {
+    const opts = (eval('require'))('bedrock-protocol/src/options');
+    if (opts && opts.Versions && opts.CURRENT_VERSION) {
+      return { versions: opts.Versions, currentVersion: opts.CURRENT_VERSION };
+    }
+  } catch (_) {}
+  return { versions: { '1.26.51': 2193 }, currentVersion: '1.26.51' };
+}
+
+function resolveBedrockTargetVersion(
+  userVersion?: string,
+  pingProtocol?: string | number,
+  pingVersion?: string
+): { version: string; isFallback: boolean; note?: string } {
+  const { versions, currentVersion } = getBedrockSupportedVersions();
+
+  const trimmed = userVersion?.trim();
+  const isAuto = !trimmed || trimmed.toLowerCase() === 'auto' || trimmed.toLowerCase() === 'default';
+
+  if (!isAuto && trimmed) {
+    let candidate = trimmed;
+    if (candidate.startsWith('26.')) {
+      candidate = `1.${candidate}`;
+    }
+    if (versions[candidate]) {
+      return { version: candidate, isFallback: false };
+    }
+    if (versions[trimmed]) {
+      return { version: trimmed, isFallback: false };
+    }
+    return {
+      version: currentVersion,
+      isFallback: true,
+      note: `Version "${trimmed}" is not directly supported; using verified working version ${currentVersion}.`,
+    };
+  }
+
+  if (pingProtocol != null) {
+    const protoNum = Number(pingProtocol);
+    if (Number.isFinite(protoNum)) {
+      const match = Object.keys(versions).find((v) => versions[v] === protoNum);
+      if (match) {
+        return { version: match, isFallback: false, note: `Auto-negotiated protocol ${protoNum} -> ${match}` };
+      }
+    }
+  }
+
+  if (pingVersion) {
+    let candidate = pingVersion.trim();
+    if (candidate.startsWith('26.')) {
+      candidate = `1.${candidate}`;
+    }
+    if (versions[candidate]) {
+      return { version: candidate, isFallback: false, note: `Auto-negotiated version string ${candidate}` };
+    }
+    if (versions[pingVersion]) {
+      return { version: pingVersion, isFallback: false, note: `Auto-negotiated version string ${pingVersion}` };
+    }
+  }
+
+  return {
+    version: currentVersion,
+    isFallback: false,
+    note: `Using best working Bedrock version (${currentVersion})`,
+  };
+}
+
 export class PebbleBotInstance {
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
@@ -29,7 +134,7 @@ export class PebbleBotInstance {
     this.broadcastFn = broadcastFn;
   }
 
-  public start() {
+  public async start() {
     this.isExplicitlyStopped = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -45,14 +150,42 @@ export class PebbleBotInstance {
       const cleanHost = (this.config.host || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
       const cleanPort = Number(this.config.port) || 19132;
 
+      let hasNativeRaknet = false;
+      try {
+        (eval('require'))('raknet-native');
+        hasNativeRaknet = true;
+      } catch (_) {}
+
+      const rakBackend = hasNativeRaknet ? 'raknet-native' : 'jsp-raknet';
+
+      let pingRes: { motd?: string; protocol?: string; version?: string } | null = null;
+      const rawUserVersion = this.config.version?.trim();
+      const isAutoVersion = !rawUserVersion || rawUserVersion.toLowerCase() === 'auto' || rawUserVersion.toLowerCase() === 'default';
+
+      if (isAutoVersion) {
+        try {
+          pingRes = await pingBedrockJsp(cleanHost, cleanPort, 2000);
+          if (pingRes) {
+            console.log(chalk.cyan(`[PebbleAFK] Bedrock ping response from ${cleanHost}:${cleanPort}: protocol=${pingRes.protocol}, version=${pingRes.version}`));
+          }
+        } catch (_) {}
+      }
+
+      const resolved = resolveBedrockTargetVersion(rawUserVersion, pingRes?.protocol, pingRes?.version);
+      const targetVersion = resolved.version;
+
       const clientOptions: any = {
         host: cleanHost,
         port: cleanPort,
         username: this.config.username,
         offline: isOffline,
         profilesFolder: isOffline ? undefined : profilesFolder,
-        skipPing: false,
-        connectTimeout: 30000,
+        version: targetVersion,
+        transport: 'raknet',
+        raknetBackend: rakBackend,
+        useRaknetWorkers: false,
+        skipPing: rakBackend === 'jsp-raknet',
+        connectTimeout: 45000,
         onMsaCode: (data: any) => {
           console.log(chalk.yellow(`[MS Auth] Code for ${this.config.username}: ${data.user_code}`));
           const directUri = data.user_code
@@ -71,11 +204,7 @@ export class PebbleBotInstance {
         },
       };
 
-      if (this.config.version && this.config.version !== 'auto') {
-        clientOptions.version = this.config.version;
-      }
-
-      console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (offline: ${isOffline})`));
+      console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (version: ${targetVersion}, backend: ${rakBackend})`));
       const client = bedrock.createClient(clientOptions);
       this.client = client;
 
@@ -424,7 +553,71 @@ export class PebbleBotInstance {
         client._immediateSendPatched = true;
         const origSendMCPE = client.sendMCPE?.bind(client);
         if (origSendMCPE) {
-          client.sendMCPE = (buffer: any) => origSendMCPE(buffer, true);
+          client.sendMCPE = (buffer: any, immediate?: boolean) => {
+            return origSendMCPE(buffer, true);
+          };
+        }
+      }
+
+      if (!client._encryptedImmediatePatched) {
+        client._encryptedImmediatePatched = true;
+        const origOnEncrypted = client.onEncryptedPacket;
+        if (typeof origOnEncrypted === 'function') {
+          client.onEncryptedPacket = (buf: any) => {
+            const packet = client.batchHeader ? Buffer.concat([Buffer.from([client.batchHeader]), buf]) : buf;
+            client.sendMCPE(packet, true);
+          };
+          if (client.cipher) {
+            client.cipher.removeListener('data', origOnEncrypted);
+            client.cipher.on('data', client.onEncryptedPacket);
+          }
+        }
+      }
+
+      const conn = client.connection;
+      if (conn && !conn._immediateSendReliablePatched) {
+        conn._immediateSendReliablePatched = true;
+        if (typeof conn.sendReliable === 'function') {
+          const origSend = conn.sendReliable.bind(conn);
+          conn.sendReliable = (buffer: any, immediate?: boolean) => {
+            return origSend(buffer, true);
+          };
+        }
+        if (typeof conn.plainSendReliable === 'function') {
+          const origPlain = conn.plainSendReliable.bind(conn);
+          conn.plainSendReliable = (buffer: any, immediate?: boolean) => {
+            const res = origPlain(buffer, true);
+            try { conn.raknet?.connection?.sendQueue(); } catch (_) {}
+            return res;
+          };
+        }
+      }
+
+      const rakClient = conn?.raknet;
+      const innerConn = rakClient?.connection;
+      if (innerConn && !innerConn._fastQueuePatched) {
+        innerConn._fastQueuePatched = true;
+
+        const origAdd = innerConn.addEncapsulatedToQueue?.bind(innerConn);
+        if (origAdd) {
+          innerConn.addEncapsulatedToQueue = function (pk: any, flags: any) {
+            const res = origAdd(pk, flags);
+            try { innerConn.sendQueue(); } catch (_) {}
+            return res;
+          };
+        }
+
+        const origUpdate = innerConn.update?.bind(innerConn);
+        if (origUpdate) {
+          innerConn.update = function (timestamp: number) {
+            while (innerConn.recvQueue && innerConn.recvQueue.length > 0) {
+              const chunk = innerConn.recvQueue.splice(0, 32);
+              for (const msg of chunk) {
+                try { innerConn.receiveOnline(msg); } catch (_) {}
+              }
+            }
+            return origUpdate(timestamp);
+          };
         }
       }
     } catch (_) {}
