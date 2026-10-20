@@ -102,6 +102,9 @@ if [ -f "$HOME/.pebbleafk_heartbeat.pid" ]; then
 fi
 sleep 1
 
+# Apply pure-JS high-speed RakNet transport patches for Android/Termux
+node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
+
 cat << ENVEOF > .env
 PORT=8080
 PEBBLEAFK_OWNER=$APP_USER

@@ -54,8 +54,10 @@ cd daemon
 if [ ! -d "node_modules" ] || [ ! -d "node_modules/bedrock-protocol" ]; then
   echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Installing Node modules..."
   npm install --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 || npm install --ignore-scripts >/dev/null 2>&1 || true
+  node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
   echo -e "      \\033[1;32m✓ Modules configured successfully.\\033[0m"
 else
+  node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
   echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Modules verified."
 fi
 
