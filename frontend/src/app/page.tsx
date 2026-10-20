@@ -522,8 +522,10 @@ export default function Home() {
           const targetUrl = (data?.url || data?.tunnel_url || '').trim();
           const targetToken = (data?.token || secretCode || authTokenRef.current || '').trim();
           if (targetUrl && targetUrl.startsWith('wss://')) {
-            if (targetUrl !== daemonUrlRef.current) {
-              setDaemonUrl(targetUrl);
+            const cleanTarget = targetUrl.replace(/\/+$/, '');
+            const cleanCurrent = (daemonUrlRef.current || '').trim().replace(/\/+$/, '');
+            if (cleanTarget !== cleanCurrent) {
+              setDaemonUrl(cleanTarget);
               if (targetToken) setAuthToken(targetToken);
             } else if (daemonStatusRef.current === 'DISCONNECTED') {
               reconnect();
@@ -541,15 +543,17 @@ export default function Home() {
     };
   }, [currentUser, secretCode, setDaemonUrl, setAuthToken, reconnect]);
 
-  // Auto-refresh Termux stream logs when user is on the Termux Stream page
+  // Stream Termux logs when user is on the Termux Stream page (live lines arrive via push)
   useEffect(() => {
     if (activeTab === 'termux_stream') {
-      fetchTerminalLogs();
+      if (daemonStatus === 'AUTHENTICATED') {
+        fetchTerminalLogs();
+      }
       const interval = setInterval(() => {
-        if (daemonStatus === 'AUTHENTICATED') {
+        if (daemonStatusRef.current === 'AUTHENTICATED') {
           fetchTerminalLogs();
         }
-      }, 2500);
+      }, 8000);
       return () => clearInterval(interval);
     }
   }, [activeTab, daemonStatus, fetchTerminalLogs]);

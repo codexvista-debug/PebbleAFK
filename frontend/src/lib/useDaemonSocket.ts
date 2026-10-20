@@ -81,12 +81,12 @@ export function useDaemonSocket(
   };
 
   const setDaemonUrl = useCallback((url: string) => {
-    const clean = url.trim();
+    const clean = url.trim().replace(/\/+$/, '');
     if (clean.includes('localhost') || clean.includes('127.0.0.1')) {
       // Ignore localhost
       return;
     }
-    if (clean === daemonUrlRef.current) {
+    if (clean === daemonUrlRef.current.trim().replace(/\/+$/, '')) {
       return;
     }
     daemonUrlRef.current = clean;
@@ -170,11 +170,14 @@ export function useDaemonSocket(
       return;
     }
 
+    const cleanTarget = url.replace(/\/+$/, '');
+
     // Do NOT destroy an active or connecting socket unless forced
     if (!force && socketRef.current) {
+      const currentUrl = (socketRef.current.url || '').replace(/\/+$/, '');
       if (
         (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING) &&
-        socketRef.current.url.replace(/\/+$/, '') === url
+        currentUrl === cleanTarget
       ) {
         return;
       }
@@ -210,18 +213,22 @@ export function useDaemonSocket(
             ? localStorage.getItem(`pebbleafk_secret_${user.trim().toLowerCase()}`) || ''
             : '');
 
-        ws.send(JSON.stringify({
-          type: 'AUTH',
-          payload: { token: effectiveToken, username: user },
-        }));
+        try {
+          ws.send(JSON.stringify({
+            type: 'AUTH',
+            payload: { token: effectiveToken, username: user },
+          }));
+        } catch (_) {}
 
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         pingIntervalRef.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             pingStartTimeRef.current = Date.now();
-            ws.send(JSON.stringify({ type: 'PING' }));
+            try {
+              ws.send(JSON.stringify({ type: 'PING' }));
+            } catch (_) {}
           }
-        }, 12000);
+        }, 10000);
       };
 
       ws.onmessage = (event) => {
@@ -317,13 +324,26 @@ export function useDaemonSocket(
 
           if (msg.type === 'TERMINAL_LOGS') {
             if (Array.isArray(msg.payload?.logs)) {
-              setTerminalLogs(msg.payload.logs);
+              setTerminalLogs((prev) => {
+                if (
+                  prev.length === msg.payload.logs.length &&
+                  prev[prev.length - 1] === msg.payload.logs[msg.payload.logs.length - 1]
+                ) {
+                  return prev;
+                }
+                return msg.payload.logs;
+              });
             }
           }
 
           if (msg.type === 'TERMINAL_LOG_LINE') {
             if (msg.payload?.line) {
-              setTerminalLogs((prev) => [...prev.slice(-400), msg.payload.line]);
+              setTerminalLogs((prev) => {
+                if (prev.length > 0 && prev[prev.length - 1] === msg.payload.line) {
+                  return prev;
+                }
+                return [...prev.slice(-400), msg.payload.line];
+              });
             }
           }
         } catch (_) {}
@@ -336,13 +356,17 @@ export function useDaemonSocket(
         setBotStates({});
         setBotReasons({});
         setMsAuthData(null);
-        if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+        if (pingIntervalRef.current) {
+          clearInterval(pingIntervalRef.current);
+          pingIntervalRef.current = null;
+        }
 
         reconnectAttemptsRef.current += 1;
         if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        const delay = Math.min(2000 + reconnectAttemptsRef.current * 1000, 10000);
         reconnectTimeoutRef.current = setTimeout(() => {
           connect(false);
-        }, 4000);
+        }, delay);
       };
 
       ws.onerror = () => {
@@ -359,7 +383,7 @@ export function useDaemonSocket(
       if (
         socketRef.current &&
         (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING) &&
-        socketRef.current.url.replace(/\/+$/, '') === target
+        (socketRef.current.url || '').replace(/\/+$/, '') === target
       ) {
         // Socket is already active and healthy. Keep connection alive!
         return;
@@ -387,6 +411,61 @@ export function useDaemonSocket(
     return send({ type: 'RESTART_DAEMON', payload: { reason } });
   }, [send]);
 
+  const updateDaemon = useCallback(() => {
+    setBotStates({});
+    return send({ type: 'UPDATE_DAEMON' });
+  }, [send]);
+
+  const clearChat = useCallback((botId?: string) => {
+    setMessagesByBot((prev) => {
+      const next = { ...prev };
+      if (botId) {
+        delete next[botId];
+      } else {
+        return {};
+      }
+      if (typeof window !== 'undefined') {
+        const u = currentUserRef.current ? currentUserRef.current.trim().toLowerCase() : 'guest';
+        try {
+          localStorage.setItem(`pebbleafk_chat_${u}`, JSON.stringify(next));
+        } catch (_) {}
+      }
+      return next;
+    });
+  }, []);
+
+  const fetchTerminalLogs = useCallback(() => {
+    return send({ type: 'GET_TERMINAL_LOGS' });
+  }, [send]);
+
+  const clearTerminalLogs = useCallback(() => {
+    setTerminalLogs([]);
+  }, []);
+
+  const verifyAccount = useCallback((accountId: string, email?: string) => {
+    return send({ type: 'VERIFY_ACCOUNT', payload: { accountId, email } });
+  }, [send]);
+
+  const sendChat = useCallback((botId: string, message: string) => {
+    return send({ type: 'SEND_CHAT', payload: { botId, message } });
+  }, [send]);
+
+  const submitForm = useCallback((botId: string, formId: number, responseData: any) => {
+    return send({ type: 'SUBMIT_FORM', payload: { botId, formId, responseData } });
+  }, [send]);
+
+  const closeForm = useCallback((botId: string, formId: number) => {
+    return send({ type: 'CLOSE_FORM', payload: { botId, formId } });
+  }, [send]);
+
+  const startBot = useCallback((config: any) => {
+    return send({ type: 'START_BOT', payload: config });
+  }, [send]);
+
+  const stopBot = useCallback((botId: string) => {
+    return send({ type: 'STOP_BOT', payload: { botId } });
+  }, [send]);
+
   return {
     status,
     daemonUrl,
@@ -404,35 +483,16 @@ export function useDaemonSocket(
     setMsAuthData,
     reconnect: connect,
     restartDaemon,
-    updateDaemon: () => {
-      setBotStates({});
-      return send({ type: 'UPDATE_DAEMON' });
-    },
-    clearChat: (botId?: string) => {
-      setMessagesByBot((prev) => {
-        const next = { ...prev };
-        if (botId) {
-          delete next[botId];
-        } else {
-          return {};
-        }
-        if (typeof window !== 'undefined') {
-          const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
-          try {
-            localStorage.setItem(`pebbleafk_chat_${u}`, JSON.stringify(next));
-          } catch (_) {}
-        }
-        return next;
-      });
-    },
+    updateDaemon,
+    clearChat,
     terminalLogs,
-    fetchTerminalLogs: () => send({ type: 'GET_TERMINAL_LOGS' }),
-    clearTerminalLogs: () => setTerminalLogs([]),
-    verifyAccount: (accountId: string, email?: string) => send({ type: 'VERIFY_ACCOUNT', payload: { accountId, email } }),
-    sendChat: (botId: string, message: string) => send({ type: 'SEND_CHAT', payload: { botId, message } }),
-    submitForm: (botId: string, formId: number, responseData: any) => send({ type: 'SUBMIT_FORM', payload: { botId, formId, responseData } }),
-    closeForm: (botId: string, formId: number) => send({ type: 'CLOSE_FORM', payload: { botId, formId } }),
-    startBot: (config: any) => send({ type: 'START_BOT', payload: config }),
-    stopBot: (botId: string) => send({ type: 'STOP_BOT', payload: { botId } }),
+    fetchTerminalLogs,
+    clearTerminalLogs,
+    verifyAccount,
+    sendChat,
+    submitForm,
+    closeForm,
+    startBot,
+    stopBot,
   };
 }

@@ -45,8 +45,8 @@ function getBedrockSupportedVersions(): { versions: Record<string, number>; curr
   try {
     const opts = (eval('require'))('bedrock-protocol/src/options');
     if (opts && opts.Versions) {
-      // Default to verified stable release (1.21.50) so production SMP servers don't drop packets
-      return { versions: opts.Versions, currentVersion: '1.21.50' };
+      const def = opts.defaultVersion || '1.26.30';
+      return { versions: opts.Versions, currentVersion: def };
     }
   } catch (_) {}
   return { versions: { '1.21.50': 766, '1.26.30': 770, '1.26.51': 2193 }, currentVersion: '1.26.30' };
@@ -98,7 +98,7 @@ function resolveBedrockTargetVersion(
   }
 
   // 2. Known server auto-resolutions
-  if (cleanHost.includes('freshsmp')) {
+  if (cleanHost.includes('freshsmp') || cleanHost.includes('fresh')) {
     SERVER_VERSION_CACHE.set(cleanHost, '1.26.30');
     return { version: '1.26.30', isFallback: false, note: 'Auto-detected FreshSMP Bedrock protocol (1.26.30)' };
   }

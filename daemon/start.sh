@@ -149,9 +149,9 @@ else
   exit 1
 fi
 
-# 3. Start Cloudflare Tunnel
-echo -e "\n${CYAN}[3/4]${NC} 🛡️  ${BOLD}Creating secure Cloudflare Tunnel...${NC}"
-cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
+# 3. Start Cloudflare Tunnel (Forced HTTP/2 for rock-solid Termux/mobile stability)
+echo -e "\n${CYAN}[3/4]${NC} 🛡️  ${BOLD}Creating secure Cloudflare Tunnel (HTTP/2)...${NC}"
+cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
 TUNNEL_PID=$!
 
 echo -ne "      ${YELLOW}⌛ Negotiating secure SSL tunnel address...${NC}"
@@ -203,9 +203,10 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
   while true; do
     sleep 15
     # Auto-heal cloudflared tunnel if process died unexpectedly
-    if ! pgrep -f "cloudflared.*8080" >/dev/null 2>&1; then
-      echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel interrupted. Re-opening tunnel..." >> daemon.log
-      cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
+    if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+      echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel interrupted. Re-opening tunnel (HTTP/2)..." >> daemon.log
+      cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
+      TUNNEL_PID=$!
       sleep 4
       NEW_TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log | tail -n 1)
       if [ -n "$NEW_TUNNEL_URL" ]; then

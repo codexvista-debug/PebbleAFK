@@ -57,6 +57,20 @@ function appendTerminalLog(rawText: string) {
     if (terminalLogs.length > MAX_LOGS) {
       terminalLogs.shift();
     }
+    // Stream live line to connected web clients in real-time
+    if (authenticatedClients.size > 0) {
+      const lineMsg = JSON.stringify({
+        type: 'TERMINAL_LOG_LINE',
+        payload: { line },
+      });
+      for (const client of authenticatedClients) {
+        if (client.readyState === WebSocket.OPEN) {
+          try {
+            client.send(lineMsg);
+          } catch (_) {}
+        }
+      }
+    }
   } finally {
     isAppendingLog = false;
   }
@@ -116,9 +130,15 @@ wss.on('connection', (ws: WebSocket, req) => {
   // Ping/Pong keepalive
   const pingInterval = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.ping();
+      try {
+        ws.ping();
+      } catch (_) {}
     }
   }, 15000);
+
+  ws.on('pong', () => {
+    // Protocol-level pong response received
+  });
 
   ws.on('message', (data: Buffer | string) => {
     try {
@@ -164,7 +184,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         return;
       }
 
-      // Stream live Termux terminal logs to dashboard
+      // Stream live Termux terminal logs to dashboard (compact batch)
       if (parsed.type === 'GET_TERMINAL_LOGS') {
         const fs = require('fs');
         const path = require('path');
@@ -174,17 +194,17 @@ wss.on('connection', (ws: WebSocket, req) => {
           if (fs.existsSync(logPath)) {
             fileLines = fs.readFileSync(logPath, 'utf8')
               .split('\n')
-              .slice(-1500)
+              .slice(-150)
               .map((l: string) => l.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim())
               .filter(Boolean);
           }
         } catch (_) {}
 
         // Combine file logs with current memory logs, preserving chronological order
-        const allLogs = fileLines.length > 0 ? fileLines : terminalLogs;
+        const allLogs = fileLines.length > 0 ? fileLines : terminalLogs.slice(-150);
         ws.send(JSON.stringify({
           type: 'TERMINAL_LOGS',
-          payload: { logs: allLogs.slice(-1800), timestamp: Date.now() },
+          payload: { logs: allLogs.slice(-150), timestamp: Date.now() },
         }));
         return;
       }
