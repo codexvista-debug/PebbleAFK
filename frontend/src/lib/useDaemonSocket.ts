@@ -3,7 +3,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { BotLifecycleState, ChatMessage, Telemetry, ActivityLog, BedrockForm, SocketStatus, MsAuthData } from '../types';
 
-export function useDaemonSocket(currentUser: string | null) {
+export function useDaemonSocket(
+  currentUser: string | null,
+  onAccountVerified?: (payload: { botId: string; email: string; ign: string; uuid?: string }) => void
+) {
+  const onAccountVerifiedRef = useRef(onAccountVerified);
+  useEffect(() => {
+    onAccountVerifiedRef.current = onAccountVerified;
+  }, [onAccountVerified]);
   const [daemonUrl, setDaemonUrlState] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
@@ -184,11 +191,19 @@ export function useDaemonSocket(currentUser: string | null) {
           if (msg.type === 'MS_AUTH_CODE') {
             setMsAuthData(msg.payload);
           }
+
+          if (msg.type === 'ACCOUNT_VERIFIED') {
+            setMsAuthData(null);
+            if (onAccountVerifiedRef.current) {
+              onAccountVerifiedRef.current(msg.payload);
+            }
+          }
         } catch (_) {}
       };
 
       ws.onclose = () => {
         setStatus('DISCONNECTED');
+        setMsAuthData(null);
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         reconnectTimeoutRef.current = setTimeout(() => {
           connect();
@@ -240,8 +255,10 @@ export function useDaemonSocket(currentUser: string | null) {
     activityLogs,
     bedrockForms,
     msAuthData,
+    setMsAuthData,
     reconnect: connect,
     restartDaemon,
+    verifyAccount: (accountId: string, email?: string) => send({ type: 'VERIFY_ACCOUNT', payload: { accountId, email } }),
     sendChat: (botId: string, message: string) => send({ type: 'SEND_CHAT', payload: { botId, message } }),
     submitForm: (botId: string, formId: number, responseData: any) => send({ type: 'SUBMIT_FORM', payload: { botId, formId, responseData } }),
     closeForm: (botId: string, formId: number) => send({ type: 'CLOSE_FORM', payload: { botId, formId } }),

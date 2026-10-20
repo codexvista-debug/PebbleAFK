@@ -22,8 +22,11 @@ export interface BedrockAccount {
   verified: boolean;
   addedAt: number;
   authError?: string;
+  expectedIgn?: string;
   settings?: Record<string, any>;
 }
+
+export type Account = BedrockAccount;
 
 export interface ServerProfile {
   id: string;

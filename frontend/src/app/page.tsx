@@ -1,34 +1,139 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   LogIn, 
   LogOut, 
   LayoutDashboard, 
   Server, 
   Users, 
-  Sparkles,
-  Menu,
-  X,
-  ArrowRight,
-  ShieldCheck,
-  Radio,
-  Gamepad2,
-  HardDrive
+  Sparkles, 
+  Menu, 
+  X, 
+  ArrowRight, 
+  ShieldCheck, 
+  Radio, 
+  Gamepad2, 
+  HardDrive,
+  UserPlus,
+  CheckCircle2,
+  AlertCircle,
+  Info
 } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
+import { AccountModal } from '@/components/AccountModal';
+import { MicrosoftAuthModal } from '@/components/MicrosoftAuthModal';
 import { useDaemonSocket } from '@/lib/useDaemonSocket';
+import { BedrockAccount } from '@/types';
+import { loadAccountsFromSupabase, syncAllToSupabase, deleteAccountFromSupabase } from '@/lib/supabaseSync';
 
 export default function Home() {
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [secretCode, setSecretCode] = useState<string>('');
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAccountsOpen, setIsAccountsOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'servers' | 'accounts'>('dashboard');
 
-  // Load saved session and fetch secretCode
+  // Accounts state & pending verification guard
+  const [accounts, setAccounts] = useState<BedrockAccount[]>([]);
+  const [pendingTarget, setPendingTarget] = useState<{ id: string; expectedIgn?: string } | null>(null);
+  const [msAuthError, setMsAuthError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
+
+  const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const showToast = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ message, type });
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+    }, 4000);
+  }, []);
+
+  // Daemon Account Verification Callback
+  const handleAccountVerified = useCallback(
+    (payload: { botId: string; email: string; ign: string; uuid?: string }) => {
+      setMsAuthError(null);
+      const verifiedIgn = payload.ign.trim();
+
+      // Guard: Check if a specific target IGN was requested
+      if (pendingTarget?.expectedIgn) {
+        const expected = pendingTarget.expectedIgn.trim().toLowerCase();
+        if (verifiedIgn.toLowerCase() !== expected) {
+          const errMsg = `Account mismatch: Signed in as '${verifiedIgn}', but target was '${pendingTarget.expectedIgn}'.`;
+          setMsAuthError(errMsg);
+          showToast(errMsg, 'error');
+
+          setAccounts((prev) =>
+            prev.map((a) =>
+              a.id === payload.botId || a.id === pendingTarget.id
+                ? { ...a, authError: errMsg, verified: false }
+                : a
+            )
+          );
+          return;
+        }
+      }
+
+      setAccounts((prev) => {
+        const existingIndex = prev.findIndex(
+          (a) => a.id === payload.botId || a.ign?.toLowerCase() === verifiedIgn.toLowerCase()
+        );
+        let updated: BedrockAccount[];
+        if (existingIndex >= 0) {
+          updated = [...prev];
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            ign: verifiedIgn,
+            username: payload.email,
+            uuid: payload.uuid,
+            verified: true,
+            authError: undefined,
+          };
+        } else {
+          updated = [
+            ...prev,
+            {
+              id: payload.botId || `acc_${Date.now()}`,
+              username: payload.email,
+              ign: verifiedIgn,
+              auth_type: 'microsoft',
+              uuid: payload.uuid,
+              verified: true,
+              addedAt: Date.now(),
+            },
+          ];
+        }
+
+        if (currentUser) {
+          syncAllToSupabase(currentUser, updated);
+        }
+        return updated;
+      });
+
+      setPendingTarget(null);
+      showToast(`Verified Bedrock account: @${verifiedIgn}`, 'success');
+    },
+    [currentUser, pendingTarget, showToast]
+  );
+
+  const {
+    status: daemonStatus,
+    daemonUrl,
+    setDaemonUrl,
+    authToken,
+    setAuthToken,
+    latency,
+    reconnect,
+    restartDaemon,
+    verifyAccount,
+    msAuthData,
+    setMsAuthData,
+  } = useDaemonSocket(currentUser, handleAccountVerified);
+
+  // Load saved session, secretCode, and Supabase accounts
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedUser = localStorage.getItem('pebbleafk_current_user');
@@ -38,7 +143,6 @@ export default function Home() {
         if (cachedSecret) {
           setSecretCode(cachedSecret);
         } else {
-          // Fetch secretCode from API
           fetch(`/api/auth?username=${encodeURIComponent(savedUser)}`)
             .then((r) => r.json())
             .then((data) => {
@@ -49,6 +153,13 @@ export default function Home() {
             })
             .catch(() => {});
         }
+
+        // Load accounts from Supabase
+        loadAccountsFromSupabase(savedUser).then((accs) => {
+          if (accs && accs.length > 0) {
+            setAccounts(accs);
+          }
+        });
       }
     }
   }, []);
@@ -72,27 +183,22 @@ export default function Home() {
           .catch(() => {});
       }
     }
+
+    // Load accounts for new user
+    loadAccountsFromSupabase(username).then((accs) => {
+      setAccounts(accs || []);
+    });
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
     setSecretCode('');
+    setAccounts([]);
     setIsMobileSidebarOpen(false);
     if (typeof window !== 'undefined') {
       localStorage.removeItem('pebbleafk_current_user');
     }
   };
-
-  const {
-    status: daemonStatus,
-    daemonUrl,
-    setDaemonUrl,
-    authToken,
-    setAuthToken,
-    latency,
-    reconnect,
-    restartDaemon,
-  } = useDaemonSocket(currentUser);
 
   // 1-Click Termux Command with exact secretCode
   const termux1ClickCmd = currentUser
@@ -126,6 +232,48 @@ export default function Home() {
       clearInterval(interval);
     };
   }, [currentUser, daemonUrl, secretCode, authToken, setDaemonUrl, setAuthToken]);
+
+  // Start Microsoft OAuth login via daemon
+  const handleStartMicrosoftLogin = async (target?: BedrockAccount | string) => {
+    if (!currentUser) {
+      setIsAuthOpen(true);
+      return;
+    }
+
+    if (accounts.filter((a) => a.verified).length >= 5 && !target) {
+      showToast('Maximum account limit (5 accounts) reached.', 'error');
+      return;
+    }
+
+    if (daemonStatus !== 'AUTHENTICATED') {
+      showToast('Termux daemon is offline! Click the daemon circle in the top right to start it.', 'error');
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    setIsAccountsOpen(false);
+    setMsAuthError(null);
+
+    const targetId = typeof target === 'object' && target ? target.id : `acc_${Math.random().toString(36).substring(2, 9)}`;
+    const expectedIgn = typeof target === 'string' ? target : target?.expectedIgn || target?.ign;
+    const rawTargetEmail = typeof target === 'string' ? target : (target?.expectedIgn || target?.ign || (!target?.username?.includes('@') ? target?.username : null) || '');
+    const targetEmail = rawTargetEmail.toLowerCase() === 'new_account' ? '' : rawTargetEmail;
+
+    setPendingTarget({ id: targetId, expectedIgn });
+    showToast('Requesting Microsoft sign-in via Termux daemon...', 'info');
+    verifyAccount(targetId, targetEmail);
+  };
+
+  // Delete / Unlink Account
+  const handleDeleteAccount = async (id: string) => {
+    const acc = accounts.find((a) => a.id === id);
+    if (acc && currentUser) {
+      const ign = acc.ign || acc.username;
+      await deleteAccountFromSupabase(currentUser, ign);
+    }
+    setAccounts((prev) => prev.filter((a) => a.id !== id));
+    showToast('Bedrock account unlinked.', 'info');
+  };
 
   // Status dot style for daemon button
   const getDaemonRingStyle = () => {
@@ -194,9 +342,31 @@ export default function Home() {
     );
   }
 
+  const verifiedAccountsCount = accounts.filter((a) => a.verified).length;
+
   // 2. LOGGED-IN VIEW: Matching Image 2
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
+      {/* Toast Notification */}
+      {toast && (
+        <div className="fixed bottom-5 right-5 z-70 animate-in slide-in-from-bottom-2 fade-in duration-200">
+          <div
+            className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl shadow-xl text-xs font-bold border ${
+              toast.type === 'success'
+                ? 'bg-emerald-900 text-emerald-100 border-emerald-700'
+                : toast.type === 'error'
+                ? 'bg-rose-900 text-rose-100 border-rose-700'
+                : 'bg-slate-900 text-slate-100 border-slate-700'
+            }`}
+          >
+            {toast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+            {toast.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
+            {toast.type === 'info' && <Info className="w-4 h-4 text-sky-400 shrink-0" />}
+            <span>{toast.message}</span>
+          </div>
+        </div>
+      )}
+
       {/* Mobile Top Header Bar */}
       <div className="md:hidden flex items-center justify-between p-3.5 bg-white border-b border-slate-200/90 shrink-0 sticky top-0 z-30 shadow-2xs">
         <div className="flex items-center gap-2.5">
@@ -247,7 +417,7 @@ export default function Home() {
           }`}
         >
           <div>
-            {/* Logo Bar inside Sidebar (Matching Image 2) */}
+            {/* Logo Bar inside Sidebar */}
             <div className="p-4 border-b border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
               <button
                 type="button"
@@ -322,11 +492,11 @@ export default function Home() {
 
               <button
                 onClick={() => {
-                  setActiveTab('accounts');
+                  setIsAccountsOpen(true);
                   setIsMobileSidebarOpen(false);
                 }}
                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-                  activeTab === 'accounts'
+                  isAccountsOpen
                     ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
@@ -338,7 +508,7 @@ export default function Home() {
                   <span>Accounts</span>
                 </div>
                 <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
-                  0/5
+                  {verifiedAccountsCount}/5
                 </span>
               </button>
             </div>
@@ -388,10 +558,10 @@ export default function Home() {
             </div>
           </header>
 
-          {/* Main Scrollable Content: Clean Dashboard Placeholder */}
+          {/* Main Scrollable Content */}
           <main className="flex-1 bg-grid-slate p-3 sm:p-6 overflow-y-auto">
             <div className="max-w-4xl mx-auto space-y-6">
-              {/* Hero Banner Placeholder */}
+              {/* Hero Banner */}
               <div className="relative overflow-hidden rounded-3xl bg-white p-6 sm:p-8 border border-slate-200/90 shadow-xs">
                 <div className="space-y-3">
                   <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold tracking-wide">
@@ -410,12 +580,19 @@ export default function Home() {
 
                   <div className="flex items-center gap-3 pt-2 flex-wrap">
                     <button
-                      onClick={() => setIsSettingsOpen(true)}
+                      onClick={() => setIsAccountsOpen(true)}
                       className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
                     >
-                      <Radio className="w-4 h-4" />
+                      <UserPlus className="w-4 h-4" />
+                      <span>Manage Bedrock Accounts ({verifiedAccountsCount}/5)</span>
+                    </button>
+
+                    <button
+                      onClick={() => setIsSettingsOpen(true)}
+                      className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
+                    >
+                      <Radio className="w-4 h-4 text-emerald-600" />
                       <span>Termux Daemon Bridge</span>
-                      <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
                     </button>
                   </div>
                 </div>
@@ -441,13 +618,16 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
+                <button
+                  onClick={() => setIsAccountsOpen(true)}
+                  className="p-4 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200/80 shadow-2xs space-y-1 text-left transition cursor-pointer"
+                >
                   <span className="text-[10px] font-bold uppercase text-slate-400 block">Bedrock Accounts</span>
                   <div className="flex items-center gap-1.5">
                     <Users className="w-3.5 h-3.5 text-slate-500" />
-                    <span className="text-xs font-bold text-slate-900">0 / 5</span>
+                    <span className="text-xs font-bold text-slate-900">{verifiedAccountsCount} / 5</span>
                   </div>
-                </div>
+                </button>
 
                 <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
                   <span className="text-[10px] font-bold uppercase text-slate-400 block">Engine Protocol</span>
@@ -466,7 +646,7 @@ export default function Home() {
                 <div className="space-y-1">
                   <h3 className="text-sm font-bold text-slate-900">No Server Profiles Yet</h3>
                   <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                    Server profiles and multi-bot management are being configured. Click the circular daemon icon in the top header to pair your Termux runner.
+                    Server profiles and multi-bot management are being configured. Click the button above to link your Bedrock accounts!
                   </p>
                 </div>
               </div>
@@ -474,6 +654,27 @@ export default function Home() {
           </main>
         </div>
       </div>
+
+      {/* Account Management Modal */}
+      <AccountModal
+        isOpen={isAccountsOpen}
+        onClose={() => setIsAccountsOpen(false)}
+        accounts={accounts}
+        onStartMicrosoftLogin={handleStartMicrosoftLogin}
+        onDeleteAccount={handleDeleteAccount}
+      />
+
+      {/* Microsoft OAuth Device Code Modal */}
+      {msAuthData && (
+        <MicrosoftAuthModal
+          authData={msAuthData}
+          onClose={() => {
+            setMsAuthData(null);
+            setPendingTarget(null);
+          }}
+          errorMessage={msAuthError}
+        />
+      )}
 
       {/* Settings / Termux Daemon Bridge Modal */}
       <SettingsModal

@@ -1,8 +1,11 @@
+import fs from 'fs';
+import path from 'path';
 import chalk from 'chalk';
 import { Authflow, Titles } from 'prismarine-auth';
+import { XboxClient } from 'prismarine-xbox-services';
 import { BotConfig, ClientMessage, DaemonMessage } from '../types';
 import { PebbleBotInstance } from './botInstance';
-import { getAndSyncTokenFolder } from './tokenManager';
+import { getAndSyncTokenFolder, ensureTokenAliases, backupTokens } from './tokenManager';
 
 export class BotManager {
   private bots: Map<string, PebbleBotInstance> = new Map();
@@ -110,6 +113,10 @@ export class BotManager {
         break;
       }
 
+      case 'VERIFY_ACCOUNT':
+        this.verifyAccount(msg.payload.accountId, msg.payload.email);
+        break;
+
       case 'REQUEST_SYNC': {
         for (const [botId, instance] of Array.from(this.bots.entries())) {
           this.broadcastFn({
@@ -137,6 +144,13 @@ export class BotManager {
 
     try {
       const profilesFolder = getAndSyncTokenFolder();
+
+      // Clean up any stale directory if present
+      const staleNewAccFolder = path.join(profilesFolder, 'new_account');
+      if (fs.existsSync(staleNewAccFolder)) {
+        try { fs.rmSync(staleNewAccFolder, { recursive: true, force: true }); } catch (_) {}
+      }
+
       const options = {
         authTitle: Titles.MinecraftNintendoSwitch,
         deviceType: 'Nintendo',
@@ -162,25 +176,58 @@ export class BotManager {
         });
       });
 
-      const xboxRes = await flow.getXboxToken();
-      if (verificationId !== this.currentVerificationId) return;
+      let realGamertag = email && !email.startsWith('bedrock_user_') ? email : '';
+      let xuid = '';
 
-      const userHash = xboxRes?.userHash || '';
-      const xuid = (xboxRes as any)?.userXUID || (xboxRes as any)?.xuid || '';
-      const gamertag = email || authKey;
+      try {
+        const xbox = new XboxClient(flow as any);
+        const profile = await xbox.getProfile('me');
+        if (profile?.gamertag) {
+          realGamertag = profile.gamertag;
+        }
+        if (profile?.xuid) {
+          xuid = String(profile.xuid);
+        }
+      } catch (errProfile: any) {
+        console.warn(chalk.yellow(`[Auth] Xbox profile lookup: ${errProfile.message}, fetching token directly...`));
+        const xboxRes = await flow.getXboxToken();
+        xuid = (xboxRes as any)?.userXUID || (xboxRes as any)?.xuid || '';
+        if (!realGamertag) {
+          realGamertag = email || authKey;
+        }
+      }
+
+      if (verificationId !== this.currentVerificationId) {
+        console.log(chalk.yellow(`[Auth] Discarding outdated verification result for ${authKey}`));
+        return;
+      }
+
+      if (!realGamertag) {
+        realGamertag = email || authKey;
+      }
+
+      // Ensure 90-day rolling token aliases are created
+      ensureTokenAliases(profilesFolder, authKey, realGamertag);
+      ensureTokenAliases(profilesFolder, realGamertag, authKey);
+      backupTokens(profilesFolder);
 
       this.broadcastFn({
         type: 'ACCOUNT_VERIFIED',
         payload: {
           botId: accountId,
           email: authKey,
-          ign: gamertag,
-          uuid: xuid || userHash,
+          ign: realGamertag,
+          uuid: xuid,
         },
       });
-      console.log(chalk.green(`[Auth] Xbox authentication verified for ${gamertag}`));
+      console.log(chalk.green(`[Auth Success] Bedrock/Xbox verified as: ${realGamertag} (XUID: ${xuid})`));
     } catch (err: any) {
+      if (verificationId !== this.currentVerificationId) return;
       console.error(chalk.red(`[Auth] Device verification error:`), err.message);
+      this.broadcastFn({
+        type: 'AUTH_RESULT',
+        payload: { success: false, message: err.message || 'Xbox authentication failed' },
+      });
     }
   }
 }
