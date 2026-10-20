@@ -82,24 +82,33 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git pull origin main 2>/dev/null || true
 fi
 
+# Clean up any residual processes on port 8080 silently
 echo "=== PebbleAFK Daemon Started $(date) ===" > daemon.log
-pkill -9 -f "cloudflared" 2>/dev/null || true
-pkill -9 -f "tsx" 2>/dev/null || true
-pkill -9 -f "node.*index" 2>/dev/null || true
-pkill -9 -f "pebbleafk" 2>/dev/null || true
-pkill -9 -f "pebbleafk_heartbeat" 2>/dev/null || true
-pkill -9 -f "curl.*tunnel" 2>/dev/null || true
+pkill -9 -f "cloudflared" >/dev/null 2>&1 || true
+pkill -9 -f "tsx" >/dev/null 2>&1 || true
+pkill -9 -f "node.*index" >/dev/null 2>&1 || true
+pkill -9 -f "pebbleafk" >/dev/null 2>&1 || true
+pkill -9 -f "pebbleafk_heartbeat" >/dev/null 2>&1 || true
+pkill -9 -f "curl.*tunnel" >/dev/null 2>&1 || true
 if command -v fuser &> /dev/null; then
-  fuser -k -9 8080/tcp 2>/dev/null || true
+  fuser -k -9 8080/tcp >/dev/null 2>&1 || true
 fi
 if command -v lsof &> /dev/null; then
-  lsof -ti:8080 | xargs -r kill -9 2>/dev/null || true
+  (lsof -ti :8080 2>/dev/null || true) | xargs -r kill -9 >/dev/null 2>&1 || true
 fi
 if [ -f "$HOME/.pebbleafk_heartbeat.pid" ]; then
   kill -9 "$(cat "$HOME/.pebbleafk_heartbeat.pid")" 2>/dev/null || true
   rm -f "$HOME/.pebbleafk_heartbeat.pid"
 fi
 sleep 1
+
+# Ensure RakNet native engine is compiled for this device architecture
+if [ -d "node_modules/raknet-native" ] && [ ! -f "node_modules/raknet-native/build/Release/node-raknet.node" ]; then
+  if command -v cmake &> /dev/null && command -v clang &> /dev/null; then
+    echo -e "      ${CYAN}Building high-performance native RakNet for Android ARM64...${NC}"
+    (cd node_modules/raknet-native && npx cmake-js compile >/dev/null 2>&1 || true)
+  fi
+fi
 
 cat << ENVEOF > .env
 PORT=8080

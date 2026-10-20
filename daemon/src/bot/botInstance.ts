@@ -53,8 +53,6 @@ export class PebbleBotInstance {
         profilesFolder: isOffline ? undefined : profilesFolder,
         skipPing: false,
         connectTimeout: 30000,
-        raknetBackend: 'jsp-raknet',
-        useNativeRaknet: false,
         onMsaCode: (data: any) => {
           console.log(chalk.yellow(`[MS Auth] Code for ${this.config.username}: ${data.user_code}`));
           const directUri = data.user_code
@@ -77,7 +75,7 @@ export class PebbleBotInstance {
         clientOptions.version = this.config.version;
       }
 
-      console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (offline: ${isOffline}, RakNet: jsp-raknet)`));
+      console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (offline: ${isOffline})`));
       const client = bedrock.createClient(clientOptions);
       this.client = client;
 

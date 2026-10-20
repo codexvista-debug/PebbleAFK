@@ -19,7 +19,7 @@ echo -e "\\033[0m"
 # 1. Dependency checks
 echo -e "\\033[1;34m[1/3]\\033[0m 📦 Checking environment & dependencies..."
 NEEDED_PKGS=()
-for pkg in git nodejs-lts npm cloudflared termux-api; do
+for pkg in git nodejs-lts npm cloudflared termux-api clang make cmake python build-essential; do
   if ! command -v $pkg >/dev/null 2>&1; then
     NEEDED_PKGS+=($pkg)
   fi
@@ -49,28 +49,32 @@ else
   echo -e "      \\033[1;32m✓ Cloned successfully.\\033[0m"
 fi
 
-# 3. Install packages if needed (use --ignore-scripts for pure JS RakNet on Android)
+# 3. Install packages & build native RakNet engine
 cd daemon
-if [ ! -d "node_modules" ] || [ ! -d "node_modules/bedrock-protocol" ]; then
-  echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Installing Node modules (Bedrock Protocol)..."
-  npm install --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 || npm install --ignore-scripts >/dev/null 2>&1 || true
+if [ ! -d "node_modules" ] || [ ! -d "node_modules/bedrock-protocol" ] || [ ! -f "node_modules/raknet-native/build/Release/node-raknet.node" ]; then
+  echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Configuring Bedrock RakNet engine..."
+  export FORCE_BUILD=true
+  npm install --no-audit --no-fund >/dev/null 2>&1 || npm install >/dev/null 2>&1 || true
+  if [ -d "node_modules/raknet-native" ] && [ ! -f "node_modules/raknet-native/build/Release/node-raknet.node" ]; then
+    (cd node_modules/raknet-native && npx cmake-js compile >/dev/null 2>&1 || true)
+  fi
   echo -e "      \\033[1;32m✓ Modules configured successfully.\\033[0m"
 else
   echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Modules verified."
 fi
 
-# 4. Clean up any previous background instances
-pkill -9 -f "cloudflared" 2>/dev/null || true
-pkill -9 -f "tsx" 2>/dev/null || true
-pkill -9 -f "node.*index" 2>/dev/null || true
-pkill -9 -f "pebbleafk" 2>/dev/null || true
-pkill -9 -f "pebbleafk_heartbeat" 2>/dev/null || true
-pkill -9 -f "curl.*tunnel" 2>/dev/null || true
+# 4. Clean up any previous background instances silently
+pkill -9 -f "cloudflared" >/dev/null 2>&1 || true
+pkill -9 -f "tsx" >/dev/null 2>&1 || true
+pkill -9 -f "node.*index" >/dev/null 2>&1 || true
+pkill -9 -f "pebbleafk" >/dev/null 2>&1 || true
+pkill -9 -f "pebbleafk_heartbeat" >/dev/null 2>&1 || true
+pkill -9 -f "curl.*tunnel" >/dev/null 2>&1 || true
 if command -v fuser &> /dev/null; then
-  fuser -k -9 8080/tcp 2>/dev/null || true
+  fuser -k -9 8080/tcp >/dev/null 2>&1 || true
 fi
 if command -v lsof &> /dev/null; then
-  lsof -ti:8080 | xargs -r kill -9 2>/dev/null || true
+  (lsof -ti :8080 2>/dev/null || true) | xargs -r kill -9 >/dev/null 2>&1 || true
 fi
 if [ -f "$HOME/.pebbleafk_heartbeat.pid" ]; then
   kill -9 "$(cat "$HOME/.pebbleafk_heartbeat.pid")" 2>/dev/null || true

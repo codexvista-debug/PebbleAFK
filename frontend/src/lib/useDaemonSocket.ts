@@ -35,6 +35,7 @@ export function useDaemonSocket(
 
   const [status, setStatus] = useState<SocketStatus>('DISCONNECTED');
   const [botStates, setBotStates] = useState<Record<string, BotLifecycleState>>({});
+  const [botReasons, setBotReasons] = useState<Record<string, string>>({});
   const [telemetries, setTelemetries] = useState<Record<string, Telemetry>>({});
   const [messagesByBot, setMessagesByBot] = useState<Record<string, ChatMessage[]>>({});
   const [activityLogs, setActivityLogs] = useState<Record<string, ActivityLog[]>>({});
@@ -158,6 +159,12 @@ export function useDaemonSocket(
               ...prev,
               [msg.payload.botId]: msg.payload.state,
             }));
+            if (msg.payload.reason) {
+              setBotReasons((prev) => ({
+                ...prev,
+                [msg.payload.botId]: msg.payload.reason,
+              }));
+            }
           }
 
           if (msg.type === 'TELEMETRY') {
@@ -250,6 +257,7 @@ export function useDaemonSocket(
     setAuthToken,
     latency,
     botStates,
+    botReasons,
     telemetries,
     messagesByBot,
     activityLogs,

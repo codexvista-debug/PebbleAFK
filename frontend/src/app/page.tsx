@@ -346,6 +346,7 @@ export default function Home() {
     setAuthToken,
     latency,
     botStates,
+    botReasons,
     telemetries,
     messagesByBot,
     reconnect,
@@ -838,9 +839,11 @@ export default function Home() {
               'info'
             );
           } else if (st === 'KICKED') {
-            addPlayerLog(ign, srv.serverHost, 'kicked', `Kicked from server: ${srv.serverHost}`, undefined, 'error');
+            const reason = botReasons[botKey] ? `: ${botReasons[botKey]}` : '';
+            addPlayerLog(ign, srv.serverHost, 'kicked', `Kicked from ${srv.serverHost}${reason}`, undefined, 'error');
           } else if (st === 'ERROR') {
-            addPlayerLog(ign, srv.serverHost, 'error', `Connection error: ${srv.serverHost}`, undefined, 'error');
+            const reason = botReasons[botKey] ? `: ${botReasons[botKey]}` : '';
+            addPlayerLog(ign, srv.serverHost, 'error', `Connection error (${srv.serverHost})${reason}`, undefined, 'error');
           } else if (st === 'DISCONNECTED' && prevSt && prevSt !== 'DISCONNECTED') {
             addPlayerLog(ign, srv.serverHost, 'disconnected', `Disconnected from ${srv.serverHost}`, undefined, 'warning');
           }
@@ -848,7 +851,7 @@ export default function Home() {
       }
     });
     prevBotStatesRef.current = { ...botStates };
-  }, [botStates, daemonStatus, servers, accounts, addPlayerLog]);
+  }, [botStates, botReasons, daemonStatus, servers, accounts, addPlayerLog]);
 
   // Connect / Disconnect all checked accounts
   const handleConnectSelected = () => {
