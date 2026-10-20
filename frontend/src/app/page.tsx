@@ -40,7 +40,8 @@ import {
   RotateCw,
   CornerDownLeft,
   Edit3,
-  Terminal
+  Terminal,
+  ArrowUp
 } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
@@ -1580,10 +1581,10 @@ export default function Home() {
                             updateDaemon();
                             showToast('🔄 Updating Bedrock daemon from GitHub...', 'info');
                           }}
-                          className="px-4 py-2.5 rounded-xl bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-800 text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
+                          className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
                           title="Fetch latest updates from GitHub and restart daemon"
                         >
-                          <RotateCw className="w-4 h-4 text-sky-600" />
+                          <ArrowUp className="w-4 h-4 stroke-[2.5]" />
                           <span>Update Engine</span>
                         </button>
                       )}

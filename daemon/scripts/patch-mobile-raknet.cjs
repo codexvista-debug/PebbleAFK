@@ -97,6 +97,14 @@ try {
 
   patchFile(
     'node_modules/jsp-raknet/js/Connection.js',
+    'const CONNECTION_TIMEOUT = 10000;',
+    'const CONNECTION_TIMEOUT = 30000;',
+    'CONNECTION_TIMEOUT = 30000',
+    'jsp-raknet 30-second mobile timeout tolerance'
+  )
+
+  patchFile(
+    'node_modules/jsp-raknet/js/Connection.js',
     '        if (this.recvQueue.length) {\n            const messages = this.recvQueue.splice(0, 4);',
     '        if (this.recvQueue.length) {\n            const messages = this.recvQueue.splice(0, this.recvQueue.length);',
     'this.recvQueue.splice(0, this.recvQueue.length)',

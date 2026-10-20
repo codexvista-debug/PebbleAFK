@@ -166,6 +166,34 @@ const BEDROCK_DISCONNECT_REASONS: Record<number, string> = {
   13: 'Kicked: server whitelist active',
 };
 
+const RAKNET_DISCONNECT_REASONS: Record<string, string> = {
+  '16': 'ID_CONNECTION_REQUEST_ACCEPTED',
+  '17': 'Connection attempt failed (server unreachable or offline)',
+  '18': 'Already connected to server',
+  '19': 'New incoming connection',
+  '20': 'Server is full (no free incoming connections)',
+  '21': 'Server closed connection (disconnection notification)',
+  '22': 'Connection lost (RakNet reliable packet timeout: packets/ACKs dropped by network)',
+  '23': 'Banned from server',
+  '24': 'Invalid server password',
+  '25': 'Incompatible RakNet protocol version',
+  '26': 'Connection rate-limited (IP recently connected)',
+  'timeout': 'Connection timed out (no packets received from server)',
+};
+
+export function formatDisconnectReason(raw: any): string {
+  if (raw === undefined || raw === null) return '';
+  const str = typeof raw === 'object' ? (raw?.message || JSON.stringify(raw)) : String(raw).trim();
+  if (RAKNET_DISCONNECT_REASONS[str]) {
+    return RAKNET_DISCONNECT_REASONS[str];
+  }
+  const num = Number(str);
+  if (Number.isFinite(num) && BEDROCK_DISCONNECT_REASONS[num]) {
+    return BEDROCK_DISCONNECT_REASONS[num];
+  }
+  return stripMinecraftFormatting(str);
+}
+
 export class PebbleBotInstance {
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
@@ -291,19 +319,19 @@ export class PebbleBotInstance {
       const client = bedrock.createClient(clientOptions);
       this.client = client;
 
-      this.applyFastPath(client);
-      client.once('connect_allowed', () => this.applyFastPath(client));
+      this.hookConnectionDiagnostics(client);
+      client.once('connect_allowed', () => this.hookConnectionDiagnostics(client));
 
       // Session event: Microsoft/Xbox authentication finished
       client.once('session', () => {
-        this.applyFastPath(client);
+        this.hookConnectionDiagnostics(client);
         console.log(chalk.green(`[PebbleAFK] Bedrock session established for ${this.config.username}`));
         this.logActivity('connect', 'Microsoft/Xbox authentication verified; joining game server...');
       });
 
       // Join event: Server accepted player connection
       client.on('join', () => {
-        this.applyFastPath(client);
+        this.hookConnectionDiagnostics(client);
         this.connectStartTime = Date.now();
         this.updateState('LOGGED_IN');
         this.logActivity('connect', `Successfully joined Bedrock server ${this.config.host}:${this.config.port}`);
@@ -312,7 +340,7 @@ export class PebbleBotInstance {
 
       // Spawn event: Player loaded into the world
       client.on('spawn', () => {
-        this.applyFastPath(client);
+        this.hookConnectionDiagnostics(client);
         if (!this.connectStartTime) this.connectStartTime = Date.now();
         this.updateState('SPAWNED');
         this.logActivity('spawn', '🌍 Spawned into Bedrock world!');
@@ -488,6 +516,7 @@ export class PebbleBotInstance {
         if (!reason) {
           reason = 'Server closed connection / session ended';
         }
+        reason = formatDisconnectReason(reason);
         this.lastDisconnectReason = reason;
 
         // Auto-detect version requirement if server reports client is outdated
@@ -513,11 +542,11 @@ export class PebbleBotInstance {
         if (this.isTransferring) return;
         let reason = '';
         if (packet?.message) {
-          reason = stripMinecraftFormatting(packet.message);
+          reason = formatDisconnectReason(packet.message);
         } else if (packet?.filtered_message) {
-          reason = stripMinecraftFormatting(packet.filtered_message);
+          reason = formatDisconnectReason(packet.filtered_message);
         } else if (packet?.reason != null) {
-          reason = BEDROCK_DISCONNECT_REASONS[Number(packet.reason)] || `Kick code #${packet.reason}`;
+          reason = formatDisconnectReason(packet.reason);
         }
         handleDisconnect(reason || 'Kicked by server', false);
       });
@@ -527,11 +556,11 @@ export class PebbleBotInstance {
         if (this.isTransferring) return;
         let reason = '';
         if (packet?.message) {
-          reason = stripMinecraftFormatting(packet.message);
+          reason = formatDisconnectReason(packet.message);
         } else if (packet?.filtered_message) {
-          reason = stripMinecraftFormatting(packet.filtered_message);
+          reason = formatDisconnectReason(packet.filtered_message);
         } else if (packet?.reason != null) {
-          reason = BEDROCK_DISCONNECT_REASONS[Number(packet.reason)] || `Disconnect code #${packet.reason}`;
+          reason = formatDisconnectReason(packet.reason);
         }
         handleDisconnect(reason || 'Disconnected from server', false);
       });
@@ -540,7 +569,7 @@ export class PebbleBotInstance {
       client.on('error', (err: any) => {
         if (this.isTransferring) return;
         const errMsg = err?.message || String(err);
-        let descriptiveReason = errMsg;
+        let descriptiveReason = formatDisconnectReason(errMsg);
         if (errMsg.includes('Connect timed out') || errMsg.includes('timed out')) {
           descriptiveReason = `Connect timed out: ${cleanHost}:${cleanPort} sent no reply to RakNet UDP packets. (Server Bedrock gateway offline or filtering UDP traffic).`;
         }
@@ -584,7 +613,7 @@ export class PebbleBotInstance {
     }
 
     try {
-      this.applyFastPath(this.client);
+      this.hookConnectionDiagnostics(this.client);
       if (message.startsWith('/')) {
         // Send as Bedrock command
         const uuid = randomUUID();
@@ -669,6 +698,10 @@ export class PebbleBotInstance {
 
   private startTickSyncLoop(client: any) {
     if (this.tickSyncInterval) clearInterval(this.tickSyncInterval);
+    // Modern Bedrock protocols (1.20.80+) do not use client tick_sync; bedrock-protocol manages this internally when needed.
+    if (typeof client.versionLessThanOrEqualTo === 'function' && !client.versionLessThanOrEqualTo('1.20.80')) {
+      return;
+    }
     this.clientTick = 0n;
     this.tickSyncInterval = setInterval(() => {
       if (this.client !== client || (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN')) return;
@@ -689,7 +722,8 @@ export class PebbleBotInstance {
     this.playerAuthInterval = setInterval(() => {
       if (this.client !== client || (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN') || !this.hasSpawnedPosition) return;
       try {
-        this.clientTick += 2n;
+        // Increment tick by 4 every 200ms (maintains exactly 20 ticks per second)
+        this.clientTick += 4n;
 
         // Continuous player authoritative inputs prevent Bedrock server / Geyser timeout watchdogs
         client.write('player_auth_input', {
@@ -710,7 +744,7 @@ export class PebbleBotInstance {
           raw_move_vector: { x: 0, z: 0 },
         });
       } catch (_) {}
-    }, 100);
+    }, 200);
   }
 
   private setupAntiAfk() {
@@ -984,42 +1018,17 @@ export class PebbleBotInstance {
     }, delay);
   }
 
-  private applyFastPath(client: any) {
+  private hookConnectionDiagnostics(client: any) {
     if (!client) return;
     try {
-      if (!client._immediateSendPatched) {
-        client._immediateSendPatched = true;
-        const origSendMCPE = client.sendMCPE?.bind(client);
-        if (origSendMCPE) {
-          client.sendMCPE = (buffer: any, immediate?: boolean) => {
-            return origSendMCPE(buffer, true);
-          };
-        }
-      }
-
-      if (!client._encryptedImmediatePatched) {
-        client._encryptedImmediatePatched = true;
-        const origOnEncrypted = client.onEncryptedPacket;
-        if (typeof origOnEncrypted === 'function') {
-          client.onEncryptedPacket = (buf: any) => {
-            const packet = client.batchHeader ? Buffer.concat([Buffer.from([client.batchHeader]), buf]) : buf;
-            client.sendMCPE(packet, true);
-          };
-          if (client.cipher) {
-            client.cipher.removeListener('data', origOnEncrypted);
-            client.cipher.on('data', client.onEncryptedPacket);
-          }
-        }
-      }
-
       const conn = client.connection;
       if (conn && !conn._disconnectReasonHooked) {
         conn._disconnectReasonHooked = true;
         const origOnClose = conn.onCloseConnection;
         conn.onCloseConnection = (reason: any) => {
-          if (reason) {
-            const reasonStr = typeof reason === 'object' ? (reason?.message || JSON.stringify(reason)) : String(reason);
-            this.lastDisconnectReason = reasonStr;
+          if (reason !== undefined && reason !== null) {
+            const decoded = formatDisconnectReason(reason);
+            if (decoded) this.lastDisconnectReason = decoded;
           }
           if (typeof origOnClose === 'function') {
             origOnClose(reason);
@@ -1031,57 +1040,11 @@ export class PebbleBotInstance {
         conn.raknet._disconnectHooked = true;
         conn.raknet.on('disconnect', (ev: any) => {
           const r = ev?.reason || ev?.message || ev;
-          if (r) {
-            const reasonStr = typeof r === 'object' ? (r?.message || JSON.stringify(r)) : String(r);
-            this.lastDisconnectReason = reasonStr;
+          if (r !== undefined && r !== null) {
+            const decoded = formatDisconnectReason(r);
+            if (decoded) this.lastDisconnectReason = decoded;
           }
         });
-      }
-
-      if (conn && !conn._immediateSendReliablePatched) {
-        conn._immediateSendReliablePatched = true;
-        if (typeof conn.sendReliable === 'function') {
-          const origSend = conn.sendReliable.bind(conn);
-          conn.sendReliable = (buffer: any, immediate?: boolean) => {
-            return origSend(buffer, true);
-          };
-        }
-        if (typeof conn.plainSendReliable === 'function') {
-          const origPlain = conn.plainSendReliable.bind(conn);
-          conn.plainSendReliable = (buffer: any, immediate?: boolean) => {
-            const res = origPlain(buffer, true);
-            try { conn.raknet?.connection?.sendQueue(); } catch (_) {}
-            return res;
-          };
-        }
-      }
-
-      const rakClient = conn?.raknet;
-      const innerConn = rakClient?.connection;
-      if (innerConn && !innerConn._fastQueuePatched) {
-        innerConn._fastQueuePatched = true;
-
-        const origAdd = innerConn.addEncapsulatedToQueue?.bind(innerConn);
-        if (origAdd) {
-          innerConn.addEncapsulatedToQueue = function (pk: any, flags: any) {
-            const res = origAdd(pk, flags);
-            try { innerConn.sendQueue(); } catch (_) {}
-            return res;
-          };
-        }
-
-        const origUpdate = innerConn.update?.bind(innerConn);
-        if (origUpdate) {
-          innerConn.update = function (timestamp: number) {
-            while (innerConn.recvQueue && innerConn.recvQueue.length > 0) {
-              const chunk = innerConn.recvQueue.splice(0, 32);
-              for (const msg of chunk) {
-                try { innerConn.receiveOnline(msg); } catch (_) {}
-              }
-            }
-            return origUpdate(timestamp);
-          };
-        }
       }
     } catch (_) {}
   }

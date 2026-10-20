@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Copy, Check, RotateCw, Trash2, ArrowDownCircle, RefreshCw, Power } from 'lucide-react';
+import { Terminal, Copy, Check, Trash2, ArrowDownCircle, ArrowUp } from 'lucide-react';
 
 interface TermuxStreamPageProps {
   logs: string[];
@@ -101,8 +101,8 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
             </div>
           </div>
 
-          {/* Quick Action Toolbar - Compact Icon-Only Buttons */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          {/* Quick Action Toolbar - Cleaned and Prominent Update Action */}
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => {
@@ -133,15 +133,6 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
 
             <button
               type="button"
-              onClick={onFetchLogs}
-              title="Refresh logs from daemon"
-              className="p-2 rounded-xl bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 transition cursor-pointer shadow-2xs flex items-center justify-center"
-            >
-              <RotateCw className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
               onClick={onClearLogs}
               title="Clear terminal view buffer"
               className="p-2 rounded-xl bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-200 transition cursor-pointer shadow-2xs flex items-center justify-center"
@@ -149,25 +140,15 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
               <Trash2 className="w-4 h-4" />
             </button>
 
-            {onRestartDaemon && (
-              <button
-                type="button"
-                onClick={onRestartDaemon}
-                title="Reboot Bedrock daemon core"
-                className="p-2 rounded-xl bg-white hover:bg-amber-50 text-amber-600 border border-slate-200 hover:border-amber-200 transition cursor-pointer shadow-2xs flex items-center justify-center"
-              >
-                <Power className="w-4 h-4" />
-              </button>
-            )}
-
             {onUpdateDaemon && (
               <button
                 type="button"
                 onClick={onUpdateDaemon}
                 title="Update Engine: Pull latest code from GitHub & reload"
-                className="p-2 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-300 transition cursor-pointer shadow-2xs flex items-center justify-center"
+                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs border border-emerald-500 shadow-sm transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1.5"
               >
-                <RefreshCw className="w-4 h-4" />
+                <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                <span className="hidden sm:inline">Update</span>
               </button>
             )}
           </div>
