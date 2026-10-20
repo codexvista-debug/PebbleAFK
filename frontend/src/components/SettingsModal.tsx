@@ -212,8 +212,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span>Termux will automatically sync your tunnel to this dashboard with zero copy-pasting.</span>
               </div>
               <div className="text-[11px] text-slate-500 leading-relaxed flex items-center gap-1">
-                <span className="text-sky-700 font-bold">🔄 Quick Update:</span>
-                <span>In Termux, simply type <code className="px-1.5 py-0.5 rounded bg-slate-100 text-sky-800 font-mono font-bold">u</code> and press Enter, or click <b>Update Engine</b> above.</span>
+                <span className="text-sky-700 font-bold">🔄 1-Click Update:</span>
+                <span>Click the <b>Update Engine</b> button above anytime to pull latest updates remotely.</span>
               </div>
             </div>
           </div>

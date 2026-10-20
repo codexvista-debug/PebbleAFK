@@ -108,24 +108,6 @@ node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
 # Prepare native RakNet backend for Termux (enables full RakNet 11 + anti-DDoS cookie support)
 bash ./scripts/prepare-mobile-raknet.sh || true
 
-# Register 1-letter instant update command 'u' in Termux
-cat << 'EOF' > "$HOME/u"
-#!/data/data/com.termux/files/usr/bin/bash
-clear
-echo "🔄 Updating PebbleAFK from GitHub..."
-cd "$HOME/PebbleAFK" 2>/dev/null || cd "$HOME"
-git reset --hard HEAD 2>/dev/null || true
-git pull --force origin main
-cd daemon 2>/dev/null || true
-bash start.sh "$@"
-EOF
-chmod +x "$HOME/u" 2>/dev/null || true
-if [ -n "$PREFIX" ] && [ -d "$PREFIX/bin" ]; then
-  cp "$HOME/u" "$PREFIX/bin/u" 2>/dev/null || true
-  cp "$HOME/u" "$PREFIX/bin/update" 2>/dev/null || true
-  chmod +x "$PREFIX/bin/u" "$PREFIX/bin/update" 2>/dev/null || true
-fi
-
 cat << ENVEOF > .env
 PORT=8080
 PEBBLEAFK_OWNER=$APP_USER
@@ -202,16 +184,12 @@ else
 fi
 
 echo -e "\n  ${GREEN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "  ${GREEN}║${NC}   ${BOLD}✨ PebbleAFK Bedrock Daemon is RUNNING 24/7${NC}                    ${GREEN}║${NC}"
-echo -e "  ${GREEN}║${NC}   Connected to: ${CYAN}https://pebbleafk.vercel.app${NC}                    ${GREEN}║${NC}"
-echo -e "  ${GREEN}║${NC}   Live Tunnel : ${YELLOW}${WSS_URL}${NC}         ${GREEN}║${NC}"
+echo -e "  ${GREEN}║${NC}   ${BOLD}✨ PebbleAFK Bedrock Core is RUNNING 24/7${NC}                      ${GREEN}║${NC}"
+echo -e "  ${GREEN}║${NC}   Web Dashboard : ${CYAN}https://pebbleafk.vercel.app${NC}                    ${GREEN}║${NC}"
+echo -e "  ${GREEN}║${NC}   Live Tunnel   : ${YELLOW}${WSS_URL}${NC}         ${GREEN}║${NC}"
 echo -e "  ${GREEN}╚═══════════════════════════════════════════════════════════════════╝${NC}"
-echo -e "\n  ${YELLOW}⚡ SHORTCUTS & UPDATES:${NC}"
-echo -e "     • Web Dashboard : Click [${BOLD}${CYAN}Update Engine${NC}] for 1-click remote update"
-echo -e "     • Termux CLI    : Type [${BOLD}${CYAN}u${NC}] and press Enter anytime to update"
-echo -e "     • Keyboard      : Press [${BOLD}${CYAN}U${NC}] or [${BOLD}${CYAN}Ctrl + N${NC}] 🔄 Update & restart"
-echo -e "     • Quick Quit    : Press [${BOLD}${RED}Ctrl + C${NC}] or [${BOLD}${RED}Q${NC}] 🛑 Cleanly stop all services"
-echo -e "     • Core Restart  : Press [${BOLD}${YELLOW}R${NC}]       🔁 Quick restart Bedrock core"
+echo -e "  ${GRAY}• Remote updates: click [Update Engine] on web dashboard anytime${NC}"
+echo -e "  ${GRAY}• Press [Ctrl + C] to cleanly stop all services & exit${NC}"
 echo -e "${GRAY}─────────────────────────────────────────────────────────────────────${NC}"
 echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 
@@ -227,14 +205,7 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 HEARTBEAT_PID=$!
 echo "$HEARTBEAT_PID" > "$HOME/.pebbleafk_heartbeat.pid"
 
-# Stream logs in background
-tail -f daemon.log &
-TAIL_PID=$!
-
-OLD_STTY=$(stty -g 2>/dev/null || true)
-
 cleanup_and_exit() {
-  stty "$OLD_STTY" 2>/dev/null || stty sane 2>/dev/null || true
   echo -e "\n\n${YELLOW}[!] Stopping PebbleAFK Bedrock Daemon cleanly...${NC}"
   kill $TAIL_PID 2>/dev/null || true
   kill $HEARTBEAT_PID 2>/dev/null || true
@@ -263,67 +234,7 @@ cleanup_and_exit() {
 
 trap 'cleanup_and_exit; exit 0' SIGINT SIGTERM
 
-do_update_and_restart() {
-  stty "$OLD_STTY" 2>/dev/null || stty sane 2>/dev/null || true
-  kill $TAIL_PID 2>/dev/null || true
-  kill $HEARTBEAT_PID 2>/dev/null || true
-  rm -f "$HOME/.pebbleafk_heartbeat.pid" 2>/dev/null || true
-  echo -e "\n\n${CYAN}╔═══════════════════════════════════════════════════════════════╗${NC}"
-  echo -e "${CYAN}║  🔄 [Ctrl + N] Updating PebbleAFK to latest release...        ║${NC}"
-  echo -e "${CYAN}╚═══════════════════════════════════════════════════════════════╝${NC}"
-  
-  # Stop previous background daemon & tunnel before git pull
-  pkill -9 -f "cloudflared" >/dev/null 2>&1 || true
-  pkill -9 -f "tsx" >/dev/null 2>&1 || true
-  pkill -9 -f "node.*index" >/dev/null 2>&1 || true
-  if command -v fuser &> /dev/null; then
-    fuser -k -9 8080/tcp >/dev/null 2>&1 || true
-  fi
-
-  # Pull from GitHub repository root
-  if [ -d "$HOME/PebbleAFK/.git" ]; then
-    cd "$HOME/PebbleAFK"
-  else
-    cd "$(git rev-parse --show-toplevel 2>/dev/null || echo "..")"
-  fi
-  
-  echo -e "  ${CYAN}Fetching latest code from GitHub...${NC}"
-  git reset --hard HEAD >/dev/null 2>&1 || true
-  git pull --force origin main
-  cd daemon 2>/dev/null || true
-  
-  echo -e "  ${GREEN}✓ Update complete! Relaunching PebbleAFK Daemon...${NC}\n"
-  sleep 1
-  exec bash start.sh "$APP_USER" "$APP_SECRET"
-}
-
-# Put terminal in non-canonical mode so Ctrl+N and single keystrokes trigger immediately
-stty -icanon min 1 time 0 -echo 2>/dev/null || true
-
-while true; do
-  KEY=$(dd bs=1 count=1 2>/dev/null)
-  case "$KEY" in
-    $'\x0e'|[nN]|[uU])
-      do_update_and_restart
-      ;;
-    $'\x03'|[qQ])
-      cleanup_and_exit
-      exit 0
-      ;;
-    $'\x12'|[rR])
-      stty "$OLD_STTY" 2>/dev/null || stty sane 2>/dev/null || true
-      kill $TAIL_PID 2>/dev/null || true
-      kill $HEARTBEAT_PID 2>/dev/null || true
-      rm -f "$HOME/.pebbleafk_heartbeat.pid" 2>/dev/null || true
-      echo -e "\n\n${YELLOW}🔁 Restarting PebbleAFK Bedrock Daemon...${NC}"
-      pkill -9 -f "cloudflared" >/dev/null 2>&1 || true
-      pkill -9 -f "tsx" >/dev/null 2>&1 || true
-      pkill -9 -f "node.*index" >/dev/null 2>&1 || true
-      if command -v fuser &> /dev/null; then
-        fuser -k -9 8080/tcp >/dev/null 2>&1 || true
-      fi
-      sleep 1
-      exec bash start.sh "$APP_USER" "$APP_SECRET"
-      ;;
-  esac
-done
+# Stream logs continuously in foreground
+tail -f daemon.log &
+TAIL_PID=$!
+wait $TAIL_PID

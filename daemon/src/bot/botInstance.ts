@@ -44,19 +44,22 @@ function pingBedrockJsp(host: string, port: number, timeoutMs = 2000): Promise<{
 function getBedrockSupportedVersions(): { versions: Record<string, number>; currentVersion: string } {
   try {
     const opts = (eval('require'))('bedrock-protocol/src/options');
-    if (opts && opts.Versions && opts.CURRENT_VERSION) {
-      return { versions: opts.Versions, currentVersion: opts.CURRENT_VERSION };
+    if (opts && opts.Versions) {
+      // Default to verified stable release (1.21.50) so production SMP servers don't drop packets
+      return { versions: opts.Versions, currentVersion: '1.21.50' };
     }
   } catch (_) {}
-  return { versions: { '1.26.51': 2193 }, currentVersion: '1.26.51' };
+  return { versions: { '1.21.50': 766, '1.26.51': 2193 }, currentVersion: '1.21.50' };
 }
 
 function resolveBedrockTargetVersion(
   userVersion?: string,
   pingProtocol?: string | number,
-  pingVersion?: string
+  pingVersion?: string,
+  host?: string
 ): { version: string; isFallback: boolean; note?: string } {
   const { versions, currentVersion } = getBedrockSupportedVersions();
+  const cleanHost = (host || '').toLowerCase();
 
   const trimmed = userVersion?.trim();
   const isAuto = !trimmed || trimmed.toLowerCase() === 'auto' || trimmed.toLowerCase() === 'default';
@@ -77,6 +80,14 @@ function resolveBedrockTargetVersion(
       isFallback: true,
       note: `Version "${trimmed}" is not directly supported; using verified working version ${currentVersion}.`,
     };
+  }
+
+  // Known server auto-resolutions
+  if (cleanHost.includes('freshsmp')) {
+    return { version: '1.21.50', isFallback: false, note: 'Auto-detected FreshSMP Bedrock protocol (1.21.50)' };
+  }
+  if (cleanHost.includes('donutsmp')) {
+    return { version: '1.26.51', isFallback: false, note: 'Auto-detected DonutSMP Bedrock protocol (1.26.51)' };
   }
 
   if (pingProtocol != null) {
@@ -105,7 +116,7 @@ function resolveBedrockTargetVersion(
   return {
     version: currentVersion,
     isFallback: false,
-    note: `Using best working Bedrock version (${currentVersion})`,
+    note: `Using stable Minecraft Bedrock protocol (${currentVersion})`,
   };
 }
 
@@ -121,6 +132,7 @@ export class PebbleBotInstance {
   private telemetryInterval: NodeJS.Timeout | null = null;
   private isExplicitlyStopped: boolean = false;
   private clientTick: bigint = 0n;
+  private autoVersionOverride: string | null = null;
 
   // Telemetry cache
   private position = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -177,8 +189,8 @@ export class PebbleBotInstance {
         }
       }
 
-      const resolved = resolveBedrockTargetVersion(rawUserVersion, pingRes?.protocol, pingRes?.version);
-      const targetVersion = resolved.version;
+      const resolved = resolveBedrockTargetVersion(rawUserVersion, pingRes?.protocol, pingRes?.version, cleanHost);
+      const targetVersion = this.autoVersionOverride || resolved.version;
 
       this.logActivity('connect', `🚀 Initiating RakNet handshake with ${cleanHost}:${cleanPort} (Minecraft Bedrock ${targetVersion}, Transport: ${rakBackend})...`);
 
@@ -325,6 +337,17 @@ export class PebbleBotInstance {
       client.on('disconnect', (packet: any) => {
         const reason = packet?.message || packet?.reason || 'Disconnected from server';
         console.log(chalk.red(`[PebbleAFK] Bot ${this.config.username} disconnected: ${reason}`));
+
+        // Auto-detect version requirement if server reports client is outdated
+        const versionMatch = reason.match(/(?:supports|requires|versions?:?)[\s:]*([0-9.]+)/i);
+        if (versionMatch && versionMatch[1]) {
+          let reqVer = versionMatch[1];
+          if (reqVer.startsWith('26.')) reqVer = `1.${reqVer}`;
+          this.autoVersionOverride = reqVer;
+          console.log(chalk.yellow(`[PebbleAFK] Server requested Bedrock version ${reqVer}. Auto-adjusting target version...`));
+          this.logActivity('status', `🔄 Server requested version ${reqVer}. Auto-adjusting target version...`);
+        }
+
         this.logActivity('disconnect', `Disconnected: ${reason}`);
         this.cleanup();
         this.updateState('KICKED', reason);
@@ -337,6 +360,10 @@ export class PebbleBotInstance {
         console.log(chalk.red(`[PebbleAFK] Bot ${this.config.username} error: ${errMsg}`));
         let descriptiveReason = errMsg;
         if (errMsg.includes('Connect timed out') || errMsg.includes('timed out')) {
+          if (isAutoVersion) {
+            // If connection timed out on auto, try alternating between 1.21.50 and 1.21.30
+            this.autoVersionOverride = this.autoVersionOverride === '1.21.30' ? '1.21.50' : '1.21.30';
+          }
           descriptiveReason = `Connect timed out: ${cleanHost}:${cleanPort} sent no reply to RakNet UDP packets. (Server Bedrock gateway is offline or dropping UDP traffic).`;
         }
         this.logActivity('error', descriptiveReason);
