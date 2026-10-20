@@ -77,6 +77,10 @@ fi
 
 # 2. Start PebbleAFK Node.js Daemon
 echo -e "\n${CYAN}[2/4]${NC} 🪨 ${BOLD}Starting PebbleAFK Bedrock Core (Node.js LTS)...${NC}"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo -e "      ${CYAN}Syncing latest PebbleAFK core from GitHub...${NC}"
+  git pull origin main 2>/dev/null || true
+fi
 pkill -9 -f "cloudflared" 2>/dev/null || true
 pkill -9 -f "tsx src/index.ts" 2>/dev/null || true
 pkill -9 -f "pebbleafk_heartbeat" 2>/dev/null || true

@@ -20,7 +20,9 @@ import {
   AlertCircle,
   Info,
   Trash2,
-  RefreshCw
+  RefreshCw,
+  Search,
+  Copy
 } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
@@ -40,6 +42,8 @@ export default function Home() {
 
   // Accounts state & unlink confirmation
   const [accounts, setAccounts] = useState<BedrockAccount[]>([]);
+  const [accountFilter, setAccountFilter] = useState('');
+  const [copiedIgnId, setCopiedIgnId] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<BedrockAccount | null>(null);
   const [msAuthError, setMsAuthError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
@@ -642,163 +646,237 @@ export default function Home() {
               </div>
             )}
 
-            {/* VIEW 2: SEPARATE ACCOUNTS PAGE */}
+            {/* VIEW 2: SEPARATE ACCOUNTS PAGE (Matches PocketAFK Design) */}
             {activeTab === 'accounts' && (
-              <div className="max-w-4xl mx-auto space-y-6">
-                {/* Header Action Banner */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-slate-200/90 shadow-xs">
-                  <div className="space-y-1">
+              <div className="max-w-5xl mx-auto space-y-5">
+                {/* Top Pill Breadcrumb */}
+                <div>
+                  <span className="px-2.5 py-1 rounded-lg bg-slate-200/70 text-slate-700 font-extrabold text-[10px] tracking-wider uppercase">
+                    ACCOUNTS
+                  </span>
+                </div>
+
+                {/* Page Title & Action Controls */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
                     <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-lg bg-emerald-600/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600">
-                        <ShieldCheck className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <h1 className="text-lg font-black text-slate-900 tracking-tight">Bedrock Accounts</h1>
-                        <span className="text-[11px] text-emerald-700 font-semibold">Official Bedrock Edition (Microsoft Linked)</span>
-                      </div>
+                      <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Accounts</h1>
+                      <span className="text-[11px] bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded-full font-bold">
+                        {verifiedAccountsCount}/5
+                      </span>
                     </div>
-                    <p className="text-xs text-slate-500 pt-1 leading-relaxed">
-                      Link up to 5 Bedrock accounts. Each account is securely authenticated directly via Microsoft without passwords and synced across devices.
+                    <p className="text-xs text-slate-500 mt-1">
+                      Manage all your verified Microsoft Bedrock Minecraft accounts.
                     </p>
                   </div>
 
-                  <button
-                    disabled={verifiedAccountsCount >= 5}
-                    onClick={handleStartMicrosoftLogin}
-                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold transition shadow-xs flex items-center justify-center gap-2 cursor-pointer shrink-0 active:scale-95"
-                    title={verifiedAccountsCount >= 5 ? 'Maximum 5 accounts reached' : 'Add Bedrock Account'}
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    <span>{verifiedAccountsCount >= 5 ? '5/5 Limit' : '+ Add Bedrock Account'}</span>
-                  </button>
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      disabled={verifiedAccountsCount >= 5}
+                      onClick={handleStartMicrosoftLogin}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs transition shadow-xs cursor-pointer active:scale-95"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>+ Add Account</span>
+                    </button>
+
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Filter..."
+                        value={accountFilter}
+                        onChange={(e) => setAccountFilter(e.target.value)}
+                        className="pl-8 pr-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 transition shadow-2xs w-44 sm:w-56 font-medium"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                {/* Accounts List */}
-                {accounts.length === 0 ? (
-                  <div className="text-center py-16 border-2 border-dashed border-slate-200 rounded-3xl bg-white p-8 space-y-3 shadow-2xs">
-                    <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto border border-emerald-200/60 shadow-xs">
-                      <UserPlus className="w-7 h-7" />
-                    </div>
-                    <div className="space-y-1">
-                      <h3 className="text-sm font-bold text-slate-800">No linked Bedrock accounts yet</h3>
-                      <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
-                        Link your official Minecraft Bedrock account with one-click Microsoft sign-in to start AFK automation.
-                      </p>
-                    </div>
-                    <div className="pt-2">
-                      <button
-                        onClick={handleStartMicrosoftLogin}
-                        className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs cursor-pointer inline-flex items-center gap-2 active:scale-95"
-                      >
-                        <UserPlus className="w-4 h-4" />
-                        <span>+ Add Bedrock Account</span>
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between px-1">
-                      <span className="text-xs font-bold text-slate-700">
-                        {verifiedAccountsCount}/5 accounts linked
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3">
-                      {accounts.map((acc) => {
-                        const displayName = acc.ign || acc.username || 'BedrockPlayer';
-                        const rawName = displayName.includes('@') ? displayName.split('@')[0] : displayName;
-                        const primaryAvatarUrl = acc.avatarUrl || `https://crafthead.net/helm/${encodeURIComponent(displayName)}/48`;
-                        const hasError = Boolean(acc.authError);
-
-                        return (
-                          <div
-                            key={acc.id}
-                            className={`p-4 sm:p-5 rounded-2xl border ${
-                              hasError ? 'border-rose-200 bg-rose-50/20' : 'border-slate-200 bg-white hover:border-slate-300'
-                            } flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition shadow-2xs`}
-                          >
-                            <div className="flex items-center gap-3.5 min-w-0">
-                              {/* Avatar Box */}
-                              <div className="w-12 h-12 rounded-xl overflow-hidden border border-slate-300 shrink-0 bg-slate-100 shadow-2xs">
-                                <img
-                                  src={primaryAvatarUrl}
-                                  alt={displayName}
-                                  className="w-full h-full object-cover [image-rendering:pixelated]"
-                                  onError={(e) => {
-                                    const img = e.target as HTMLImageElement;
-                                    if (acc.avatarUrl && img.src !== acc.avatarUrl) {
-                                      img.src = acc.avatarUrl;
-                                    } else if (!img.src.includes('crafthead')) {
-                                      img.src = `https://crafthead.net/helm/${encodeURIComponent(displayName)}/48`;
-                                    } else if (!img.src.includes('mc-heads')) {
-                                      img.src = `https://mc-heads.net/avatar/${encodeURIComponent(displayName)}/48`;
-                                    } else if (!img.src.includes('minotar')) {
-                                      img.src = `https://minotar.net/helm/${encodeURIComponent(rawName)}/48.png`;
-                                    } else {
-                                      img.src = 'https://minotar.net/helm/MHF_Steve/48.png';
-                                    }
-                                  }}
-                                />
-                              </div>
-
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-black text-sm text-slate-900 truncate">
-                                    @{displayName}
-                                  </span>
-
-                                  {hasError ? (
-                                    <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold border border-rose-200">
-                                      <AlertCircle className="w-2.5 h-2.5 text-rose-600" />
-                                      Verification Failed
-                                    </span>
-                                  ) : (
-                                    <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
-                                      <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                                      Verified Bedrock
-                                    </span>
-                                  )}
-                                </div>
-
-                                {hasError ? (
-                                  <div className="text-[11px] text-rose-600 font-medium leading-tight mt-1 bg-white/70 p-2 rounded-lg border border-rose-100">
-                                    {acc.authError}
-                                  </div>
-                                ) : (
-                                  <div className="text-xs text-slate-500 font-mono truncate mt-0.5">
-                                    Xbox Live &bull; Bedrock RakNet &bull; Synced with Supabase &amp; Termux
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-                              {hasError && (
+                {/* Accounts Table Container */}
+                <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
+                  <div className="overflow-x-auto touch-pan-x">
+                    <table className="w-full text-left text-xs min-w-[720px]">
+                      <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-extrabold">
+                        <tr>
+                          <th className="p-4 pl-6">Account Name</th>
+                          <th className="p-4">Account Access</th>
+                          <th className="p-4">Connections</th>
+                          <th className="p-4">Date Added</th>
+                          <th className="p-4 pr-6 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {accounts
+                          .filter((a) => {
+                            const q = accountFilter.toLowerCase().trim();
+                            if (!q) return true;
+                            return (a.ign || a.username).toLowerCase().includes(q);
+                          }).length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="p-12 text-center text-slate-500">
+                              <div className="space-y-3 max-w-sm mx-auto">
+                                <Users className="w-8 h-8 text-slate-300 mx-auto" />
+                                <p className="text-xs font-semibold text-slate-700">No Bedrock accounts linked yet.</p>
+                                <p className="text-[11px] text-slate-400 leading-relaxed">
+                                  Click &ldquo;+ Add Account&rdquo; above to authenticate and link your official Bedrock Microsoft account.
+                                </p>
                                 <button
                                   onClick={handleStartMicrosoftLogin}
-                                  className="px-3 py-1.5 rounded-lg text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition cursor-pointer flex items-center gap-1.5 text-xs font-bold"
-                                  title="Re-verify with Microsoft account"
+                                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition shadow-xs cursor-pointer"
                                 >
-                                  <RefreshCw className="w-3.5 h-3.5" />
-                                  <span>Re-link</span>
+                                  <UserPlus className="w-3.5 h-3.5" /> + Add Account
                                 </button>
-                              )}
+                              </div>
+                            </td>
+                          </tr>
+                        ) : (
+                          accounts
+                            .filter((a) => {
+                              const q = accountFilter.toLowerCase().trim();
+                              if (!q) return true;
+                              return (a.ign || a.username).toLowerCase().includes(q);
+                            })
+                            .map((acc) => {
+                              const displayName = acc.ign || acc.username || 'BedrockPlayer';
+                              const rawName = displayName.includes('@') ? displayName.split('@')[0] : displayName;
+                              const primaryAvatarUrl = acc.avatarUrl || `https://crafthead.net/helm/${encodeURIComponent(displayName)}/32`;
+                              const dateAddedStr = acc.addedAt
+                                ? new Date(acc.addedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+                                  ', ' +
+                                  new Date(acc.addedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+                                : 'Recent';
 
-                              <button
-                                onClick={() => setDeletingAccount(acc)}
-                                className="px-3 py-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 border border-slate-200 hover:border-red-200 transition cursor-pointer flex items-center gap-1.5 text-xs font-semibold"
-                                title="Unlink Bedrock Account"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>Unlink</span>
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                              return (
+                                <tr key={acc.id} className="hover:bg-slate-50/70 transition">
+                                  {/* Account Name + Skin */}
+                                  <td className="p-4 pl-6">
+                                    <div className="flex items-center gap-3">
+                                      <div className="w-9 h-9 rounded-xl overflow-hidden border border-slate-300 bg-slate-100 shrink-0 shadow-2xs">
+                                        <img
+                                          src={primaryAvatarUrl}
+                                          alt={displayName}
+                                          className="w-full h-full object-cover [image-rendering:pixelated]"
+                                          onError={(e) => {
+                                            const img = e.target as HTMLImageElement;
+                                            if (acc.avatarUrl && img.src !== acc.avatarUrl) {
+                                              img.src = acc.avatarUrl;
+                                            } else if (!img.src.includes('crafthead')) {
+                                              img.src = `https://crafthead.net/helm/${encodeURIComponent(displayName)}/32`;
+                                            } else if (!img.src.includes('mc-heads')) {
+                                              img.src = `https://mc-heads.net/avatar/${encodeURIComponent(displayName)}/32`;
+                                            } else {
+                                              img.src = 'https://minotar.net/helm/MHF_Steve/32.png';
+                                            }
+                                          }}
+                                        />
+                                      </div>
+                                      <div>
+                                        <div className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
+                                          <span>{displayName}</span>
+                                          {acc.authError ? (
+                                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200">
+                                              Mismatch
+                                            </span>
+                                          ) : (
+                                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                          )}
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              navigator.clipboard.writeText(displayName);
+                                              setCopiedIgnId(acc.id);
+                                              setTimeout(() => setCopiedIgnId(null), 1500);
+                                            }}
+                                            className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                                            title="Copy Gamertag"
+                                          >
+                                            {copiedIgnId === acc.id ? (
+                                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                            ) : (
+                                              <Copy className="w-3 h-3" />
+                                            )}
+                                          </button>
+                                        </div>
+                                        <span className="text-[10px] text-slate-400 font-medium">
+                                          Bedrock Edition
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </td>
+
+                                  {/* Account Access */}
+                                  <td className="p-4">
+                                    {acc.authError ? (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                        <AlertCircle className="w-3 h-3 text-rose-600" />
+                                        Verification Failed
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                        Working
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* Connections */}
+                                  <td className="p-4">
+                                    <span className="font-mono text-xs font-semibold text-slate-700">
+                                      1
+                                    </span>
+                                  </td>
+
+                                  {/* Date Added */}
+                                  <td className="p-4">
+                                    <span className="text-xs text-slate-500 font-medium">
+                                      {dateAddedStr}
+                                    </span>
+                                  </td>
+
+                                  {/* Actions */}
+                                  <td className="p-4 pr-6 text-right">
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      {acc.authError && (
+                                        <button
+                                          onClick={handleStartMicrosoftLogin}
+                                          className="p-1.5 rounded-lg text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition cursor-pointer"
+                                          title="Re-verify with Microsoft"
+                                        >
+                                          <RefreshCw className="w-3.5 h-3.5" />
+                                        </button>
+                                      )}
+
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(displayName);
+                                          setCopiedIgnId(acc.id);
+                                          setTimeout(() => setCopiedIgnId(null), 1500);
+                                        }}
+                                        className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                                        title="Copy Gamertag"
+                                      >
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+
+                                      <button
+                                        onClick={() => setDeletingAccount(acc)}
+                                        className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition cursor-pointer"
+                                        title="Unlink Bedrock Account"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                        )}
+                      </tbody>
+                    </table>
                   </div>
-                )}
+                </div>
               </div>
             )}
 
