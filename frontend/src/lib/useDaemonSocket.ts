@@ -144,7 +144,10 @@ export function useDaemonSocket(
 
     // Do NOT destroy an active or connecting socket unless forced
     if (!force && socketRef.current) {
-      if (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING) {
+      if (
+        (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING) &&
+        socketRef.current.url.replace(/\/+$/, '') === url
+      ) {
         return;
       }
     }
@@ -317,7 +320,16 @@ export function useDaemonSocket(
 
   useEffect(() => {
     if (currentUser && daemonUrl) {
-      connect(true);
+      const target = daemonUrl.trim().replace(/\/+$/, '');
+      if (
+        socketRef.current &&
+        (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING) &&
+        socketRef.current.url.replace(/\/+$/, '') === target
+      ) {
+        // Socket is already active and healthy. Keep connection alive!
+        return;
+      }
+      connect(false);
     } else {
       if (socketRef.current) {
         safeClose(socketRef.current);
@@ -325,15 +337,6 @@ export function useDaemonSocket(
       }
       setStatus('DISCONNECTED');
     }
-
-    return () => {
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-      if (socketRef.current) {
-        safeClose(socketRef.current);
-        socketRef.current = null;
-      }
-    };
   }, [currentUser, daemonUrl, connect]);
 
   const send = useCallback((msg: any) => {

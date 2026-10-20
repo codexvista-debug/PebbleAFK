@@ -45,6 +45,7 @@ import {
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
 import { TermuxConsoleModal } from '@/components/TermuxConsoleModal';
+import { TermuxStreamPage } from '@/components/TermuxStreamPage';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { MicrosoftAuthModal } from '@/components/MicrosoftAuthModal';
 import { ServerProfileModal } from '@/components/ServerProfileModal';
@@ -69,7 +70,7 @@ export default function Home() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'servers' | 'accounts'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'termux_stream' | 'servers' | 'accounts'>('dashboard');
 
   // Accounts state & unlink confirmation
   const [accounts, setAccounts] = useState<BedrockAccount[]>([]);
@@ -518,6 +519,19 @@ export default function Home() {
       clearInterval(interval);
     };
   }, [currentUser, secretCode, setDaemonUrl, setAuthToken, reconnect]);
+
+  // Auto-refresh Termux stream logs when user is on the Termux Stream page
+  useEffect(() => {
+    if (activeTab === 'termux_stream') {
+      fetchTerminalLogs();
+      const interval = setInterval(() => {
+        if (daemonStatus === 'AUTHENTICATED') {
+          fetchTerminalLogs();
+        }
+      }, 2500);
+      return () => clearInterval(interval);
+    }
+  }, [activeTab, daemonStatus, fetchTerminalLogs]);
 
   // Microsoft OAuth Device Code Sign-In (Exact same flow as PocketAFK)
   const handleStartMicrosoftLogin = (target?: BedrockAccount | string) => {
@@ -1141,33 +1155,8 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Right Daemon & Termux status buttons on mobile */}
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => {
-              fetchTerminalLogs();
-              setIsTermuxConsoleOpen(true);
-            }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-slate-700 font-mono text-xs font-bold shadow-2xs transition active:scale-95 cursor-pointer"
-            title="Termux Live Terminal & Logs Stream"
-          >
-            <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-            <span>&gt;_</span>
-          </button>
-          {daemonStatus === 'AUTHENTICATED' && (
-            <button
-              type="button"
-              onClick={() => {
-                updateDaemon();
-                showToast('🔄 Updating Bedrock daemon from GitHub...', 'info');
-              }}
-              className="px-2 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 border border-sky-300 text-sky-700 text-xs font-bold flex items-center gap-1 cursor-pointer active:scale-95"
-              title="1-Click Update Daemon"
-            >
-              <RotateCw className="w-3 h-3 text-sky-600" />
-            </button>
-          )}
+        {/* Right Daemon status circle on mobile */}
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => setIsSettingsOpen(true)}
@@ -1250,6 +1239,27 @@ export default function Home() {
                   <LayoutDashboard className="w-4 h-4" />
                 </div>
                 <span>Dashboard</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('termux_stream');
+                  setIsMobileSidebarOpen(false);
+                  fetchTerminalLogs();
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                  activeTab === 'termux_stream'
+                    ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`p-1 rounded-lg ${activeTab === 'termux_stream' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                    <Terminal className="w-4 h-4" />
+                  </div>
+                  <span>Termux Stream</span>
+                </div>
+                <span className={`w-2 h-2 rounded-full ${daemonStatus === 'AUTHENTICATED' ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
               </button>
 
               <button
@@ -1478,26 +1488,15 @@ export default function Home() {
                 <>
                   <span className="font-bold text-slate-800">Bedrock Core</span>
                   <span>/</span>
-                  <span className="capitalize">{activeTab}</span>
+                  <span className="capitalize">
+                    {activeTab === 'termux_stream' ? 'Termux Stream' : activeTab}
+                  </span>
                 </>
               )}
             </div>
 
-            {/* Right: Termux Live Console + Daemon Status Icon */}
+            {/* Right: Daemon Status Icon */}
             <div className="flex items-center gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  fetchTerminalLogs();
-                  setIsTermuxConsoleOpen(true);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-slate-700 font-mono text-xs font-bold shadow-2xs transition hover:scale-105 active:scale-95 cursor-pointer"
-                title="Termux Live Terminal & Logs Stream"
-              >
-                <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Termux Stream</span>
-              </button>
-
               <button
                 onClick={() => setIsSettingsOpen(true)}
                 className={`relative w-8 h-8 rounded-full border-2 flex items-center justify-center transition shadow-xs hover:scale-105 cursor-pointer ${getDaemonRingStyle()}`}
@@ -1852,6 +1851,19 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* VIEW 2: TERMUX LIVE STREAM (DEDICATED FULL PAGE - 100% LIGHT MODE) */}
+            {activeTab === 'termux_stream' && (
+              <TermuxStreamPage
+                logs={terminalLogs}
+                isOnline={daemonStatus === 'AUTHENTICATED'}
+                onFetchLogs={fetchTerminalLogs}
+                onClearLogs={clearTerminalLogs}
+                onRestartDaemon={restartDaemon}
+                onUpdateDaemon={updateDaemon}
+                termuxCommand={termux1ClickCmd}
+              />
             )}
 
             {/* VIEW 3: SERVERS VIEW (CONNECT, CHAT, SETTINGS) */}

@@ -169,16 +169,17 @@ wss.on('connection', (ws: WebSocket, req) => {
           if (fs.existsSync(logPath)) {
             fileLines = fs.readFileSync(logPath, 'utf8')
               .split('\n')
-              .slice(-150)
+              .slice(-1500)
               .map((l: string) => l.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim())
               .filter(Boolean);
           }
         } catch (_) {}
 
-        const combined = Array.from(new Set([...fileLines, ...terminalLogs])).slice(-350);
+        // Combine file logs with current memory logs, preserving chronological order
+        const allLogs = fileLines.length > 0 ? fileLines : terminalLogs;
         ws.send(JSON.stringify({
           type: 'TERMINAL_LOGS',
-          payload: { logs: combined, timestamp: Date.now() },
+          payload: { logs: allLogs.slice(-1800), timestamp: Date.now() },
         }));
         return;
       }
@@ -186,6 +187,7 @@ wss.on('connection', (ws: WebSocket, req) => {
       // 1-Click Remote Update & Restart from Dashboard
       if (parsed.type === 'UPDATE_DAEMON' || parsed.type === 'RESTART_DAEMON') {
         const isUpdate = parsed.type === 'UPDATE_DAEMON';
+        console.log(chalk.cyan(`\n════════════════════════════════════════════════════`));
         console.log(chalk.cyan(`[Daemon] Remote ${isUpdate ? 'update & restart' : 'restart'} requested by dashboard.`));
         try {
           ws.send(JSON.stringify({
@@ -206,14 +208,23 @@ wss.on('connection', (ws: WebSocket, req) => {
                 repoDir = homeRepo;
               }
             }
-            cp.execSync('git reset --hard HEAD && git pull --force origin main', { cwd: repoDir, stdio: 'inherit' });
+
+            console.log(chalk.cyan(`[Update] 📥 Syncing repository from GitHub origin main...`));
+            const gitOut = cp.execSync('git reset --hard HEAD && git pull --force origin main', { cwd: repoDir, encoding: 'utf8' });
+            console.log(chalk.green(`[Update] ✓ Git Sync:\n${gitOut.trim()}`));
+
+            console.log(chalk.cyan(`[Update] ⚙️ Rebuilding daemon TypeScript core...`));
+            const buildOut = cp.execSync('npm run build', { cwd: path.join(repoDir, 'daemon'), encoding: 'utf8' });
+            console.log(chalk.green(`[Update] ✓ Build complete:\n${buildOut.trim()}`));
+            console.log(chalk.green(`[Update] ✨ Core engine successfully updated! Rebooting supervisor...`));
           } catch (gitErr: any) {
-            console.error(chalk.yellow(`[Update] git pull notice: ${gitErr?.message || gitErr}`));
+            console.error(chalk.yellow(`[Update] git notice: ${gitErr?.message || gitErr}`));
           }
         }
+        console.log(chalk.cyan(`════════════════════════════════════════════════════\n`));
         setTimeout(() => {
           process.exit(42);
-        }, 600);
+        }, 1200);
         return;
       }
 
@@ -224,10 +235,11 @@ wss.on('connection', (ws: WebSocket, req) => {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code: number, reason: Buffer) => {
     clearInterval(pingInterval);
     authenticatedClients.delete(ws);
-    console.log(chalk.gray(`[Connection] WebSocket disconnected (${ip})`));
+    const reasonStr = reason && reason.length ? reason.toString('utf8') : '';
+    console.log(chalk.gray(`[Connection] WebSocket disconnected (${ip}) [code=${code}${reasonStr ? `, reason=${reasonStr}` : ''}]`));
   });
 
   ws.on('error', (err) => {
