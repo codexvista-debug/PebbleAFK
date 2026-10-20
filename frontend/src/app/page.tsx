@@ -48,7 +48,7 @@ import { DangerousSettingsModal } from '@/components/DangerousSettingsModal';
 import { AccountLogsModal } from '@/components/AccountLogsModal';
 import { ServerLogo } from '@/components/ServerLogo';
 import { useDaemonSocket } from '@/lib/useDaemonSocket';
-import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType } from '@/types';
+import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType, getAutoDetectedBedrockVersion } from '@/types';
 import { 
   loadAccountsFromSupabase, 
   syncAllToSupabase, 
@@ -536,6 +536,26 @@ export default function Home() {
   // Active selected server profile
   const activeServer = servers.find((s) => s.id === activeServerId) || servers[0] || null;
 
+  const [gatewayStatus, setGatewayStatus] = useState<{ online: boolean; checking: boolean; version?: string } | null>(null);
+
+  useEffect(() => {
+    if (!activeServer?.serverHost) {
+      setGatewayStatus(null);
+      return;
+    }
+    setGatewayStatus({ online: true, checking: true });
+    const cleanH = activeServer.serverHost.trim();
+    const cleanP = activeServer.serverPort || 19132;
+    fetch(`/api/check-bedrock?host=${encodeURIComponent(cleanH)}&port=${encodeURIComponent(cleanP)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setGatewayStatus({ online: Boolean(d.online), checking: false, version: d.version });
+      })
+      .catch(() => {
+        setGatewayStatus({ online: true, checking: false });
+      });
+  }, [activeServer?.id, activeServer?.serverHost, activeServer?.serverPort]);
+
   // Save server profile to state & Supabase
   const handleSaveServer = async (profile: ServerProfile) => {
     setServers((prev) => {
@@ -738,7 +758,7 @@ export default function Home() {
     showToast(`Added @${targetAcc?.ign || targetAcc?.username || 'account'} to ${activeServer.name}`, 'success');
   };
 
-  const isActiveServerRunning = assignedAccounts.some((acc) => {
+  const isActiveServerRunning = daemonStatus === 'AUTHENTICATED' && assignedAccounts.some((acc) => {
     const botId = `${activeServer?.id}__${acc.id}`;
     const st = botStates[botId];
     return st === 'SPAWNED' || st === 'LOGGED_IN' || st === 'CONNECTING';
@@ -1250,14 +1270,14 @@ export default function Home() {
                       ? srv.assignedAccountIds
                       : (srv.accountId ? [srv.accountId] : []);
                     const srvAssignedCount = accounts.filter((a) => srvAssignedIds.includes(a.id)).length;
-                    const onlineCount = accounts.filter(
+                    const onlineCount = daemonStatus === 'AUTHENTICATED' ? accounts.filter(
                       (acc) =>
                         srvAssignedIds.includes(acc.id) &&
                         (botStates[`${srv.id}__${acc.id}`] === 'SPAWNED' ||
                          botStates[`${srv.id}__${acc.id}`] === 'LOGGED_IN' ||
                          botStates[acc.id] === 'SPAWNED' ||
                          botStates[acc.id] === 'LOGGED_IN')
-                    ).length;
+                    ).length : 0;
                     const totalSlots = Math.max(srvAssignedCount, onlineCount);
 
                     return (
@@ -1827,6 +1847,22 @@ export default function Home() {
                           </div>
                         </div>
 
+                        {/* Bedrock UDP Gateway Status Alert */}
+                        {gatewayStatus && !gatewayStatus.checking && !gatewayStatus.online && (
+                          <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 text-xs flex items-start gap-2.5 shadow-2xs">
+                            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold">Bedrock UDP Gateway Offline: {activeServer.serverHost}:{activeServer.serverPort || 19132}</span>
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200">Server Unreachable</span>
+                              </div>
+                              <p className="text-[11px] text-amber-800 leading-relaxed">
+                                {activeServer.serverHost}&apos;s Bedrock UDP port ({activeServer.serverPort || 19132}) is currently down or not sending replies globally. Any Bedrock bot will time out until the server host restores its Bedrock gateway.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
                         {/* Accounts Table for this Server Profile */}
                         <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
                           <div className="overflow-x-auto touch-pan-x">
@@ -1871,9 +1907,10 @@ export default function Home() {
                                 ) : (
                                   assignedAccounts.map((acc) => {
                                     const botId = `${activeServer.id}__${acc.id}`;
-                                    const botState = botStates[botId] || botStates[acc.id] || 'DISCONNECTED';
-                                    const isConnected = botState === 'SPAWNED' || botState === 'LOGGED_IN';
-                                    const isConnecting = botState === 'CONNECTING' || botState === 'RECONNECTING';
+                                    const isDaemonLive = daemonStatus === 'AUTHENTICATED';
+                                    const botState = isDaemonLive ? (botStates[botId] || botStates[acc.id] || 'DISCONNECTED') : 'DISCONNECTED';
+                                    const isConnected = isDaemonLive && (botState === 'SPAWNED' || botState === 'LOGGED_IN');
+                                    const isConnecting = isDaemonLive && (botState === 'CONNECTING' || botState === 'RECONNECTING');
                                     const isChecked = selectedAccountIds.includes(acc.id);
 
                                     const srvStart = sessionStartTimes[botId];
@@ -2242,7 +2279,7 @@ export default function Home() {
                                   onChange={(e) => handleUpdateActiveServer({ serverVersion: e.target.value })}
                                   className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 cursor-pointer appearance-none"
                                 >
-                                  <option value="auto">Auto Detect</option>
+                                  <option value="auto">Auto Detect ({getAutoDetectedBedrockVersion(activeServer.serverHost)})</option>
                                   <option value="1.21.50">1.21.50 (Latest)</option>
                                   <option value="1.21.40">1.21.40</option>
                                   <option value="1.21.30">1.21.30</option>
@@ -2257,11 +2294,17 @@ export default function Home() {
                                   <option value="1.20.30">1.20.30</option>
                                   <option value="1.20.10">1.20.10</option>
                                   <option value="1.20.0">1.20.0</option>
+                                  <option value="1.26.51">1.26.51 (DonutSMP / Preview)</option>
                                 </select>
                                 <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
                                   ▼
                                 </div>
                               </div>
+                              {(!activeServer.serverVersion || activeServer.serverVersion === 'auto') && (
+                                <p className="text-[10px] text-emerald-700 font-semibold mt-1">
+                                  ✓ Auto-resolved protocol: <b>{getAutoDetectedBedrockVersion(activeServer.serverHost)}</b>
+                                </p>
+                              )}
                             </div>
 
                             <div className="space-y-1">

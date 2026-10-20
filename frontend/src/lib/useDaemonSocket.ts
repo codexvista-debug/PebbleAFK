@@ -210,6 +210,8 @@ export function useDaemonSocket(
 
       ws.onclose = () => {
         setStatus('DISCONNECTED');
+        setBotStates({});
+        setBotReasons({});
         setMsAuthData(null);
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         reconnectTimeoutRef.current = setTimeout(() => {
@@ -219,6 +221,8 @@ export function useDaemonSocket(
 
       ws.onerror = () => {
         setStatus('DISCONNECTED');
+        setBotStates({});
+        setBotReasons({});
       };
     } catch (_) {
       setStatus('DISCONNECTED');
