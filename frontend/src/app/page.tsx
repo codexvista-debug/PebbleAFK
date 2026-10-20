@@ -48,7 +48,9 @@ export default function Home() {
   const [deletingAccount, setDeletingAccount] = useState<BedrockAccount | null>(null);
   const [isAddAccountModalOpen, setIsAddAccountModalOpen] = useState(false);
   const [selectedEmail, setSelectedEmail] = useState('');
+  const [isWaitingForPopup, setIsWaitingForPopup] = useState(false);
   const [msAuthError, setMsAuthError] = useState<string | null>(null);
+  const popupRef = useRef<Window | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
 
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -111,6 +113,13 @@ export default function Home() {
         return updated;
       });
 
+      if (popupRef.current && !popupRef.current.closed) {
+        try {
+          popupRef.current.close();
+        } catch (_) {}
+      }
+      popupRef.current = null;
+      setIsWaitingForPopup(false);
       setSelectedEmail('');
       setIsAddAccountModalOpen(false);
       showToast(`Verified Bedrock account: @${verifiedIgn}`, 'success');
@@ -235,8 +244,35 @@ export default function Home() {
     };
   }, [currentUser, daemonUrl, secretCode, authToken, setDaemonUrl, setAuthToken]);
 
+  // Open and update popup when MS Auth URL arrives
+  useEffect(() => {
+    if (msAuthData?.url && isWaitingForPopup) {
+      if (popupRef.current && !popupRef.current.closed) {
+        try {
+          popupRef.current.location.href = msAuthData.url;
+          popupRef.current.focus();
+        } catch (e) {
+          console.warn('Could not redirect popup:', e);
+        }
+      }
+    }
+  }, [msAuthData, isWaitingForPopup]);
+
+  const handleCloseAddAccountModal = useCallback(() => {
+    if (popupRef.current && !popupRef.current.closed) {
+      try {
+        popupRef.current.close();
+      } catch (_) {}
+    }
+    popupRef.current = null;
+    setIsWaitingForPopup(false);
+    setIsAddAccountModalOpen(false);
+    setSelectedEmail('');
+    setMsAuthData(null);
+  }, [setMsAuthData]);
+
   // Start Microsoft OAuth login via daemon targeting exact email
-  const handleStartMicrosoftLogin = async (targetEmail?: string) => {
+  const handleStartMicrosoftLogin = (targetEmail?: string) => {
     if (!currentUser) {
       setIsAuthOpen(true);
       return;
@@ -256,14 +292,77 @@ export default function Home() {
     // If no email entered yet, open the Add Account modal matching MinecraftAFK
     if (!targetEmail) {
       setIsAddAccountModalOpen(true);
+      setIsWaitingForPopup(false);
       return;
     }
 
     setMsAuthError(null);
     setSelectedEmail(targetEmail);
-    const targetId = `acc_${Math.random().toString(36).substring(2, 9)}`;
+    setIsWaitingForPopup(true);
+    setIsAddAccountModalOpen(true);
 
-    showToast(`Requesting Microsoft sign-in for ${targetEmail}...`, 'info');
+    // Open popup window synchronously on the user's action to beat popup blocker
+    const width = 500;
+    const height = 680;
+    const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
+    const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+
+    try {
+      const popup = window.open(
+        'about:blank',
+        'pebble_ms_auth',
+        `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no,toolbar=no`
+      );
+      if (popup) {
+        popup.document.write(`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>Microsoft Sign-In</title>
+              <style>
+                body {
+                  margin: 0;
+                  background: #ffffff;
+                  color: #0f172a;
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  height: 100vh;
+                  text-align: center;
+                  padding: 24px;
+                  box-sizing: border-box;
+                }
+                .spinner {
+                  width: 36px;
+                  height: 36px;
+                  border: 3px solid #e2e8f0;
+                  border-top-color: #059669;
+                  border-radius: 50%;
+                  animation: spin 0.8s linear infinite;
+                  margin: 0 auto 16px;
+                }
+                @keyframes spin { to { transform: rotate(360deg); } }
+                h2 { font-size: 16px; font-weight: 800; margin: 0 0 6px; }
+                p { font-size: 12px; color: #64748b; margin: 0; }
+              </style>
+            </head>
+            <body>
+              <div>
+                <div class="spinner"></div>
+                <h2>Connecting to Microsoft...</h2>
+                <p>Preparing authentication for <b>${targetEmail}</b></p>
+              </div>
+            </body>
+          </html>
+        `);
+        popupRef.current = popup;
+      }
+    } catch (err) {
+      console.warn('Popup blocked or failed:', err);
+    }
+
+    const targetId = `acc_${Math.random().toString(36).substring(2, 9)}`;
     verifyAccount(targetId, targetEmail);
   };
 
@@ -922,11 +1021,12 @@ export default function Home() {
       {/* Add Account Email Modal (Matching MinecraftAFK) */}
       <AddAccountModal
         isOpen={isAddAccountModalOpen}
-        onClose={() => setIsAddAccountModalOpen(false)}
-        onSubmit={(email) => {
-          setIsAddAccountModalOpen(false);
-          handleStartMicrosoftLogin(email);
-        }}
+        onClose={handleCloseAddAccountModal}
+        onSubmit={(email) => handleStartMicrosoftLogin(email)}
+        waitingForPopup={isWaitingForPopup}
+        targetEmail={selectedEmail}
+        authUrl={msAuthData?.url}
+        errorMessage={msAuthError}
       />
 
       {/* Modern In-App Confirm Unlink Modal */}
@@ -946,8 +1046,8 @@ export default function Home() {
         onCancel={() => setDeletingAccount(null)}
       />
 
-      {/* Microsoft OAuth Device Code Modal */}
-      {msAuthData && (
+      {/* Microsoft OAuth Device Code Modal Fallback (shown only if AddAccountModal is not active) */}
+      {msAuthData && !isAddAccountModalOpen && (
         <MicrosoftAuthModal
           authData={msAuthData}
           accountEmail={selectedEmail || msAuthData.targetEmail}

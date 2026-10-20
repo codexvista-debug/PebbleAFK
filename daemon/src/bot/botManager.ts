@@ -147,7 +147,11 @@ export class BotManager {
     try {
       const profilesFolder = getAndSyncTokenFolder();
 
-      // Clean up any stale directory if present
+      // Clean up any stale directory if present to force a fresh verification
+      const staleFolder = path.join(profilesFolder, authKey);
+      if (fs.existsSync(staleFolder)) {
+        try { fs.rmSync(staleFolder, { recursive: true, force: true }); } catch (_) {}
+      }
       const staleNewAccFolder = path.join(profilesFolder, 'new_account');
       if (fs.existsSync(staleNewAccFolder)) {
         try { fs.rmSync(staleNewAccFolder, { recursive: true, force: true }); } catch (_) {}
@@ -157,7 +161,7 @@ export class BotManager {
         authTitle: Titles.MinecraftNintendoSwitch,
         deviceType: 'Nintendo',
         flow: 'live' as const,
-        forceRefresh: isNew ? true : false,
+        forceRefresh: true,
       };
 
       const flow = new Authflow(authKey, profilesFolder, options, (data: any) => {
