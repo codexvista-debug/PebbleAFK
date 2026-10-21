@@ -14,9 +14,8 @@ process.on('uncaughtException', (err: any) => {
   if (err?.stack) {
     console.error(chalk.gray(err.stack));
   }
-  // A failed listen cannot recover inside this process. Let the Termux
-  // supervisor stop retrying and surface the port conflict to the launcher.
-  if (err?.code === 'EADDRINUSE') process.exit(43);
+  // Server listen errors are handled with retries by server.on('error')
+  if (err?.code === 'EADDRINUSE') return;
 });
 
 process.on('unhandledRejection', (reason: any) => {
@@ -302,9 +301,60 @@ wss.on('connection', (ws: WebSocket, req) => {
   });
 });
 
+function gracefulShutdown(signal: string) {
+  if (shutdownRequested) return;
+  shutdownRequested = true;
+  console.log(chalk.yellow(`[Daemon] Received ${signal}. Closing server sockets cleanly...`));
+  try {
+    for (const client of authenticatedClients) {
+      try { client.close(1001, 'Daemon stopping'); } catch (_) {}
+    }
+    authenticatedClients.clear();
+  } catch (_) {}
+
+  try {
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 1000);
+  } catch (_) {
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+let listenRetries = 0;
+const MAX_LISTEN_RETRIES = 12;
+
+function startServerListening() {
+  server.listen(PORT, '127.0.0.1', () => {
+    listenRetries = 0;
+    console.log(chalk.cyan(`
+  ╔═══════════════════════════════════════════════════╗
+  ║                PebbleAFK Daemon                   ║
+  ║         Pure Bedrock Protocol AFK Stack           ║
+  ╚═══════════════════════════════════════════════════╝
+    `));
+    console.log(chalk.green(`[Server] Listening on phone-local http://127.0.0.1:${PORT} (Cloudflare Tunnel origin)`));
+    console.log(chalk.yellow(`[Security] Auth token is ${AUTH_TOKEN ? 'ENABLED' : 'DISABLED (Open)'}`));
+    console.log(chalk.blue(`[Tunnel] Ready for Cloudflare Tunnel:\n         cloudflared tunnel --url http://127.0.0.1:${PORT}\n`));
+  });
+}
+
 server.on('error', (err: any) => {
   if (err?.code === 'EADDRINUSE') {
-    console.error(chalk.red(`[PebbleAFK Fatal] Port ${PORT} is already in use by another process.`));
+    listenRetries++;
+    if (listenRetries <= MAX_LISTEN_RETRIES) {
+      console.warn(chalk.yellow(`[Server] Port ${PORT} busy (attempt ${listenRetries}/${MAX_LISTEN_RETRIES}). Re-attempting in 1.5s...`));
+      setTimeout(() => {
+        try { server.close(); } catch (_) {}
+        startServerListening();
+      }, 1500);
+      return;
+    }
+    console.error(chalk.red(`[PebbleAFK Fatal] Port ${PORT} remained busy after ${MAX_LISTEN_RETRIES} attempts.`));
     process.exit(43);
   } else {
     console.error(chalk.red(`[PebbleAFK Fatal Server Error] ${err?.message || err}`));
@@ -312,16 +362,4 @@ server.on('error', (err: any) => {
   }
 });
 
-// Cloudflare Tunnel runs locally on this phone, then exposes the secure public URL.
-// Bind the daemon only to loopback; no Wi-Fi/mobile interface address is involved.
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(chalk.cyan(`
-  ╔═══════════════════════════════════════════════════╗
-  ║                PebbleAFK Daemon                   ║
-  ║         Pure Bedrock Protocol AFK Stack           ║
-  ╚═══════════════════════════════════════════════════╝
-  `));
-  console.log(chalk.green(`[Server] Listening on phone-local http://127.0.0.1:${PORT} (Cloudflare Tunnel origin)`));
-  console.log(chalk.yellow(`[Security] Auth token is ${AUTH_TOKEN ? 'ENABLED' : 'DISABLED (Open)'}`));
-  console.log(chalk.blue(`[Tunnel] Ready for Cloudflare Tunnel:\n         cloudflared tunnel --url http://127.0.0.1:${PORT}\n`));
-});
+startServerListening();

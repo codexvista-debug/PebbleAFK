@@ -51,11 +51,12 @@ export function updateTermuxNotification(botManager: BotManager) {
       content = `🟢 ${count} bot${count === 1 ? '' : 's'} online | Uptime: ${uptimeStr}`;
     }
 
-    // Only invoke if changed or periodic tick
-    if (title !== lastTitle || content !== lastContent) {
-      lastTitle = title;
-      lastContent = content;
+    // Only invoke if changed
+    if (title === lastTitle && content === lastContent) {
+      return;
     }
+    lastTitle = title;
+    lastContent = content;
 
     execFile(
       'termux-notification',
@@ -84,8 +85,8 @@ export function startTermuxNotificationTicker(botManager: BotManager) {
   if (notificationTicker) clearInterval(notificationTicker);
   // Initial fire
   updateTermuxNotification(botManager);
-  // Tick every 5 seconds to update uptime and live bot status
+  // Tick every 20 seconds to update uptime and live bot status
   notificationTicker = setInterval(() => {
     updateTermuxNotification(botManager);
-  }, 5000);
+  }, 20000);
 }

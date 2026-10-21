@@ -204,6 +204,7 @@ run_daemon_loop() {
   export PEBBLEAFK_OWNER="$APP_USER"
   export DAEMON_AUTH_TOKEN="$APP_SECRET"
   export PEBBLEAFK_INSTANCE_ID="$INSTANCE_ID"
+  export NODE_OPTIONS="--max-old-space-size=512"
   DAEMON_CHILD_PID=""
   stop_daemon_child() {
     if [ -n "$DAEMON_CHILD_PID" ] && kill -0 "$DAEMON_CHILD_PID" 2>/dev/null; then
@@ -215,6 +216,10 @@ run_daemon_loop() {
   trap 'stop_daemon_child; exit 0' TERM INT
   RESTART_DELAY=2
   while true; do
+    # Clear dead lingering socket on 8080 before launching child
+    if command -v fuser &>/dev/null; then
+      fuser -k 8080/tcp 2>/dev/null || true
+    fi
     ./node_modules/.bin/tsx src/index.ts >> daemon.log 2>&1 &
     DAEMON_CHILD_PID=$!
     echo "$DAEMON_CHILD_PID" > "$DAEMON_PID_FILE"
@@ -228,8 +233,13 @@ run_daemon_loop() {
       continue
     fi
     if [ "$EXIT_CODE" -eq 43 ]; then
-      echo -e "\n[$(date +%T)] ❌ Fatal port conflict: another process owns 127.0.0.1:8080. Stopping supervisor; no tunnel URL will be published." >> daemon.log
-      exit 43
+      echo -e "\n[$(date +%T)] ⚠️ Port 8080 conflict detected. Releasing port and retrying in 3s..." >> daemon.log
+      if command -v fuser &>/dev/null; then
+        fuser -k 8080/tcp 2>/dev/null || true
+      fi
+      sleep 3
+      RESTART_DELAY=2
+      continue
     fi
     if [ "$EXIT_CODE" -eq 44 ]; then
       echo -e "\n[$(date +%T)] 🛑 Dashboard requested a full daemon shutdown. Stopping the Termux launcher and all managed services." >> daemon.log
@@ -388,36 +398,20 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
       restart_tunnel || true
     fi
 
-    # Check the loopback daemon periodically, but do not recreate a live
-    # Cloudflare tunnel just because a phone-side public self-probe failed.
+    # Watchdog: Keep Cloudflare tunnel and public registration alive.
+    # NEVER kill the running daemon child: active Minecraft bot sessions must not be dropped.
+    # The supervisor loop (wait $DAEMON_CHILD_PID) already handles crashes and restarts automatically.
     CHECK_COUNTER=$((CHECK_COUNTER + 1))
-    if [ "$CHECK_COUNTER" -ge 2 ]; then
+    if [ "$CHECK_COUNTER" -ge 4 ]; then
       CHECK_COUNTER=0
-      LOCAL_HEALTH=$(curl -fsS --connect-timeout 2 --max-time 4 http://127.0.0.1:8080/ 2>/dev/null || true)
-      if ! echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
-        HEALTH_MISS_COUNT=$((HEALTH_MISS_COUNT + 1))
-        HEALTH_CHILD_PID=$(tr -cd '0-9' < "$DAEMON_PID_FILE" 2>/dev/null || true)
-        if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID"; then
-          if [ "$HEALTH_MISS_COUNT" -eq 1 ] || [ $((HEALTH_MISS_COUNT % 3)) -eq 0 ]; then
-            echo -e "[$(date +%T)] ⚠️ Local daemon health probe missed ($HEALTH_MISS_COUNT consecutive); child PID $HEALTH_CHILD_PID is still running. A single missed probe will not restart it; the public tunnel URL is preserved." >> daemon.log
-          fi
-          if [ "$HEALTH_MISS_COUNT" -ge 3 ]; then
-            echo -e "[$(date +%T)] 🔄 Local health failed three checks in a row; restarting the unresponsive managed daemon child. Cloudflare tunnel URL remains unchanged; in-memory bot sessions will need to reconnect." >> daemon.log
-            kill -TERM "$HEALTH_CHILD_PID" 2>/dev/null || true
-            for attempt in {1..10}; do
-              is_managed_pid "$HEALTH_CHILD_PID" || break
-              sleep 0.5
-            done
-            if is_managed_pid "$HEALTH_CHILD_PID"; then
-              kill -KILL "$HEALTH_CHILD_PID" 2>/dev/null || true
-            fi
-            HEALTH_MISS_COUNT=0
-          fi
-        else
-          echo -e "[$(date +%T)] ⚠️ Local daemon health probe missed ($HEALTH_MISS_COUNT consecutive); daemon child is not running. The supervisor restart loop is recovering it; keeping the public tunnel URL." >> daemon.log
-        fi
-      else
+      HEALTH_CHILD_PID=$(tr -cd '0-9' < "$DAEMON_PID_FILE" 2>/dev/null || true)
+      if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID"; then
         HEALTH_MISS_COUNT=0
+      else
+        HEALTH_MISS_COUNT=$((HEALTH_MISS_COUNT + 1))
+        if [ "$HEALTH_MISS_COUNT" -le 2 ]; then
+          echo -e "[$(date +%T)] ⚠️ Daemon child process is restarting; supervisor loop is recovering it." >> daemon.log
+        fi
       fi
     fi
 
