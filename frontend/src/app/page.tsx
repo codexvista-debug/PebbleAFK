@@ -365,6 +365,7 @@ export default function Home() {
     botStates,
     botReasons,
     telemetries,
+    bossBarsByBot,
     messagesByBot,
     activityLogs,
     restartDaemon,
@@ -2271,6 +2272,10 @@ export default function Home() {
                         ? selectedChatAccountId
                         : targetAccounts[0]?.id || '';
                       const selectedAccount = targetAccounts.find((a) => a.id === selectedAccountId) || null;
+                      const selectedBotId = `${activeServer.id}__${selectedAccountId}`;
+                      const selectedBossBar = selectedAccount && selectedAccountIds.length <= 1
+                        ? bossBarsByBot[selectedBotId]
+                        : null;
 
                       const isSelectedOnline = selectedAccount ? (() => {
                         const bId = `${activeServer.id}__${selectedAccount.id}`;
@@ -2283,15 +2288,38 @@ export default function Home() {
                         ? [...(messagesByBot[`${activeServer.id}__${selectedAccountId}`] || [])]
                         : [];
 
-                      // Deduplicate by timestamp + raw
+                      chatList.sort((a, b) => a.timestamp - b.timestamp);
+
+                      // Remove duplicate cached rows from the older optimistic
+                      // send path when the server echo arrived a moment later.
                       const seen = new Set<string>();
+                      const recentOwnMessages = new Map<string, number>();
+                      const ownNames = new Set(
+                        [selectedAccount?.username, selectedAccount?.ign]
+                          .filter((name): name is string => Boolean(name))
+                          .map((name) => name.replace(/^_+/, '').toLowerCase())
+                      );
                       chatList = chatList.filter((m) => {
                         const key = `${m.timestamp}__${m.raw}`;
                         if (seen.has(key)) return false;
                         seen.add(key);
+
+                        const sender = (m.sender || '').replace(/^_+/, '').toLowerCase();
+                        const belongsToSelectedAccount = Boolean(
+                          m.type === 'chat' &&
+                          selectedAccount &&
+                          m.accountUsername?.toLowerCase() === selectedAccount.username.toLowerCase() &&
+                          ownNames.has(sender)
+                        );
+                        if (belongsToSelectedAccount) {
+                          const ownMessageKey = `${sender}__${m.raw}`;
+                          const previousTimestamp = recentOwnMessages.get(ownMessageKey);
+                          if (previousTimestamp !== undefined && m.timestamp - previousTimestamp <= 4_000) return false;
+                          recentOwnMessages.set(ownMessageKey, m.timestamp);
+                        }
+
                         return true;
                       });
-                      chatList.sort((a, b) => a.timestamp - b.timestamp);
 
                       return (
                         <div className="w-full min-w-0 flex-1 min-h-0 flex flex-col">
@@ -2325,15 +2353,34 @@ export default function Home() {
                                     } catch (_) {}
                                   }
                                 }}
-                                className="flex shrink-0 items-center gap-2 rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs font-semibold text-slate-600 hover:bg-white border border-transparent hover:border-slate-200 transition"
+                                className="flex shrink-0 items-center rounded-xl p-1.5 hover:bg-white border border-transparent hover:border-slate-200 transition"
                                 title={chatAutoScroll ? 'Auto-scroll is on' : 'Auto-scroll is off'}
                               >
-                                <span>Auto-scroll</span>
                                 <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${chatAutoScroll ? 'bg-emerald-600' : 'bg-slate-300'}`}>
                                   <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${chatAutoScroll ? 'translate-x-4' : 'translate-x-0.5'}`} />
                                 </span>
                               </button>
                             </div>
+
+                            {selectedBossBar?.visible && selectedBossBar.title && (
+                              <div className="shrink-0 border-b border-amber-200/70 bg-amber-50/70 px-4 py-2.5 sm:px-5" role="status" aria-label="AFK reward boss bar">
+                                <div className="flex items-center justify-between gap-3 text-xs sm:text-sm">
+                                  <div className="min-w-0 truncate font-semibold text-amber-900">
+                                    <MinecraftText text={selectedBossBar.title} />
+                                  </div>
+                                  {typeof selectedBossBar.progress === 'number' && (
+                                    <span className="shrink-0 tabular-nums text-[11px] font-medium text-amber-700">
+                                      {Math.round(selectedBossBar.progress * 100)}%
+                                    </span>
+                                  )}
+                                </div>
+                                {typeof selectedBossBar.progress === 'number' && (
+                                  <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-amber-200/80">
+                                    <div className="h-full rounded-full bg-amber-500 transition-[width] duration-500" style={{ width: `${Math.round(selectedBossBar.progress * 100)}%` }} />
+                                  </div>
+                                )}
+                              </div>
+                            )}
 
                             {/* Chat Messages Stream Area (Spacious layout matching PocketAFK) */}
                             <div ref={chatScrollContainerRef} className="flex-1 min-h-0 p-3 sm:p-5 min-w-0 overflow-y-auto overflow-x-hidden space-y-3 font-mono text-[13px] bg-white overscroll-contain touch-pan-y">

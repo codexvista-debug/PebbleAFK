@@ -95,6 +95,15 @@ export interface Telemetry {
   pitch?: number;
 }
 
+export interface BossBar {
+  botId: string;
+  serverId?: string;
+  accountUsername?: string;
+  visible: boolean;
+  title?: string;
+  progress?: number;
+}
+
 export interface BedrockFormButton {
   text: string;
   image?: { type: 'path' | 'url'; data: string };

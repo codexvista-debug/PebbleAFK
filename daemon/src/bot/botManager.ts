@@ -132,6 +132,17 @@ export class BotManager {
             },
           });
 
+          const bossBar = instance.getBossBar();
+          this.broadcastFn({
+            type: 'BOSS_BAR',
+            payload: bossBar || {
+              botId,
+              serverId: instance.config.serverId,
+              accountUsername: instance.config.username,
+              visible: false,
+            },
+          });
+
           // Sync buffered chat history for this bot so dashboard chat loads immediately
           if (instance.chatHistory && instance.chatHistory.length > 0) {
             for (const chatMsg of instance.chatHistory) {

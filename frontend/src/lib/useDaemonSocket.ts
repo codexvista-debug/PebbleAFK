@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { BotLifecycleState, ChatMessage, Telemetry, ActivityLog, BedrockForm, SocketStatus, MsAuthData } from '../types';
+import { BotLifecycleState, BossBar, ChatMessage, Telemetry, ActivityLog, BedrockForm, SocketStatus, MsAuthData } from '../types';
 
 export function useDaemonSocket(
   currentUser: string | null,
@@ -37,6 +37,7 @@ export function useDaemonSocket(
   const [botStates, setBotStates] = useState<Record<string, BotLifecycleState>>({});
   const [botReasons, setBotReasons] = useState<Record<string, string>>({});
   const [telemetries, setTelemetries] = useState<Record<string, Telemetry>>({});
+  const [bossBarsByBot, setBossBarsByBot] = useState<Record<string, BossBar>>({});
   const [messagesByBot, setMessagesByBot] = useState<Record<string, ChatMessage[]>>(() => {
     if (typeof window !== 'undefined') {
       const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
@@ -333,6 +334,18 @@ export function useDaemonSocket(
             }));
           }
 
+          if (msg.type === 'BOSS_BAR') {
+            setBossBarsByBot((prev) => {
+              if (!msg.payload.visible) {
+                if (!prev[msg.payload.botId]) return prev;
+                const next = { ...prev };
+                delete next[msg.payload.botId];
+                return next;
+              }
+              return { ...prev, [msg.payload.botId]: msg.payload };
+            });
+          }
+
           if (msg.type === 'CHAT_MESSAGE') {
             setMessagesByBot((prev) => {
               const bId = msg.payload.botId;
@@ -592,6 +605,7 @@ export function useDaemonSocket(
     botStates,
     botReasons,
     telemetries,
+    bossBarsByBot,
     messagesByBot,
     activityLogs,
     bedrockForms,

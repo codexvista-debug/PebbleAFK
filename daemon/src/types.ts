@@ -75,6 +75,15 @@ export interface TelemetryPayload {
   pitch?: number;
 }
 
+export interface BossBarPayload {
+  botId: string;
+  serverId?: string;
+  accountUsername?: string;
+  visible: boolean;
+  title?: string;
+  progress?: number;
+}
+
 export interface BedrockFormButton {
   text: string;
   image?: { type: 'path' | 'url'; data: string };
@@ -139,6 +148,7 @@ export type DaemonMessage =
   | { type: 'BOT_STATE'; payload: { botId: string; serverId?: string; username?: string; accountId?: string; version?: string; state: BotLifecycleState; reason?: string; connectedAt?: number; uptime?: number } }
   | { type: 'CHAT_MESSAGE'; payload: ChatMessagePayload }
   | { type: 'TELEMETRY'; payload: TelemetryPayload }
+  | { type: 'BOSS_BAR'; payload: BossBarPayload }
   | { type: 'BEDROCK_FORM'; payload: BedrockFormPayload }
   | { type: 'CONTAINER_WINDOW'; payload: ContainerWindowPayload }
   | { type: 'WINDOW_CLOSE'; payload: { botId: string; windowId: number } }

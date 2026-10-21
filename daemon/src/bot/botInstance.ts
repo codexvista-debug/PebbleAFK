@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import { randomUUID } from 'crypto';
 const bedrock = require('bedrock-protocol');
-import { BotConfig, BotLifecycleState, DaemonMessage, TelemetryPayload } from '../types';
+import { BotConfig, BotLifecycleState, BossBarPayload, DaemonMessage, TelemetryPayload } from '../types';
 import { getAndSyncTokenFolder } from './tokenManager';
 
 function pingBedrockJsp(host: string, port: number, timeoutMs = 2000): Promise<{ version?: string; motd?: string; protocol?: string } | null> {
@@ -222,6 +222,8 @@ export class PebbleBotInstance {
   private lastServerNotice: string = '';
   private lastServerNoticeAt: number = 0;
   private lastDisconnectReason: string = '';
+  private bossBars = new Map<string, { title: string; progress?: number; updatedAt: number }>();
+  private currentAfkBossBar: BossBarPayload | null = null;
 
   // Telemetry cache
   private position = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -244,6 +246,7 @@ export class PebbleBotInstance {
 
   public async start() {
     this.isExplicitlyStopped = false;
+    this.clearBossBars();
     this.connectionStable = false;
     this.lastServerNotice = '';
     this.lastServerNoticeAt = 0;
@@ -510,6 +513,12 @@ export class PebbleBotInstance {
         this.handleBedrockText(packet);
       });
 
+      // Bedrock boss bars arrive as incremental events; keep a per-entity cache
+      // so title/progress updates can be combined into one account-scoped state.
+      client.on('boss_event', (packet: any) => {
+        this.handleBossBarPacket(packet);
+      });
+
       // Modal Form Request: Bedrock server menus / forms
       client.on('modal_form_request', (packet: any) => {
         this.handleBedrockForm(packet);
@@ -719,17 +728,9 @@ export class PebbleBotInstance {
         // Send as regular chat
         this.writeChatPacket(this.client, message);
       }
-      this.pushChat({
-        botId: this.config.id,
-        serverId: this.config.serverId,
-        accountUsername: this.config.username,
-        id: randomUUID(),
-        timestamp: Date.now(),
-        raw: message,
-        formattedText: message,
-        sender: this.config.username,
-        type: 'chat',
-      });
+      // Do not optimistically add a chat row here. Bedrock servers echo
+      // authored chat through the text packet; rendering both creates a
+      // duplicate in the dashboard even though the message is sent once.
       this.logActivity('chat', `Sent: ${message}`);
     } catch (err: any) {
       console.log(chalk.red(`[PebbleAFK] Failed to send chat:`), err);
@@ -919,6 +920,89 @@ export class PebbleBotInstance {
     this.broadcastFn({
       type: 'CHAT_MESSAGE',
       payload: chatMsg,
+    });
+  }
+
+  public getBossBar(): BossBarPayload | null {
+    return this.currentAfkBossBar;
+  }
+
+  private handleBossBarPacket(packet: any) {
+    if (!packet) return;
+
+    const rawType = packet.type ?? packet.event_type;
+    const eventType = String(rawType ?? '').toLowerCase();
+    const targetId = String(packet.target_entity_id ?? packet.boss_entity_id ?? packet.entity_id ?? 'default');
+    const numericType = Number(rawType);
+    const isShow = eventType === 'show_bar' || eventType === 'show' || numericType === 0;
+    const isHide = eventType === 'hide_bar' || eventType === 'hide' || numericType === 2;
+    const isProgress = eventType === 'set_bar_progress' || eventType === 'health_percentage' || numericType === 4;
+    const isTitle = eventType === 'set_bar_title' || eventType === 'title' || numericType === 5;
+
+    if (isHide) {
+      this.bossBars.delete(targetId);
+    } else if (isShow || isProgress || isTitle) {
+      const previous = this.bossBars.get(targetId);
+      const packetTitle = typeof packet.title === 'string' && packet.title
+        ? packet.title
+        : (typeof packet.filtered_title === 'string' && packet.filtered_title ? packet.filtered_title : '');
+      const title = packetTitle || previous?.title || '';
+      const rawProgress = Number(packet.progress ?? packet.health_percentage);
+      const progress = Number.isFinite(rawProgress)
+        ? Math.max(0, Math.min(1, rawProgress))
+        : previous?.progress;
+      this.bossBars.set(targetId, { title, progress, updatedAt: Date.now() });
+    } else {
+      return;
+    }
+
+    const afkBar = Array.from(this.bossBars.values())
+      .filter((bar) => /\b(?:afk|reward)\b/i.test(stripMinecraftFormatting(bar.title)))
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    const next: BossBarPayload | null = afkBar
+      ? {
+          botId: this.config.id,
+          serverId: this.config.serverId,
+          accountUsername: this.config.username,
+          visible: true,
+          title: afkBar.title,
+          progress: afkBar.progress,
+        }
+      : null;
+
+    // Avoid unnecessary UI renders on unrelated boss updates, but still emit
+    // progress/title changes for the AFK reward bar.
+    const previous = this.currentAfkBossBar;
+    if (
+      previous?.visible === next?.visible &&
+      previous?.title === next?.title &&
+      previous?.progress === next?.progress
+    ) return;
+
+    this.currentAfkBossBar = next;
+    this.broadcastFn({
+      type: 'BOSS_BAR',
+      payload: next || {
+        botId: this.config.id,
+        serverId: this.config.serverId,
+        accountUsername: this.config.username,
+        visible: false,
+      },
+    });
+  }
+
+  private clearBossBars() {
+    this.bossBars.clear();
+    if (!this.currentAfkBossBar) return;
+    this.currentAfkBossBar = null;
+    this.broadcastFn({
+      type: 'BOSS_BAR',
+      payload: {
+        botId: this.config.id,
+        serverId: this.config.serverId,
+        accountUsername: this.config.username,
+        visible: false,
+      },
     });
   }
 
