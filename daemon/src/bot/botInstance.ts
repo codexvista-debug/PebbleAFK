@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import dns from 'dns';
 import { randomUUID } from 'crypto';
 const bedrock = require('bedrock-protocol');
 import { BotConfig, BotLifecycleState, BossBarPayload, DaemonMessage, TelemetryPayload } from '../types';
@@ -286,6 +287,16 @@ export class PebbleBotInstance {
       const cleanHost = (this.config.host || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
       const cleanPort = Number(this.config.port) || 19132;
 
+      // Pin host to single IPv4 to prevent round-robin DNS splitting RakNet UDP packets across multiple edge servers
+      let connectHost = cleanHost;
+      try {
+        const lookup = await dns.promises.lookup(cleanHost, { family: 4 });
+        if (lookup?.address) {
+          connectHost = lookup.address;
+          console.log(chalk.gray(`[PebbleAFK] Pinned host ${cleanHost} -> IPv4 ${connectHost}`));
+        }
+      } catch (_) {}
+
       let hasNativeRaknet = false;
       try {
         (eval('require'))('raknet-native');
@@ -301,9 +312,9 @@ export class PebbleBotInstance {
       if (isAutoVersion) {
         this.logActivity('status', `🔍 Pinging Bedrock UDP port ${cleanHost}:${cleanPort}...`);
         try {
-          pingRes = await pingBedrockJsp(cleanHost, cleanPort, 2500);
+          pingRes = await pingBedrockJsp(connectHost, cleanPort, 2500);
           if (pingRes) {
-            console.log(chalk.cyan(`[PebbleAFK] Bedrock ping response from ${cleanHost}:${cleanPort}: protocol=${pingRes.protocol}, version=${pingRes.version}`));
+            console.log(chalk.cyan(`[PebbleAFK] Bedrock ping response from ${cleanHost} (${connectHost}):${cleanPort}: protocol=${pingRes.protocol}, version=${pingRes.version}`));
             this.logActivity('status', `✓ Bedrock server online: Protocol ${pingRes.protocol || 'auto'}, Version ${pingRes.version || 'auto'}`);
           } else {
             this.logActivity('warning', `⚠️ No UDP ping response from ${cleanHost}:${cleanPort}. Server may be offline or filtering Unconnected Ping.`);
@@ -321,10 +332,10 @@ export class PebbleBotInstance {
       const targetVersion = this.autoVersionOverride || this.currentVersionCandidate || resolved.version;
       this.lastAttemptedVersion = targetVersion;
 
-      this.logActivity('connect', `🚀 Initiating RakNet handshake with ${cleanHost}:${cleanPort} (Minecraft Bedrock ${targetVersion}, Transport: ${rakBackend})...`);
+      this.logActivity('connect', `🚀 Initiating RakNet handshake with ${cleanHost} (${connectHost}):${cleanPort} (Minecraft Bedrock ${targetVersion}, Transport: ${rakBackend})...`);
 
       const clientOptions: any = {
-        host: cleanHost,
+        host: connectHost,
         port: cleanPort,
         username: this.config.username,
         offline: isOffline,
