@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ServerProfile, BedrockAccount, BotSettings, getAutoDetectedBedrockVersion } from '../types';
+import { ServerProfile, BedrockAccount, BotSettings } from '../types';
 import { X, Info, ChevronDown, Check } from 'lucide-react';
 import { ConfirmModal } from './ConfirmModal';
 
@@ -32,7 +32,7 @@ const DEFAULT_SETTINGS: BotSettings = {
 
 const BEDROCK_VERSIONS = [
   { label: 'Auto Detect (Recommended)', value: 'auto' },
-  { label: '1.26.30 (FreshSMP / Bedrock 26.x)', value: '1.26.30' },
+  { label: '1.26.30 (Bedrock 26.x)', value: '1.26.30' },
   { label: '1.26.51 (DonutSMP / Bedrock Preview)', value: '1.26.51' },
   { label: '1.21.50 (Bedrock 1.21 Stable)', value: '1.21.50' },
   { label: '1.21.40', value: '1.21.40' },
@@ -248,7 +248,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
                   onChange={(e) => setServerVersion(e.target.value)}
                   className="w-full bg-white border border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/10 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 font-bold focus:outline-none transition cursor-pointer appearance-none shadow-2xs"
                 >
-                  <option value="auto">Auto Detect ({getAutoDetectedBedrockVersion(serverHost)})</option>
+                  <option value="auto">Auto Detect (server ping)</option>
                   {BEDROCK_VERSIONS.filter(v => v.value !== 'auto').map((v) => (
                     <option key={v.value} value={v.value}>
                       {v.label}
@@ -262,8 +262,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
               </div>
               {(!serverVersion || serverVersion === 'auto') && (
                 <p className="text-[11px] text-emerald-700 font-semibold mt-1 flex items-center gap-1">
-                  <span>✓ Auto-resolved Bedrock protocol:</span>
-                  <span className="font-bold underline">{getAutoDetectedBedrockVersion(serverHost)}</span>
+                  <span>✓ Uses the server-advertised Bedrock protocol when available.</span>
                 </p>
               )}
             </div>

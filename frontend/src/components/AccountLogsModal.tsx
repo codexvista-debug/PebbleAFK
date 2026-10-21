@@ -24,6 +24,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { BedrockAccount, PlayerLogEntry, PlayerLogType, ActivityLog } from '@/types';
+import { RelativeTime } from '@/components/RelativeTime';
 
 interface AccountLogsModalProps {
   isOpen: boolean;
@@ -437,13 +438,6 @@ export const AccountLogsModal: React.FC<AccountLogsModalProps> = ({
             </div>
           ) : (
             filteredLogs.map((entry) => {
-              const timeStr = new Date(entry.timestamp).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: false,
-              });
-
               const isError = entry.status === 'error' || entry.type === 'kicked' || entry.type === 'error';
               const isWarning =
                 entry.status === 'warning' || entry.type === 'reconnecting' || entry.type === 'disconnected';
@@ -466,9 +460,7 @@ export const AccountLogsModal: React.FC<AccountLogsModalProps> = ({
                 >
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[10px] font-mono font-medium text-slate-400 select-none">
-                        [{timeStr}]
-                      </span>
+                      <RelativeTime timestamp={entry.timestamp} className="text-[10px] font-mono font-medium text-slate-400 select-none" />
                       {getTypeBadge(entry.type, entry.status)}
                       {entry.serverHost && (
                         <span className="text-[10px] font-mono text-slate-500 bg-slate-100/90 px-1.5 py-0.5 rounded border border-slate-200/70">
