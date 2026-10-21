@@ -24,7 +24,7 @@ export const DangerousSettingsModal: React.FC<DangerousSettingsModalProps> = ({
   if (!isOpen || !server) return null;
 
   const physicsEnabled = server.settings?.physics ?? true;
-  const resourcePacksEnabled = server.settings?.acceptResourcePacks ?? true;
+  const resourcePacksEnabled = server.settings?.acceptResourcePacks ?? false;
 
   const handleDelete = () => {
     if (!confirmDelete) {

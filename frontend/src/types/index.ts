@@ -16,11 +16,11 @@ export interface BotSettings {
   joinCommandDelay?: number;
 }
 
-/** Safe baseline for newly created server profiles. FreshSMP profiles enable the
- * server-specific /lifesteal command via FRESHSMP_DEFAULT_BOT_SETTINGS below. */
+/** Defaults applied to newly created server profiles. FreshSMP profiles also
+ * enable the server-specific /lifesteal command via the preset below. */
 export const DEFAULT_BOT_SETTINGS: BotSettings = {
-  physics: false,
-  acceptResourcePacks: true,
+  physics: true,
+  acceptResourcePacks: false,
   autoEat: false,
   autoTotem: false,
   antiAfk: true,
