@@ -53,6 +53,7 @@ import { ServerProfileModal } from '@/components/ServerProfileModal';
 import { DangerousSettingsModal } from '@/components/DangerousSettingsModal';
 import { AccountLogsModal } from '@/components/AccountLogsModal';
 import { ServerLogo } from '@/components/ServerLogo';
+import { BrandMark } from '@/components/BrandMark';
 import { MinecraftText } from '@/components/MinecraftText';
 import { useDaemonSocket } from '@/lib/useDaemonSocket';
 import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType, getAutoDetectedBedrockVersion } from '@/types';
@@ -1104,9 +1105,7 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-grid-slate flex flex-col items-center justify-center p-4">
         <div className="glass-panel p-8 sm:p-10 rounded-3xl border border-slate-200/90 shadow-2xl max-w-sm w-full text-center space-y-6">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center mx-auto text-3xl font-black shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-500/20">
-            ⛏
-          </div>
+          <BrandMark className="w-16 h-16 mx-auto drop-shadow-lg" />
 
           <div className="space-y-2">
             <h1 className="text-2xl font-black tracking-tight text-slate-900">
@@ -1174,9 +1173,7 @@ export default function Home() {
           </button>
 
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center font-black text-xs shadow-xs ring-2 ring-emerald-500/20">
-              ⛏
-            </div>
+            <BrandMark className="w-7 h-7 shrink-0" />
             <div>
               <span className="font-black text-sm text-slate-900 tracking-tight">PebbleAFK</span>
             </div>
@@ -1224,9 +1221,7 @@ export default function Home() {
                 className="flex items-center gap-2.5 text-left group hover:opacity-90 transition cursor-pointer"
                 title="Go to PebbleAFK Dashboard"
               >
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center font-black text-sm shadow-xs ring-2 ring-emerald-500/20 group-hover:scale-105 transition-transform">
-                  ⛏
-                </div>
+                <BrandMark className="w-8 h-8 shrink-0 drop-shadow-sm group-hover:scale-105 transition-transform" />
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-black text-sm text-slate-900 tracking-tight group-hover:text-emerald-700 transition-colors">
