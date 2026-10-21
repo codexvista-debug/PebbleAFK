@@ -1,9 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import Link from 'next/link';
 import { 
   LogIn, 
   LogOut, 
+  Shield, 
   LayoutDashboard, 
   Server, 
   Users, 
@@ -1481,18 +1483,39 @@ export default function Home() {
               <span className="text-xs font-bold text-slate-900 truncate">
                 @{currentUser}
               </span>
-              <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded bg-sky-50 text-sky-700 border border-sky-200">
-                BEDROCK
-              </span>
+              {currentUser?.toLowerCase() === 'chief' ? (
+                <Link
+                  href="/chief"
+                  className="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300 shadow-2xs transition"
+                  title="Chief Admin Panel"
+                >
+                  ADMIN
+                </Link>
+              ) : (
+                <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded bg-sky-50 text-sky-700 border border-sky-200">
+                  BEDROCK
+                </span>
+              )}
             </div>
 
-            <button
-              onClick={handleLogout}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
-              title="Sign Out"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              {currentUser?.toLowerCase() === 'chief' && (
+                <Link
+                  href="/chief"
+                  className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition cursor-pointer"
+                  title="Open Chief Admin Console"
+                >
+                  <Shield className="w-4 h-4" />
+                </Link>
+              )}
+              <button
+                onClick={handleLogout}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                title="Sign Out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </aside>
 

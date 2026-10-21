@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabaseClient';
 import { hashPassword, generateSecretCode, USERNAME_REGEX } from '@/lib/authUtils';
 import { FRESHSMP_DEFAULT_BOT_SETTINGS } from '@/types';
+import { getRegistrationsPaused } from '@/lib/systemConfig';
 
 function createDefaultServerProfile(username: string) {
   return {
@@ -83,6 +84,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'register') {
+      const isPaused = await getRegistrationsPaused();
+      if (isPaused) {
+        return NextResponse.json({
+          error: 'Public registrations are currently paused by the Chief Administrator. Please contact an admin.'
+        }, { status: 403 });
+      }
+
       const { data: existingList, error: checkError } = await supabase
         .from('users')
         .select('username')
