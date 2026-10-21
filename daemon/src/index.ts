@@ -132,15 +132,15 @@ wss.on('connection', (ws: WebSocket, req) => {
   }
 
   // Ping/Pong keepalive. Retire half-open tunnel sockets so clients can reconnect cleanly.
-  let isAlive = true;
+  let missedHeartbeats = 0;
   const pingInterval = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) return;
-    if (!isAlive) {
+    if (missedHeartbeats >= 3) {
       console.warn(chalk.yellow(`[Connection] WebSocket heartbeat missed for ${ip}; terminating stale socket`));
       ws.terminate();
       return;
     }
-    isAlive = false;
+    missedHeartbeats++;
     try {
       ws.ping();
     } catch (_) {
@@ -149,10 +149,11 @@ wss.on('connection', (ws: WebSocket, req) => {
   }, 20000);
 
   ws.on('pong', () => {
-    isAlive = true;
+    missedHeartbeats = 0;
   });
 
   ws.on('message', (data: Buffer | string) => {
+    missedHeartbeats = 0;
     try {
       const parsed: ClientMessage = JSON.parse(data.toString());
 

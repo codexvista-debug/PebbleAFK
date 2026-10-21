@@ -236,6 +236,10 @@ export function useDaemonSocket(
       connectionTimeoutRef.current = null;
     }
 
+    if (force) {
+      reconnectAttemptsRef.current = 0;
+    }
+
     if (socketRef.current) {
       safeClose(socketRef.current);
       socketRef.current = null;
@@ -516,6 +520,17 @@ export function useDaemonSocket(
       const ws = socketRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         connect(true);
+      } else if (lastPongAtRef.current && Date.now() - lastPongAtRef.current > 15000) {
+        // Socket may have been frozen by mobile OS background throttling; reconnect
+        connect(true);
+      } else {
+        // Socket is alive; trigger quick ping to ensure active link
+        try {
+          pingStartTimeRef.current = Date.now();
+          ws.send(JSON.stringify({ type: 'PING' }));
+        } catch (_) {
+          connect(true);
+        }
       }
     };
     const onVisibilityChange = () => {
@@ -523,9 +538,11 @@ export function useDaemonSocket(
     };
 
     window.addEventListener('online', reconnectIfNeeded);
+    window.addEventListener('focus', reconnectIfNeeded);
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       window.removeEventListener('online', reconnectIfNeeded);
+      window.removeEventListener('focus', reconnectIfNeeded);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [connect]);

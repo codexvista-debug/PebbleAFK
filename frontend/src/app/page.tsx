@@ -339,6 +339,9 @@ export default function Home() {
 
         if (currentUser) {
           syncAllToSupabase(currentUser, updated);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(`pebbleafk_accounts_${currentUser.toLowerCase()}`, JSON.stringify(updated));
+          }
         }
         return updated;
       });
@@ -398,11 +401,34 @@ export default function Home() {
             .catch(() => {});
         }
 
+        // Instant load from localStorage cache
+        const cachedAccs = localStorage.getItem(`pebbleafk_accounts_${savedUser.toLowerCase()}`);
+        if (cachedAccs) {
+          try {
+            const parsed = JSON.parse(cachedAccs);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setAccounts(parsed);
+            }
+          } catch (_) {}
+        }
+
+        const cachedSrvs = localStorage.getItem(`pebbleafk_servers_${savedUser.toLowerCase()}`);
+        if (cachedSrvs) {
+          try {
+            const parsed = JSON.parse(cachedSrvs);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setServers(parsed);
+              setActiveServerId((prev) => prev || parsed[0].id);
+            }
+          } catch (_) {}
+        }
+
         // Load accounts from Supabase (filter out any old dummy names)
         loadAccountsFromSupabase(savedUser).then((accs) => {
           if (accs && accs.length > 0) {
             const cleanAccs = accs.filter((a) => !a.ign?.startsWith('bedrock_user_') && !a.username?.startsWith('bedrock_user_'));
             setAccounts(cleanAccs);
+            localStorage.setItem(`pebbleafk_accounts_${savedUser.toLowerCase()}`, JSON.stringify(cleanAccs));
           }
         });
 
@@ -411,17 +437,7 @@ export default function Home() {
           if (srvs && srvs.length > 0) {
             setServers(srvs);
             setActiveServerId((prev) => prev || srvs[0].id);
-          } else {
-            const cached = localStorage.getItem(`pebbleafk_servers_${savedUser.toLowerCase()}`);
-            if (cached) {
-              try {
-                const parsed = JSON.parse(cached);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                  setServers(parsed);
-                  setActiveServerId((prev) => prev || parsed[0].id);
-                }
-              } catch (_) {}
-            }
+            localStorage.setItem(`pebbleafk_servers_${savedUser.toLowerCase()}`, JSON.stringify(srvs));
           }
         });
       }
@@ -491,6 +507,82 @@ export default function Home() {
     }
   };
 
+  // Continuous background cross-device sync for accounts and server profiles
+  const isSyncingRef = useRef(false);
+  const syncRemoteState = useCallback(async (userToSync?: string) => {
+    const user = (userToSync || currentUser || '').trim();
+    if (!user || isSyncingRef.current) return;
+    isSyncingRef.current = true;
+    try {
+      // 1. Sync accounts from Supabase
+      const remoteAccs = await loadAccountsFromSupabase(user);
+      if (Array.isArray(remoteAccs)) {
+        const cleanAccs = remoteAccs.filter((a) => !a.ign?.startsWith('bedrock_user_') && !a.username?.startsWith('bedrock_user_'));
+        setAccounts((prev) => {
+          const prevKey = prev.map((a) => `${a.id}:${a.ign}:${a.verified}`).join('|');
+          const newKey = cleanAccs.map((a) => `${a.id}:${a.ign}:${a.verified}`).join('|');
+          if (prevKey !== newKey) {
+            if (typeof window !== 'undefined') {
+              localStorage.setItem(`pebbleafk_accounts_${user.toLowerCase()}`, JSON.stringify(cleanAccs));
+            }
+            return cleanAccs;
+          }
+          return prev;
+        });
+      }
+
+      // 2. Sync server profiles from Supabase
+      const remoteServers = await loadServersFromSupabase(user);
+      if (Array.isArray(remoteServers) && remoteServers.length > 0) {
+        setServers((prev) => {
+          const prevKey = prev.map((s) => `${s.id}:${(s.assignedAccountIds || []).join(',')}:${s.name}`).join('|');
+          const newKey = remoteServers.map((s) => `${s.id}:${(s.assignedAccountIds || []).join(',')}:${s.name}`).join('|');
+          if (prevKey !== newKey) {
+            if (typeof window !== 'undefined') {
+              localStorage.setItem(`pebbleafk_servers_${user.toLowerCase()}`, JSON.stringify(remoteServers));
+            }
+            return remoteServers;
+          }
+          return prev;
+        });
+        setActiveServerId((prev) => prev || remoteServers[0].id);
+      }
+    } catch (_) {
+    } finally {
+      isSyncingRef.current = false;
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    syncRemoteState(currentUser);
+
+    const interval = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        syncRemoteState(currentUser);
+      }
+    }, 6000);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncRemoteState(currentUser);
+      }
+    };
+    const onFocus = () => {
+      syncRemoteState(currentUser);
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [currentUser, syncRemoteState]);
+
   // 1-Click Termux Command with exact secretCode
   const termux1ClickCmd = currentUser
     ? `curl -sL https://pebbleafk.vercel.app/install | bash -s -- ${currentUser}${secretCode ? ` ${secretCode}` : ''}`
@@ -535,7 +627,7 @@ export default function Home() {
             const lastAcceptedAt = tunnelRegistrationRef.current.updatedAt;
             const isNewerTermuxRegistration = Number.isFinite(updatedAt) && updatedAt > lastAcceptedAt;
             const isSameRegistration = updatedAt === lastAcceptedAt && cleanTarget === cleanCurrent;
-            const isDisconnected = daemonStatusRef.current !== 'AUTHENTICATED';
+            const isDisconnected = daemonStatusRef.current === 'DISCONNECTED' || daemonStatusRef.current === 'AUTH_ERROR';
 
             // Accept registration if:
             // 1. Termux published a newer timestamp, OR
@@ -552,8 +644,8 @@ export default function Home() {
                 setDaemonUrl(cleanTarget);
                 reconnect(true);
               } else if (isDisconnected) {
-                // Target URL is already saved but socket disconnected; force reconnect immediately
-                reconnect(true);
+                // Target URL is already saved and socket is disconnected; allow gentle reconnect without killing connecting handshake
+                reconnect(false);
               }
               if (targetToken) setAuthToken(targetToken);
             }
@@ -637,7 +729,13 @@ export default function Home() {
       const ign = acc.ign || acc.username;
       await deleteAccountFromSupabase(currentUser, ign);
     }
-    setAccounts((prev) => prev.filter((a) => a.id !== id));
+    setAccounts((prev) => {
+      const updated = prev.filter((a) => a.id !== id);
+      if (currentUser && typeof window !== 'undefined') {
+        localStorage.setItem(`pebbleafk_accounts_${currentUser.toLowerCase()}`, JSON.stringify(updated));
+      }
+      return updated;
+    });
     showToast('Bedrock account unlinked.', 'info');
   };
 
@@ -728,17 +826,30 @@ export default function Home() {
     });
   };
 
-  // Accounts assigned to current Server Profile (strictly filtered to existing accounts)
+  // Accounts assigned to current Server Profile (strictly filtered to existing accounts, plus active bots reported by daemon)
   const profileAccountIds = useMemo(() => {
     if (!activeServer) return [];
     const validAccountIds = new Set(accounts.map((a) => a.id));
+    const result = new Set<string>();
     if (Array.isArray(activeServer.assignedAccountIds)) {
-      return activeServer.assignedAccountIds.filter((id) => validAccountIds.has(id));
+      activeServer.assignedAccountIds.forEach((id) => {
+        if (validAccountIds.has(id)) result.add(id);
+      });
     }
-    return activeServer.accountId && validAccountIds.has(activeServer.accountId)
-      ? [activeServer.accountId]
-      : [];
-  }, [activeServer, accounts]);
+    if (activeServer.accountId && validAccountIds.has(activeServer.accountId)) {
+      result.add(activeServer.accountId);
+    }
+    // Also include any account actively reporting SPAWNED, LOGGED_IN, or CONNECTING for this server
+    if (daemonStatus === 'AUTHENTICATED') {
+      accounts.forEach((acc) => {
+        const st = botStates[`${activeServer.id}__${acc.id}`] || botStates[acc.id];
+        if (st === 'SPAWNED' || st === 'LOGGED_IN' || st === 'CONNECTING') {
+          result.add(acc.id);
+        }
+      });
+    }
+    return Array.from(result);
+  }, [activeServer, accounts, daemonStatus, botStates]);
 
   const assignedAccounts = useMemo(() => {
     return accounts.filter((a) => {
@@ -1406,14 +1517,21 @@ export default function Home() {
                       ? srv.assignedAccountIds
                       : (srv.accountId ? [srv.accountId] : []);
                     const srvAssignedCount = accounts.filter((a) => srvAssignedIds.includes(a.id)).length;
-                    const onlineCount = daemonStatus === 'AUTHENTICATED' ? accounts.filter(
-                      (acc) =>
-                        srvAssignedIds.includes(acc.id) &&
-                        (botStates[`${srv.id}__${acc.id}`] === 'SPAWNED' ||
-                         botStates[`${srv.id}__${acc.id}`] === 'LOGGED_IN' ||
-                         botStates[acc.id] === 'SPAWNED' ||
-                         botStates[acc.id] === 'LOGGED_IN')
-                    ).length : 0;
+                    const onlineCount = daemonStatus === 'AUTHENTICATED' ? (() => {
+                      const fromAssigned = accounts.filter(
+                        (acc) =>
+                          srvAssignedIds.includes(acc.id) &&
+                          (botStates[`${srv.id}__${acc.id}`] === 'SPAWNED' ||
+                           botStates[`${srv.id}__${acc.id}`] === 'LOGGED_IN' ||
+                           botStates[acc.id] === 'SPAWNED' ||
+                           botStates[acc.id] === 'LOGGED_IN')
+                      ).length;
+                      const fromBotStates = Object.entries(botStates).filter(([key, state]) =>
+                        (state === 'SPAWNED' || state === 'LOGGED_IN') &&
+                        (key.startsWith(`${srv.id}__`) || srvAssignedIds.includes(key))
+                      ).length;
+                      return Math.max(fromAssigned, fromBotStates);
+                    })() : 0;
                     const totalSlots = Math.max(srvAssignedCount, onlineCount);
 
                     return (
