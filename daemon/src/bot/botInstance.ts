@@ -239,7 +239,8 @@ export class PebbleBotInstance {
   private joinCommandTimer: NodeJS.Timeout | null = null;
   private joinCommandClient: any = null;
   private isInSubserver: boolean = false;
-  private static lastSubserverCommandAt: number = 0;
+  private subserverQueueTimeoutCount: number = 0;
+  private static nextSubserverCommandAt: number = 0;
   private lastAuthInputErrorAt: number = 0;
   private originalHost: string;
   private originalPort: number;
@@ -901,12 +902,12 @@ export class PebbleBotInstance {
     // Stagger subserver transfer commands across bots so multiple bots never collide in FreshSMP queue
     if (command.toLowerCase().includes('lifesteal')) {
       const now = Date.now();
-      const timeSinceLast = now - PebbleBotInstance.lastSubserverCommandAt;
       const minSeparation = 8000;
-      if (timeSinceLast < minSeparation) {
-        finalDelay += (minSeparation - timeSinceLast);
-      }
-      PebbleBotInstance.lastSubserverCommandAt = now + finalDelay;
+      const scheduledAt = Math.max(now + finalDelay, PebbleBotInstance.nextSubserverCommandAt);
+      finalDelay = scheduledAt - now;
+      // Reserve the next slot after this command, rather than comparing now to
+      // a future timestamp (which used to compound delays across every account).
+      PebbleBotInstance.nextSubserverCommandAt = scheduledAt + minSeparation;
     }
 
     console.log(chalk.cyan(`[PebbleAFK] Scheduling join/transfer command for @${this.config.username} (${command}) in ${Math.round(finalDelay / 1000)}s...`));
@@ -1106,6 +1107,7 @@ export class PebbleBotInstance {
       .sort((a, b) => b.updatedAt - a.updatedAt)[0];
     if (afkBar) {
       this.isInSubserver = true;
+      this.subserverQueueTimeoutCount = 0;
     }
     const next: BossBarPayload | null = afkBar
       ? {
@@ -1283,16 +1285,19 @@ export class PebbleBotInstance {
 
     if (isLifestealTimeout) {
       this.isInSubserver = false;
-      console.log(chalk.yellow(`[PebbleAFK] FreshSMP queue notice for @${this.config.username}: "${cleanText}". (Subserver queue timed out; rejoining /lifesteal in 8s)...`));
+      this.subserverQueueTimeoutCount += 1;
+      const retryDelay = Math.min(60000, 12000 * (2 ** Math.min(this.subserverQueueTimeoutCount - 1, 3)));
+      console.log(chalk.yellow(`[PebbleAFK] FreshSMP queue notice for @${this.config.username}: "${cleanText}". (Subserver queue timed out; retrying /lifesteal in ${Math.ceil(retryDelay / 1000)}s, attempt ${this.subserverQueueTimeoutCount})...`));
       this.logActivity(
         'warning',
-        `FreshSMP queue notice from ${cleanSender}: "${cleanText}". (Subserver transfer queue timed out; automatically rejoining /lifesteal in 8s).`
+        `FreshSMP queue notice from ${cleanSender}: "${cleanText}". (Subserver transfer queue timed out; retrying /lifesteal in ${Math.ceil(retryDelay / 1000)}s, attempt ${this.subserverQueueTimeoutCount}).`
       );
-      this.triggerJoinCommandRetry(8000);
+      this.triggerJoinCommandRetry(retryDelay);
     }
 
     if (/entered the AFK zone/i.test(cleanText)) {
       this.isInSubserver = true;
+      this.subserverQueueTimeoutCount = 0;
     }
     if (/welcome\s+_\S+\s+to\s+play\.freshsmp\.fun/i.test(cleanText)) {
       this.isInSubserver = false;

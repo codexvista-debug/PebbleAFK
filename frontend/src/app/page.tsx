@@ -142,6 +142,7 @@ export default function Home() {
   });
   const [chatInput, setChatInput] = useState('');
   const [selectedChatAccountId, setSelectedChatAccountId] = useState<string>('');
+  const [chatSourceTooltipId, setChatSourceTooltipId] = useState<string | null>(null);
   const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const [isChatAccountDropdownOpen, setIsChatAccountDropdownOpen] = useState(false);
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -2740,36 +2741,85 @@ export default function Home() {
 
                       chatList.sort((a, b) => a.timestamp - b.timestamp);
 
-                      // Remove duplicate cached rows from the older optimistic
-                      // send path when the server echo arrived a moment later.
-                      const seen = new Set<string>();
                       const recentOwnMessages = new Map<string, number>();
                       const ownNames = new Set(
                         [selectedAccount?.username, selectedAccount?.ign]
                           .filter((name): name is string => Boolean(name))
                           .map((name) => name.replace(/^_+/, '').toLowerCase())
                       );
-                      chatList = chatList.filter((m) => {
-                        const key = `${m.timestamp}__${m.raw}`;
-                        if (seen.has(key)) return false;
-                        seen.add(key);
+                      if (!isAllSelected) {
+                        // Remove duplicate cached rows from the older optimistic
+                        // send path when the server echo arrived a moment later.
+                        const seen = new Set<string>();
+                        chatList = chatList.filter((m) => {
+                          const key = `${m.timestamp}__${m.raw}`;
+                          if (seen.has(key)) return false;
+                          seen.add(key);
 
-                        const sender = (m.sender || '').replace(/^_+/, '').toLowerCase();
-                        const belongsToSelectedAccount = Boolean(
-                          m.type === 'chat' &&
-                          selectedAccount &&
-                          m.accountUsername?.toLowerCase() === selectedAccount.username.toLowerCase() &&
-                          ownNames.has(sender)
+                          const sender = (m.sender || '').replace(/^_+/, '').toLowerCase();
+                          const belongsToSelectedAccount = Boolean(
+                            m.type === 'chat' &&
+                            selectedAccount &&
+                            m.accountUsername?.toLowerCase() === selectedAccount.username.toLowerCase() &&
+                            ownNames.has(sender)
+                          );
+                          if (belongsToSelectedAccount) {
+                            const ownMessageKey = `${sender}__${m.raw}`;
+                            const previousTimestamp = recentOwnMessages.get(ownMessageKey);
+                            if (previousTimestamp !== undefined && m.timestamp - previousTimestamp <= 4_000) return false;
+                            recentOwnMessages.set(ownMessageKey, m.timestamp);
+                          }
+
+                          return true;
+                        });
+                      } else {
+                        // Every bot receives its own copy of a shared server
+                        // broadcast. Collapse only close-in-time matches from
+                        // different accounts, retaining all receiving accounts
+                        // so their skin heads can be shown beside the timestamp.
+                        const accountIdByBotId = new Map(
+                          targetAccounts.flatMap((account) => [
+                            [`${activeServer.id}__${account.id}`, account.id] as const,
+                            [account.id, account.id] as const,
+                          ])
                         );
-                        if (belongsToSelectedAccount) {
-                          const ownMessageKey = `${sender}__${m.raw}`;
-                          const previousTimestamp = recentOwnMessages.get(ownMessageKey);
-                          if (previousTimestamp !== undefined && m.timestamp - previousTimestamp <= 4_000) return false;
-                          recentOwnMessages.set(ownMessageKey, m.timestamp);
+                        const groupsByFingerprint = new Map<string, ChatMessage[]>();
+                        const mergedMessages: ChatMessage[] = [];
+
+                        for (const message of chatList) {
+                          const sourceAccountId = accountIdByBotId.get(message.botId);
+                          if (!sourceAccountId) {
+                            mergedMessages.push(message);
+                            continue;
+                          }
+
+                          const content = (message.formattedText || message.raw || '')
+                            .replace(/(?:§|&)x(?:(?:§|&)[0-9a-fA-F]){6}/gi, '')
+                            .replace(/(?:§|&)[0-9a-zA-Z]/gi, '')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .toLowerCase();
+                          const fingerprint = `${message.serverId || activeServer.id}|${message.type}|${(message.sender || '').toLowerCase()}|${content}`;
+                          const possibleMatches = groupsByFingerprint.get(fingerprint) || [];
+                          const match = possibleMatches.find((group) =>
+                            Math.abs(message.timestamp - group.timestamp) <= 3000 &&
+                            !(group.sourceAccountIds || []).includes(sourceAccountId)
+                          );
+
+                          if (match) {
+                            match.sourceAccountIds = [...(match.sourceAccountIds || []), sourceAccountId];
+                          } else {
+                            const groupedMessage: ChatMessage = {
+                              ...message,
+                              sourceAccountIds: [sourceAccountId],
+                            };
+                            mergedMessages.push(groupedMessage);
+                            groupsByFingerprint.set(fingerprint, [...possibleMatches, groupedMessage]);
+                          }
                         }
 
-                        return true;
-                      });
+                        chatList = mergedMessages;
+                      }
 
                       return (
                         <div className="w-full min-w-0 flex-1 min-h-0 flex flex-col">
@@ -2898,6 +2948,11 @@ export default function Home() {
                                     }
 
                                     const cleanSender = effectiveSender;
+                                    const receivedByAccounts = isAllSelected
+                                      ? (m.sourceAccountIds || [])
+                                        .map((accountId) => targetAccounts.find((account) => account.id === accountId))
+                                        .filter((account): account is BedrockAccount => Boolean(account))
+                                      : [];
 
                                     return (
                                       <div key={m.id} className="flex items-start gap-2.5 py-1 text-[13px] hover:bg-slate-50/80 rounded-lg px-2 transition">
@@ -2932,7 +2987,39 @@ export default function Home() {
                                           <span className="text-slate-800 break-all font-mono leading-relaxed">
                                             <MinecraftText text={effectiveMessage} />
                                           </span>
-                                          <RelativeTime timestamp={m.timestamp} className="mt-0.5 self-end text-[9px] leading-3 text-slate-400 select-none font-mono shrink-0" />
+                                          <span className="mt-0.5 self-end inline-flex items-center gap-1 text-[9px] leading-3 text-slate-400 select-none font-mono shrink-0">
+                                            {receivedByAccounts.map((account) => (
+                                              <button
+                                                type="button"
+                                                key={account.id}
+                                                title={`Received by @${account.ign || account.username}`}
+                                                aria-label={`Received by @${account.ign || account.username}`}
+                                                onClick={() => setChatSourceTooltipId((current) => current === account.id ? null : account.id)}
+                                                className="relative inline-flex h-[13px] w-[13px] -translate-y-px overflow-visible rounded-[3px] border border-slate-300/80 bg-slate-100 p-0 opacity-90"
+                                              >
+                                                <img
+                                                  src={getPlayerSkinHeadUrl(account.ign || account.username, 20)}
+                                                  alt=""
+                                                  className="h-full w-full object-cover [image-rendering:pixelated]"
+                                                  onError={(e) => {
+                                                    const img = e.currentTarget as HTMLImageElement;
+                                                    const clean = (account.ign || account.username || 'Steve').replace(/^@/, '').trim();
+                                                    if (!img.src.includes('mc-heads')) {
+                                                      img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/20`;
+                                                    } else {
+                                                      img.src = 'https://minotar.net/helm/MHF_Steve/20.png';
+                                                    }
+                                                  }}
+                                                />
+                                                {chatSourceTooltipId === account.id && (
+                                                  <span className="absolute bottom-full right-0 z-20 mb-1 whitespace-nowrap rounded-md border border-slate-200 bg-slate-900 px-1.5 py-1 text-[10px] font-medium leading-none text-white shadow-lg">
+                                                    @{account.ign || account.username}
+                                                  </span>
+                                                )}
+                                              </button>
+                                            ))}
+                                            <RelativeTime timestamp={m.timestamp} className="text-[9px] leading-3 text-slate-400 select-none font-mono" />
+                                          </span>
                                         </div>
                                       </div>
                                     );

@@ -90,6 +90,8 @@ export interface ChatMessage {
   botId: string;
   serverId?: string;
   accountUsername?: string;
+  /** Accounts that received the same event when viewing several bots together. */
+  sourceAccountIds?: string[];
   id: string;
   timestamp: number;
   raw: string;
