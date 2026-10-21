@@ -550,6 +550,7 @@ export default function Home() {
               }
               if (cleanTarget !== cleanCurrent) {
                 setDaemonUrl(cleanTarget);
+                reconnect(true);
               } else if (isDisconnected) {
                 // Target URL is already saved but socket disconnected; force reconnect immediately
                 reconnect(true);

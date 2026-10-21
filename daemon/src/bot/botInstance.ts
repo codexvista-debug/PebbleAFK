@@ -831,7 +831,8 @@ export class PebbleBotInstance {
     if (!settings?.joinCommandEnabled || !configuredCommand) return;
 
     const command = configuredCommand.startsWith('/') ? configuredCommand : `/${configuredCommand}`;
-    const delaySeconds = Math.min(300, Math.max(0, Number(settings.joinCommandDelay ?? 3) || 0));
+    const minDelay = command.toLowerCase().includes('lifesteal') ? 8 : 3;
+    const delaySeconds = Math.min(300, Math.max(minDelay, Number(settings.joinCommandDelay ?? minDelay) || minDelay));
     this.logActivity('status', `Configured join command scheduled in ${delaySeconds}s.`);
     this.joinCommandTimer = setTimeout(() => {
       this.joinCommandTimer = null;
@@ -1192,8 +1193,20 @@ export class PebbleBotInstance {
     if (isLifestealTimeout) {
       this.logActivity(
         'warning',
-        `Server-reported subserver timeout notice from ${cleanSender}: "${cleanText}". This arrived as in-game chat; it does not by itself confirm a Bedrock connection drop.`
+        `FreshSMP queue notice from ${cleanSender}: "${cleanText}". (Subserver transfer queue timed out; retrying transfer).`
       );
+      if (this.config.settings?.joinCommandEnabled && this.config.settings?.joinCommand?.toLowerCase().includes('lifesteal')) {
+        if (!this.joinCommandTimer && (this.state === 'SPAWNED' || this.state === 'LOGGED_IN')) {
+          this.logActivity('status', `Automatically retrying /lifesteal transfer command in 6s...`);
+          this.joinCommandTimer = setTimeout(() => {
+            this.joinCommandTimer = null;
+            if ((this.state === 'SPAWNED' || this.state === 'LOGGED_IN') && this.config.settings?.joinCommandEnabled) {
+              this.logActivity('command', `Retrying configured join command: /lifesteal`);
+              this.sendChat('/lifesteal');
+            }
+          }, 6000);
+        }
+      }
     }
     if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk') || isLifestealTimeout) {
       this.lastServerNotice = isLifestealTimeout ? `${cleanSender}: ${cleanText}` : cleanText;

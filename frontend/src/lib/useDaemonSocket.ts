@@ -248,9 +248,9 @@ export function useDaemonSocket(
       socketRef.current = ws;
       connectionTimeoutRef.current = setTimeout(() => {
         if (socketRef.current === ws && ws.readyState === WebSocket.CONNECTING) {
-          ws.close();
+          try { ws.close(); } catch (_) {}
         }
-      }, 20000);
+      }, 6000);
 
       ws.onopen = () => {
         if (socketRef.current !== ws) return;
@@ -514,8 +514,8 @@ export function useDaemonSocket(
     const reconnectIfNeeded = () => {
       if (!currentUserRef.current || !daemonUrlRef.current) return;
       const ws = socketRef.current;
-      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-        connect(false);
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        connect(true);
       }
     };
     const onVisibilityChange = () => {
