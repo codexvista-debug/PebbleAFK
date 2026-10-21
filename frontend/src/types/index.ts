@@ -20,7 +20,7 @@ export interface BotSettings {
  * enable the server-specific /lifesteal command via the preset below. */
 export const DEFAULT_BOT_SETTINGS: BotSettings = {
   physics: true,
-  acceptResourcePacks: false,
+  acceptResourcePacks: true,
   autoEat: false,
   autoTotem: false,
   antiAfk: true,
@@ -38,6 +38,8 @@ export const DEFAULT_BOT_SETTINGS: BotSettings = {
 
 export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
   ...DEFAULT_BOT_SETTINGS,
+  physics: true,
+  acceptResourcePacks: true,
   joinCommandEnabled: true,
   joinCommand: '/lifesteal',
 };

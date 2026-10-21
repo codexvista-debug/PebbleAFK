@@ -1038,7 +1038,16 @@ export default function Home() {
       showToast('Please select at least one assigned Bedrock account.', 'error');
       return;
     }
-    targetAccounts.forEach((acc) => handleConnectAccount(acc, activeServer));
+    // Stagger multiple bot connections by 2.5s to avoid server login rate limiting
+    targetAccounts.forEach((acc, idx) => {
+      if (idx === 0) {
+        handleConnectAccount(acc, activeServer);
+      } else {
+        setTimeout(() => {
+          handleConnectAccount(acc, activeServer);
+        }, idx * 2500);
+      }
+    });
   };
 
   const handleDisconnectSelected = () => {

@@ -24,7 +24,7 @@ export const DangerousSettingsModal: React.FC<DangerousSettingsModalProps> = ({
   if (!isOpen || !server) return null;
 
   const physicsEnabled = server.settings?.physics ?? true;
-  const resourcePacksEnabled = server.settings?.acceptResourcePacks ?? false;
+  const resourcePacksEnabled = server.settings?.acceptResourcePacks ?? true;
 
   const handleDelete = () => {
     if (!confirmDelete) {
@@ -94,11 +94,14 @@ export const DangerousSettingsModal: React.FC<DangerousSettingsModalProps> = ({
 
           {/* 2. Resource packs */}
           <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-100">
-            <div className="space-y-0.5">
+            <div className="space-y-1.5">
               <span className="text-xs font-bold text-slate-900 block">Resource packs</span>
               <p className="text-xs text-slate-500">
                 Automatically accept resource packs on join.
               </p>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-2.5 py-1 rounded-xl mt-1">
+                <span>Recommended: Keep enabled. Bedrock servers require resource pack handshake to prevent disconnects.</span>
+              </div>
             </div>
 
             {/* Toggle Switch */}

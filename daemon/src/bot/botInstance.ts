@@ -55,6 +55,8 @@ function getBedrockSupportedVersions(): { versions: Record<string, number>; curr
 // Persistent memory cache of verified working Bedrock versions per host
 const SERVER_VERSION_CACHE: Map<string, string> = new Map([
   ['donutsmp.net', '1.26.51'],
+  ['freshsmp.fun', '1.26.51'],
+  ['play.freshsmp.fun', '1.26.51'],
 ]);
 
 const BEDROCK_CYCLE_VERSIONS = [
@@ -123,6 +125,10 @@ function resolveBedrockTargetVersion(
   }
 
   // Known server fallback for cases where the Bedrock UDP ping is unavailable.
+  if (cleanHost.includes('freshsmp')) {
+    SERVER_VERSION_CACHE.set(cleanHost, '1.26.51');
+    return { version: '1.26.51', isFallback: false, note: 'Auto-detected FreshSMP Bedrock protocol (1.26.51)' };
+  }
   if (cleanHost.includes('donutsmp')) {
     SERVER_VERSION_CACHE.set(cleanHost, '1.26.51');
     return { version: '1.26.51', isFallback: false, note: 'Auto-detected DonutSMP Bedrock protocol (1.26.51)' };
@@ -223,6 +229,7 @@ export class PebbleBotInstance {
   private originalPort: number;
   private isTransferring: boolean = false;
   private hasSpawnedPosition: boolean = false;
+  private runtimeEntityId: bigint | null = null;
   private lastServerNotice: string = '';
   private lastServerNoticeAt: number = 0;
   private lastDisconnectReason: string = '';
@@ -407,6 +414,10 @@ export class PebbleBotInstance {
 
       // Start Game packet: captures spawn coordinates & world info, and confirms chunk radius
       client.on('start_game', (packet: any) => {
+        if (packet?.runtime_entity_id !== undefined) {
+          this.runtimeEntityId = BigInt(packet.runtime_entity_id);
+          client.entityId = this.runtimeEntityId;
+        }
         if (packet?.player_position) {
           this.position = {
             x: Math.round(packet.player_position.x * 100) / 100,
@@ -468,6 +479,10 @@ export class PebbleBotInstance {
       });
 
       client.on('respawn', (packet: any) => {
+        if (packet?.runtime_entity_id !== undefined) {
+          this.runtimeEntityId = BigInt(packet.runtime_entity_id);
+          client.entityId = this.runtimeEntityId;
+        }
         if (packet?.position) {
           this.position.x = Math.round(finiteCoordinate(packet.position.x, this.position.x) * 100) / 100;
           this.position.y = Math.round(finiteCoordinate(packet.position.y, this.position.y) * 100) / 100;
@@ -493,6 +508,14 @@ export class PebbleBotInstance {
 
       // Move Player packet: updates bot position & acknowledges server teleports
       client.on('move_player', (packet: any) => {
+        // Crucial: Only accept move_player packets targeting this bot!
+        // Ignore packets for other players/mobs in the world to prevent coordinate corruption!
+        if (this.runtimeEntityId !== null && packet?.runtime_id !== undefined) {
+          if (BigInt(packet.runtime_id) !== this.runtimeEntityId) {
+            return;
+          }
+        }
+
         if (packet?.position) {
           this.position.x = Math.round(packet.position.x * 100) / 100;
           this.position.y = Math.round(packet.position.y * 100) / 100;
@@ -510,7 +533,7 @@ export class PebbleBotInstance {
                 position: { ...this.position },
                 move_vector: { x: 0, z: 0 },
                 head_yaw: this.position.yaw || 0,
-                input_data: {},
+                input_data: { handled_teleport: true },
                 input_mode: 'touch',
                 play_mode: 'normal',
                 interaction_model: 'classic',
@@ -1341,5 +1364,7 @@ export class PebbleBotInstance {
       this.joinCommandTimer = null;
     }
     this.joinCommandClient = null;
+    this.runtimeEntityId = null;
+    this.hasSpawnedPosition = false;
   }
 }
