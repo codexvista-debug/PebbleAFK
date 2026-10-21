@@ -199,6 +199,7 @@ export function formatDisconnectReason(raw: any): string {
 }
 
 export class PebbleBotInstance {
+  private static lastHandshakeTime: number = 0;
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
   public chatHistory: any[] = [];
@@ -351,6 +352,19 @@ export class PebbleBotInstance {
           });
         },
       };
+
+      // Stagger Bedrock RakNet connection handshakes so concurrent bots never send
+      // simultaneous Open Connection Request UDP packets from the same device/IP.
+      const minSpacingMs = 6500;
+      const now = Date.now();
+      const waitMs = Math.max(0, (PebbleBotInstance.lastHandshakeTime + minSpacingMs) - now);
+      if (waitMs > 0) {
+        this.logActivity('connect', `⏳ Staggering RakNet connection by ${(waitMs / 1000).toFixed(1)}s to avoid server gateway rate-limiting...`);
+        console.log(chalk.cyan(`[PebbleAFK] Staggering connection for ${this.config.username} by ${waitMs}ms`));
+        await new Promise((r) => setTimeout(r, waitMs));
+        if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
+      }
+      PebbleBotInstance.lastHandshakeTime = Date.now();
 
       console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (version: ${targetVersion}, backend: ${rakBackend})`));
       const client = bedrock.createClient(clientOptions);
