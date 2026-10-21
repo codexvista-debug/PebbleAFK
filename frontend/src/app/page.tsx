@@ -2285,9 +2285,10 @@ export default function Home() {
                         : targetAccounts[0]?.id || '';
                       const selectedAccount = targetAccounts.find((a) => a.id === selectedAccountId) || null;
                       const selectedBotId = `${activeServer.id}__${selectedAccountId}`;
-                      const selectedBossBar = selectedAccount && selectedAccountIds.length <= 1
-                        ? bossBarsByBot[selectedBotId]
-                        : null;
+                      // The chat account picker selects exactly one bot. The separate
+                      // selectedAccountIds state belongs to Connect's bulk controls and
+                      // must not suppress this account's live boss bar.
+                      const selectedBossBar = selectedAccount ? bossBarsByBot[selectedBotId] : null;
 
                       const isSelectedOnline = selectedAccount ? (() => {
                         const bId = `${activeServer.id}__${selectedAccount.id}`;
