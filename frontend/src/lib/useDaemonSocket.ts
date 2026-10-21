@@ -56,7 +56,10 @@ export function useDaemonSocket(
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingStartTimeRef = useRef<number>(0);
+  const lastPongAtRef = useRef<number>(0);
+  const authenticatedAtRef = useRef<number>(0);
   const reconnectAttemptsRef = useRef<number>(0);
   const chatSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -131,6 +134,10 @@ export function useDaemonSocket(
       clearInterval(pingIntervalRef.current);
       pingIntervalRef.current = null;
     }
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
 
     setDaemonUrlState(cleanSaved);
     daemonUrlRef.current = cleanSaved;
@@ -166,6 +173,23 @@ export function useDaemonSocket(
         safeClose(socketRef.current);
         socketRef.current = null;
       }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      if (pingIntervalRef.current) {
+        clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = null;
+      }
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
+      setStatus('DISCONNECTED');
+      return;
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setStatus('DISCONNECTED');
       return;
     }
@@ -191,6 +215,10 @@ export function useDaemonSocket(
       clearInterval(pingIntervalRef.current);
       pingIntervalRef.current = null;
     }
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
 
     if (socketRef.current) {
       safeClose(socketRef.current);
@@ -202,11 +230,18 @@ export function useDaemonSocket(
     try {
       const ws = new WebSocket(url);
       socketRef.current = ws;
+      connectionTimeoutRef.current = setTimeout(() => {
+        if (socketRef.current === ws && ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      }, 20000);
 
       ws.onopen = () => {
         if (socketRef.current !== ws) return;
-        reconnectAttemptsRef.current = 0;
+        if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
         setStatus('CONNECTED');
+        lastPongAtRef.current = Date.now();
+        authenticatedAtRef.current = 0;
         const effectiveToken =
           authTokenRef.current ||
           (typeof window !== 'undefined'
@@ -220,9 +255,20 @@ export function useDaemonSocket(
           }));
         } catch (_) {}
 
+        connectionTimeoutRef.current = setTimeout(() => {
+          if (socketRef.current === ws && ws.readyState === WebSocket.OPEN && !authenticatedAtRef.current) {
+            ws.close(4001, 'Daemon authentication timed out');
+          }
+        }, 12000);
+
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         pingIntervalRef.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
+            const pageIsVisible = typeof document === 'undefined' || document.visibilityState === 'visible';
+            if (pageIsVisible && lastPongAtRef.current && Date.now() - lastPongAtRef.current > 45000) {
+              ws.close(4000, 'Daemon heartbeat timed out');
+              return;
+            }
             pingStartTimeRef.current = Date.now();
             try {
               ws.send(JSON.stringify({ type: 'PING' }));
@@ -238,15 +284,30 @@ export function useDaemonSocket(
 
           if (msg.type === 'AUTH_RESULT') {
             if (msg.payload?.success) {
+              if (connectionTimeoutRef.current) {
+                clearTimeout(connectionTimeoutRef.current);
+                connectionTimeoutRef.current = null;
+              }
+              authenticatedAtRef.current = Date.now();
+              lastPongAtRef.current = Date.now();
               setStatus('AUTHENTICATED');
             } else {
+              if (connectionTimeoutRef.current) {
+                clearTimeout(connectionTimeoutRef.current);
+                connectionTimeoutRef.current = null;
+              }
               setStatus('AUTH_ERROR');
+              if (pingIntervalRef.current) {
+                clearInterval(pingIntervalRef.current);
+                pingIntervalRef.current = null;
+              }
               safeClose(ws);
               if (socketRef.current === ws) socketRef.current = null;
             }
           }
 
           if (msg.type === 'PONG') {
+            lastPongAtRef.current = Date.now();
             if (pingStartTimeRef.current) {
               setLatency(Date.now() - pingStartTimeRef.current);
             }
@@ -349,9 +410,13 @@ export function useDaemonSocket(
         } catch (_) {}
       };
 
-      ws.onclose = async () => {
+      ws.onclose = () => {
         if (socketRef.current !== ws) return;
         socketRef.current = null;
+        if (connectionTimeoutRef.current) {
+          clearTimeout(connectionTimeoutRef.current);
+          connectionTimeoutRef.current = null;
+        }
         setStatus('DISCONNECTED');
         setBotStates({});
         setBotReasons({});
@@ -361,21 +426,56 @@ export function useDaemonSocket(
           pingIntervalRef.current = null;
         }
 
+        if (authenticatedAtRef.current && Date.now() - authenticatedAtRef.current >= 30000) {
+          reconnectAttemptsRef.current = 0;
+        }
+        authenticatedAtRef.current = 0;
         reconnectAttemptsRef.current += 1;
         if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        const delay = Math.min(2000 + reconnectAttemptsRef.current * 1000, 10000);
+        const backoff = Math.min(1000 * (2 ** Math.min(reconnectAttemptsRef.current - 1, 5)), 30000);
+        const delay = backoff + Math.floor(Math.random() * 750);
         reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null;
           connect(false);
         }, delay);
       };
 
       ws.onerror = () => {
         if (socketRef.current !== ws) return;
+        try { ws.close(); } catch (_) {}
       };
     } catch (_) {
       setStatus('DISCONNECTED');
+      reconnectAttemptsRef.current += 1;
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      const backoff = Math.min(1000 * (2 ** Math.min(reconnectAttemptsRef.current - 1, 5)), 30000);
+      reconnectTimeoutRef.current = setTimeout(() => {
+        reconnectTimeoutRef.current = null;
+        connect(false);
+      }, backoff + Math.floor(Math.random() * 750));
     }
   }, []);
+
+  // Resume promptly after mobile network hand-offs or a tab returning from suspension.
+  useEffect(() => {
+    const reconnectIfNeeded = () => {
+      if (!currentUserRef.current || !daemonUrlRef.current) return;
+      const ws = socketRef.current;
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        connect(false);
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') reconnectIfNeeded();
+    };
+
+    window.addEventListener('online', reconnectIfNeeded);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('online', reconnectIfNeeded);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [connect]);
 
   useEffect(() => {
     if (currentUser && daemonUrl) {
@@ -393,6 +493,18 @@ export function useDaemonSocket(
       if (socketRef.current) {
         safeClose(socketRef.current);
         socketRef.current = null;
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+      if (pingIntervalRef.current) {
+        clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = null;
+      }
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
       }
       setStatus('DISCONNECTED');
     }

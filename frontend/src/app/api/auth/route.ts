@@ -2,6 +2,38 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabaseClient';
 import { hashPassword, generateSecretCode, USERNAME_REGEX } from '@/lib/authUtils';
 
+function createDefaultServerProfile(username: string) {
+  return {
+    id: 'srv_freshsmp',
+    name: 'FreshSMP',
+    pebbleUser: username,
+    accountId: '',
+    assignedAccountIds: [],
+    serverHost: 'play.freshsmp.fun',
+    serverPort: 19132,
+    serverVersion: 'auto',
+    authType: 'microsoft',
+    autoReconnect: true,
+    settings: {
+      physics: true,
+      acceptResourcePacks: true,
+      autoEat: false,
+      autoTotem: false,
+      antiAfk: true,
+      antiAfkInterval: 10,
+      mobFarm: false,
+      mobFarmRange: 3.5,
+      mobFarmIntervalMs: 650,
+      autoReconnect: true,
+      autoReconnectDelay: 5000,
+      joinDelay: 0,
+      joinCommandEnabled: false,
+      joinCommand: '',
+      joinCommandDelay: 3,
+    },
+  };
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -89,6 +121,24 @@ export async function POST(req: NextRequest) {
 
       if (insertError) {
         return NextResponse.json({ error: `Failed to create user: ${insertError.message}` }, { status: 500 });
+      }
+
+      // A profile is user-editable, but new accounts should never start on an empty server list.
+      const defaultProfile = createDefaultServerProfile(cleanUsername);
+      const { error: profileError } = await supabase.from('accounts').insert([
+        {
+          username: cleanUsername,
+          bot_name: '__meta_servers__',
+          server_host: 'pebbleafk.internal',
+          server_port: 19132,
+          settings: { servers: [defaultProfile], updatedAt: Date.now() },
+        },
+      ]);
+
+      if (profileError) {
+        // Avoid leaving a successfully registered user with a missing starter profile.
+        await supabase.from('users').delete().ilike('username', cleanUsername);
+        return NextResponse.json({ error: `Failed to initialize your FreshSMP profile: ${profileError.message}` }, { status: 500 });
       }
 
       return NextResponse.json({

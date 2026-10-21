@@ -125,15 +125,20 @@ ENVEOF
 run_daemon_loop() {
   export TERMUX_SUPERVISOR=1
   export PEBBLEAFK_OWNER="$APP_USER"
+  RESTART_DELAY=2
   while true; do
     npm run start >> daemon.log 2>&1
     EXIT_CODE=$?
     if [ "$EXIT_CODE" -eq 42 ]; then
       echo -e "\n[$(date +%T)] 🔄 Dashboard requested daemon restart. Rebooting in 1s..." >> daemon.log
       sleep 1
+      RESTART_DELAY=2
       continue
     fi
-    break
+    echo -e "\n[$(date +%T)] ⚠️ Daemon process exited with code ${EXIT_CODE}. Restarting in ${RESTART_DELAY}s..." >> daemon.log
+    sleep "$RESTART_DELAY"
+    RESTART_DELAY=$((RESTART_DELAY * 2))
+    if [ "$RESTART_DELAY" -gt 30 ]; then RESTART_DELAY=30; fi
   done
 }
 
@@ -198,19 +203,67 @@ echo -e "  ${GRAY}• Press [Ctrl + C] to cleanly stop all services & exit${NC}"
 echo -e "${GRAY}─────────────────────────────────────────────────────────────────────${NC}"
 echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 
-# 5. Heartbeat background keep-alive loop with watchdog
+# 5. Heartbeat and end-to-end tunnel watchdog
 (
-  while true; do
-    sleep 15
-    # Auto-heal cloudflared tunnel if process died unexpectedly
-    if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
-      echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel interrupted. Re-opening tunnel (HTTP/2)..." >> daemon.log
-      cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
-      TUNNEL_PID=$!
-      sleep 4
+  CHECK_COUNTER=0
+  TUNNEL_FAILURES=0
+
+  restart_tunnel() {
+    echo -e "[$(date +%T)] ⚠️ Rebuilding the Cloudflare tunnel after failed health checks..." >> daemon.log
+    if kill -0 "$TUNNEL_PID" 2>/dev/null; then
+      kill "$TUNNEL_PID" 2>/dev/null || true
+      sleep 2
+      kill -9 "$TUNNEL_PID" 2>/dev/null || true
+    fi
+
+    cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
+    TUNNEL_PID=$!
+    NEW_TUNNEL_URL=""
+    for attempt in {1..30}; do
       NEW_TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log | tail -n 1)
       if [ -n "$NEW_TUNNEL_URL" ]; then
-        WSS_URL=$(echo "$NEW_TUNNEL_URL" | sed 's/https:/wss:/')
+        TUNNEL_URL="$NEW_TUNNEL_URL"
+        WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')
+        echo -e "[$(date +%T)] ✓ Cloudflare tunnel restored at ${WSS_URL}" >> daemon.log
+        return 0
+      fi
+      sleep 1
+    done
+
+    echo -e "[$(date +%T)] ❌ Cloudflare tunnel did not return an address; watchdog will retry." >> daemon.log
+    return 1
+  }
+
+  while true; do
+    sleep 15
+    # Recover a dead cloudflared process immediately.
+    if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+      echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel interrupted. Re-opening tunnel (HTTP/2)..." >> daemon.log
+      restart_tunnel || true
+    fi
+
+    # A cloudflared PID can remain alive after its edge connection has gone stale.
+    # Check the complete public-to-phone path every 30 seconds, not just process state.
+    CHECK_COUNTER=$((CHECK_COUNTER + 1))
+    if [ "$CHECK_COUNTER" -ge 2 ]; then
+      CHECK_COUNTER=0
+      LOCAL_HEALTH=$(curl -fsS --connect-timeout 2 --max-time 4 http://127.0.0.1:8080/ 2>/dev/null || true)
+      if echo "$LOCAL_HEALTH" | grep -q '"status":"running"'; then
+        PUBLIC_HEALTH=$(curl -fsSL --connect-timeout 5 --max-time 10 "${TUNNEL_URL}/" 2>/dev/null || true)
+        if echo "$PUBLIC_HEALTH" | grep -q '"status":"running"'; then
+          TUNNEL_FAILURES=0
+        else
+          TUNNEL_FAILURES=$((TUNNEL_FAILURES + 1))
+          echo -e "[$(date +%T)] ⚠️ Public tunnel health check failed (${TUNNEL_FAILURES}/2)." >> daemon.log
+        fi
+      else
+        # The daemon supervisor is recovering; don't mistake its brief restart for a tunnel fault.
+        TUNNEL_FAILURES=0
+      fi
+
+      if [ "$TUNNEL_FAILURES" -ge 2 ]; then
+        restart_tunnel || true
+        TUNNEL_FAILURES=0
       fi
     fi
 

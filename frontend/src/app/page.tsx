@@ -149,9 +149,9 @@ export default function Home() {
   });
   const [chatInput, setChatInput] = useState('');
   const [selectedChatAccountId, setSelectedChatAccountId] = useState<string>('');
-  const [chatFilter, setChatFilter] = useState<'all' | 'players' | 'system'>('all');
+  const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const [isChatAccountDropdownOpen, setIsChatAccountDropdownOpen] = useState(false);
-  const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const handleTogglePin = (accId: string) => {
     setPinnedAccountIds((prev) => {
@@ -367,14 +367,12 @@ export default function Home() {
     telemetries,
     messagesByBot,
     activityLogs,
-    reconnect,
     restartDaemon,
     updateDaemon,
     verifyAccount,
     msAuthData,
     setMsAuthData,
     sendChat,
-    clearChat,
     terminalLogs,
     fetchTerminalLogs,
     clearTerminalLogs,
@@ -530,8 +528,6 @@ export default function Home() {
             if (cleanTarget !== cleanCurrent) {
               setDaemonUrl(cleanTarget);
               if (targetToken) setAuthToken(targetToken);
-            } else if (daemonStatusRef.current === 'DISCONNECTED') {
-              reconnect();
             }
           }
         }
@@ -544,7 +540,7 @@ export default function Home() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [currentUser, secretCode, setDaemonUrl, setAuthToken, reconnect]);
+  }, [currentUser, secretCode, setDaemonUrl, setAuthToken]);
 
   // Stream Termux logs when user is on the Termux Stream page (live lines arrive via push)
   useEffect(() => {
@@ -1037,12 +1033,24 @@ export default function Home() {
     );
   };
 
-  // Chat auto-scroll
+  // Restore this user's chat scrolling preference (on by default).
   useEffect(() => {
-    if (activeSubTab === 'chat' && chatMessagesEndRef.current) {
-      chatMessagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (typeof window === 'undefined') return;
+    if (!currentUser) {
+      setChatAutoScroll(true);
+      return;
     }
-  }, [messagesByBot, activeSubTab]);
+    const saved = localStorage.getItem(`pebbleafk_chat_autoscroll_${currentUser.toLowerCase()}`);
+    setChatAutoScroll(saved === null ? true : saved === 'true');
+  }, [currentUser]);
+
+  // Keep the selected chat pinned to the newest message when auto-scroll is enabled.
+  useEffect(() => {
+    if (activeSubTab === 'chat' && chatAutoScroll && chatScrollContainerRef.current) {
+      const container = chatScrollContainerRef.current;
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+    }
+  }, [messagesByBot, activeSubTab, activeServerId, selectedChatAccountId, chatAutoScroll]);
 
   const handleSendChat = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1052,14 +1060,6 @@ export default function Home() {
     const msg = chatInput.trim();
     sendChat(`${activeServer.id}__${chatAccountId}`, msg);
     setChatInput('');
-  };
-
-  const handleClearCurrentChat = () => {
-    if (!activeServer) return;
-    const chatAccountId = selectedChatAccountId || assignedAccounts[0]?.id || accounts[0]?.id;
-    if (!chatAccountId) return;
-    clearChat(`${activeServer.id}__${chatAccountId}`);
-    showToast('Chat history cleared', 'info');
   };
 
   // Status dot style for daemon button
@@ -1133,7 +1133,7 @@ export default function Home() {
 
   // 2. LOGGED-IN VIEW
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
+    <div className="h-[100dvh] min-h-0 overflow-hidden bg-slate-50 flex flex-col">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed bottom-5 right-5 z-70 animate-in slide-in-from-bottom-2 fade-in duration-200">
@@ -1191,7 +1191,7 @@ export default function Home() {
       </div>
 
       {/* Main Layout Container */}
-      <div className="flex-1 flex flex-col md:flex-row md:min-h-screen">
+      <div className="flex-1 min-h-0 flex flex-col md:flex-row">
         {/* Mobile Backdrop Overlay */}
         {isMobileSidebarOpen && (
           <div
@@ -1483,9 +1483,9 @@ export default function Home() {
         </aside>
 
         {/* Desktop Header + Main View Area */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
           {/* Desktop Top Header Bar */}
-          <header className="hidden md:flex sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-6 py-2.5 items-center justify-between shadow-2xs">
+          <header className="hidden md:flex shrink-0 sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-6 py-2.5 items-center justify-between shadow-2xs">
             <div className="flex items-center gap-2.5 text-xs font-bold">
               {activeTab === 'servers' && activeServer ? (
                 <>
@@ -1530,7 +1530,11 @@ export default function Home() {
           </header>
 
           {/* Main Scrollable Content */}
-          <main className="flex-1 min-w-0 w-full bg-grid-slate p-3 sm:p-6 overflow-y-auto overflow-x-hidden">
+          <main className={`flex-1 min-h-0 min-w-0 w-full bg-grid-slate overflow-x-hidden ${
+            activeTab === 'servers' && activeSubTab === 'chat' && activeServer
+              ? 'flex flex-col overflow-y-hidden p-2 sm:p-4'
+              : 'overflow-y-auto p-3 sm:p-6'
+          }`}>
             {/* VIEW 1: DASHBOARD TAB */}
             {activeTab === 'dashboard' && (
               <div className="max-w-4xl mx-auto space-y-6">
@@ -1888,7 +1892,9 @@ export default function Home() {
 
             {/* VIEW 3: SERVERS VIEW (CONNECT, CHAT, SETTINGS) */}
             {activeTab === 'servers' && (
-              <div className="w-full min-w-0 max-w-6xl mx-auto space-y-4 sm:space-y-6">
+              <div className={`w-full min-w-0 max-w-6xl mx-auto ${
+                activeSubTab === 'chat' && activeServer ? 'h-full min-h-0 flex flex-col' : 'space-y-4 sm:space-y-6'
+              }`}>
                 {!activeServer ? (
                   /* Empty state when no server profile exists */
                   <div className="p-12 rounded-3xl bg-white border border-slate-200/90 shadow-xs text-center space-y-4">
@@ -2287,19 +2293,12 @@ export default function Home() {
                       });
                       chatList.sort((a, b) => a.timestamp - b.timestamp);
 
-                      // Filter by Tab
-                      if (chatFilter === 'players') {
-                        chatList = chatList.filter((m) => m.type === 'chat' && m.sender !== 'System' && m.sender !== 'Server');
-                      } else if (chatFilter === 'system') {
-                        chatList = chatList.filter((m) => m.type === 'system' || m.sender === 'System' || m.sender === 'Server');
-                      }
-
                       return (
-                        <div className="w-full min-w-0 space-y-3.5">
+                        <div className="w-full min-w-0 flex-1 min-h-0 flex flex-col">
                           {/* 2. Main Chat Box Container (Matching Image 3) */}
-                          <div className="w-full min-w-0 bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
+                          <div className="w-full min-w-0 flex-1 min-h-0 bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
                             {/* Card Header */}
-                            <div className="px-3 sm:px-5 py-3.5 border-b border-slate-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-slate-50/60">
+                            <div className="shrink-0 px-3 sm:px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-3 bg-slate-50/60">
                               <div className="flex items-center gap-3">
                                 <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 font-mono font-bold text-xs shrink-0 shadow-2xs">
                                   &gt;_
@@ -2312,39 +2311,32 @@ export default function Home() {
                                 </div>
                               </div>
 
-                              <div className="flex w-full sm:w-auto items-center justify-between sm:justify-end gap-2">
-                                {/* Segmented Filter Tabs: All | Players | System */}
-                                <div className="flex flex-1 sm:flex-none items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80 text-xs font-semibold">
-                                  {(['all', 'players', 'system'] as const).map((tab) => (
-                                    <button
-                                      key={tab}
-                                      type="button"
-                                      onClick={() => setChatFilter(tab)}
-                                      className={`flex-1 sm:flex-none px-2.5 sm:px-3 py-1 rounded-lg capitalize transition cursor-pointer text-[12px] sm:text-[13px] ${
-                                        chatFilter === tab
-                                          ? 'bg-white text-slate-900 font-bold shadow-2xs'
-                                          : 'text-slate-500 hover:text-slate-800'
-                                      }`}
-                                    >
-                                      {tab === 'all' ? 'All' : tab === 'players' ? 'Players' : 'System'}
-                                    </button>
-                                  ))}
-                                </div>
-
-                                {/* Trash / Clear chat */}
-                                <button
-                                  type="button"
-                                  onClick={handleClearCurrentChat}
-                                  className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition cursor-pointer"
-                                  title="Clear chat messages"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={chatAutoScroll}
+                                aria-label="Automatically scroll chat to new messages"
+                                onClick={() => {
+                                  const nextValue = !chatAutoScroll;
+                                  setChatAutoScroll(nextValue);
+                                  if (typeof window !== 'undefined' && currentUser) {
+                                    try {
+                                      localStorage.setItem(`pebbleafk_chat_autoscroll_${currentUser.toLowerCase()}`, String(nextValue));
+                                    } catch (_) {}
+                                  }
+                                }}
+                                className="flex shrink-0 items-center gap-2 rounded-xl px-2.5 py-1.5 text-[11px] sm:text-xs font-semibold text-slate-600 hover:bg-white border border-transparent hover:border-slate-200 transition"
+                                title={chatAutoScroll ? 'Auto-scroll is on' : 'Auto-scroll is off'}
+                              >
+                                <span>Auto-scroll</span>
+                                <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${chatAutoScroll ? 'bg-emerald-600' : 'bg-slate-300'}`}>
+                                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${chatAutoScroll ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                </span>
+                              </button>
                             </div>
 
                             {/* Chat Messages Stream Area (Spacious layout matching PocketAFK) */}
-                            <div className="h-[calc(100dvh-24rem)] min-h-[200px] md:h-[580px] p-3 sm:p-5 min-w-0 overflow-y-auto overflow-x-hidden space-y-3 font-mono text-[13px] bg-white">
+                            <div ref={chatScrollContainerRef} className="flex-1 min-h-0 p-3 sm:p-5 min-w-0 overflow-y-auto overflow-x-hidden space-y-3 font-mono text-[13px] bg-white overscroll-contain touch-pan-y">
                               {chatList.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400 space-y-3">
                                   <div className="w-11 h-11 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-center text-slate-400 shadow-2xs">
@@ -2448,14 +2440,13 @@ export default function Home() {
                                       </div>
                                     );
                                   })}
-                                  <div ref={chatMessagesEndRef} />
                                 </>
                               )}
                             </div>
                           </div>
 
                           {/* 3. Bottom Chat Input Bar (Matching Image 3) */}
-                          <form onSubmit={handleSendChat} className="w-full min-w-0 flex items-center gap-1.5 sm:gap-2">
+                          <form onSubmit={handleSendChat} className="mt-2 w-full min-w-0 shrink-0 flex items-center gap-1.5 sm:gap-2">
                             <div className="min-w-0 flex-1 flex items-center bg-white border border-slate-200/90 rounded-2xl shadow-2xs focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/10 transition px-2 sm:px-3.5 py-1.5 gap-1.5 sm:gap-2">
                               <span className="text-emerald-600 font-mono font-black text-sm select-none pl-1">&gt;</span>
                               <input
