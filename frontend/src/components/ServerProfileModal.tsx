@@ -33,7 +33,7 @@ const DEFAULT_SETTINGS: BotSettings = {
 const BEDROCK_VERSIONS = [
   { label: 'Auto Detect (Recommended)', value: 'auto' },
   { label: '1.26.30 (Bedrock 26.x)', value: '1.26.30' },
-  { label: '1.26.51 (DonutSMP / Bedrock Preview)', value: '1.26.51' },
+  { label: '1.26.51 (Bedrock Preview)', value: '1.26.51' },
   { label: '1.21.50 (Bedrock 1.21 Stable)', value: '1.21.50' },
   { label: '1.21.40', value: '1.21.40' },
   { label: '1.21.30', value: '1.21.30' },
@@ -254,7 +254,6 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
                       {v.label}
                     </option>
                   ))}
-                  <option value="1.26.51">1.26.51 (DonutSMP / Preview)</option>
                 </select>
                 <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
                   ▼

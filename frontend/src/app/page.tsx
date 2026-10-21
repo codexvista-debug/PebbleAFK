@@ -149,9 +149,9 @@ export default function Home() {
     return {};
   });
   const [chatInput, setChatInput] = useState('');
-  const [selectedChatReceiver, setSelectedChatReceiver] = useState<string>('all');
+  const [selectedChatAccountId, setSelectedChatAccountId] = useState<string>('');
   const [chatFilter, setChatFilter] = useState<'all' | 'players' | 'system'>('all');
-  const [isReceiverDropdownOpen, setIsReceiverDropdownOpen] = useState(false);
+  const [isChatAccountDropdownOpen, setIsChatAccountDropdownOpen] = useState(false);
   const chatMessagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const handleTogglePin = (accId: string) => {
@@ -713,6 +713,17 @@ export default function Home() {
     });
   }, [accounts, profileAccountIds, accountFilter, accountNotes]);
 
+  useEffect(() => {
+    const chatAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
+    if (chatAccounts.length === 0) {
+      if (selectedChatAccountId) setSelectedChatAccountId('');
+      return;
+    }
+    if (!chatAccounts.some((account) => account.id === selectedChatAccountId)) {
+      setSelectedChatAccountId(chatAccounts[0].id);
+    }
+  }, [assignedAccounts, accounts, selectedChatAccountId]);
+
   const availableAccounts = useMemo(() => {
     return accounts.filter((a) => {
       if (profileAccountIds.includes(a.id)) return false;
@@ -1027,44 +1038,26 @@ export default function Home() {
   const handleSendChat = (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || !activeServer) return;
+    const chatAccountId = selectedChatAccountId || assignedAccounts[0]?.id || accounts[0]?.id;
+    if (!chatAccountId) return;
     const msg = chatInput.trim();
-    const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
-    if (selectedChatReceiver === 'all') {
-      targetAccounts.forEach((acc) => {
-        const botId = `${activeServer.id}__${acc.id}`;
-        sendChat(botId, msg);
-      });
-    } else {
-      sendChat(`${activeServer.id}__${selectedChatReceiver}`, msg);
-    }
+    sendChat(`${activeServer.id}__${chatAccountId}`, msg);
     setChatInput('');
   };
 
   const handleClearCurrentChat = () => {
     if (!activeServer) return;
-    const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
-    if (selectedChatReceiver === 'all') {
-      targetAccounts.forEach((acc) => {
-        clearChat(`${activeServer.id}__${acc.id}`);
-        clearChat(acc.id);
-      });
-    } else {
-      clearChat(`${activeServer.id}__${selectedChatReceiver}`);
-      clearChat(selectedChatReceiver);
-    }
+    const chatAccountId = selectedChatAccountId || assignedAccounts[0]?.id || accounts[0]?.id;
+    if (!chatAccountId) return;
+    clearChat(`${activeServer.id}__${chatAccountId}`);
     showToast('Chat history cleared', 'info');
   };
 
   const handleQuickCommand = (cmd: string) => {
     if (!activeServer) return;
-    const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
-    if (selectedChatReceiver === 'all') {
-      targetAccounts.forEach((acc) => {
-        sendChat(`${activeServer.id}__${acc.id}`, cmd);
-      });
-    } else {
-      sendChat(`${activeServer.id}__${selectedChatReceiver}`, cmd);
-    }
+    const chatAccountId = selectedChatAccountId || assignedAccounts[0]?.id || accounts[0]?.id;
+    if (!chatAccountId) return;
+    sendChat(`${activeServer.id}__${chatAccountId}`, cmd);
   };
 
   // Status dot style for daemon button
@@ -2266,36 +2259,21 @@ export default function Home() {
                     {/* SUBTAB 2: CHAT (Matching PocketAFK Image 3 Pixel-Perfect!) */}
                     {activeSubTab === 'chat' && (() => {
                       const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
-                      const selectedAccount = targetAccounts.find((a) => a.id === selectedChatReceiver) || null;
+                      const selectedAccountId = targetAccounts.some((a) => a.id === selectedChatAccountId)
+                        ? selectedChatAccountId
+                        : targetAccounts[0]?.id || '';
+                      const selectedAccount = targetAccounts.find((a) => a.id === selectedAccountId) || null;
 
                       const isSelectedOnline = selectedAccount ? (() => {
                         const bId = `${activeServer.id}__${selectedAccount.id}`;
-                        const st = botStates[bId] || botStates[selectedAccount.id];
+                        const st = botStates[bId];
                         return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
                       })() : false;
 
-                      const isAnyBotOnline = targetAccounts.some((acc) => {
-                        const bId = `${activeServer.id}__${acc.id}`;
-                        const st = botStates[bId] || botStates[acc.id];
-                        return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
-                      });
-
                       // Collect chat messages
-                      let chatList: ChatMessage[] = [];
-                      if (selectedChatReceiver === 'all') {
-                        Object.entries(messagesByBot).forEach(([bKey, msgs]) => {
-                          if (
-                            bKey.startsWith(`${activeServer.id}__`) ||
-                            targetAccounts.some((a) => bKey === a.id || bKey === a.ign || bKey === a.username)
-                          ) {
-                            chatList.push(...msgs);
-                          }
-                        });
-                      } else {
-                        const bId = `${activeServer.id}__${selectedChatReceiver}`;
-                        const msgs = messagesByBot[bId] || messagesByBot[selectedChatReceiver] || [];
-                        chatList.push(...msgs);
-                      }
+                      let chatList: ChatMessage[] = selectedAccountId
+                        ? [...(messagesByBot[`${activeServer.id}__${selectedAccountId}`] || [])]
+                        : [];
 
                       // Deduplicate by timestamp + raw
                       const seen = new Set<string>();
@@ -2386,7 +2364,7 @@ export default function Home() {
                                     key={q.label}
                                     type="button"
                                     onClick={() => handleQuickCommand(q.cmd)}
-                                    disabled={!isAnyBotOnline}
+                                    disabled={!isSelectedOnline}
                                     className={`px-2.5 py-1.5 rounded-lg border text-xs font-mono font-bold transition shadow-2xs active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${q.cls}`}
                                   >
                                     {q.label}
@@ -2415,7 +2393,7 @@ export default function Home() {
                                     In-game chat and system logs will stream here in real-time.
                                   </p>
                                   <div className="pt-2">
-                                    {isAnyBotOnline ? (
+                                    {isSelectedOnline ? (
                                       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
                                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                                         Bot is currently connected
@@ -2521,9 +2499,9 @@ export default function Home() {
                                 type="text"
                                 value={chatInput}
                                 onChange={(e) => setChatInput(e.target.value)}
-                                disabled={!isAnyBotOnline}
+                                disabled={!isSelectedOnline}
                                 placeholder={
-                                  isAnyBotOnline
+                                  isSelectedOnline
                                     ? "Send a message or command (e.g. /spawn)..."
                                     : "Bot offline [connect bot to send chat messages]..."
                                 }
@@ -2532,48 +2510,49 @@ export default function Home() {
                               <div className="relative shrink-0">
                                 <button
                                   type="button"
-                                  onClick={() => setIsReceiverDropdownOpen(!isReceiverDropdownOpen)}
+                                  onClick={() => setIsChatAccountDropdownOpen(!isChatAccountDropdownOpen)}
                                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-[13px] font-bold transition cursor-pointer select-none"
-                                  aria-expanded={isReceiverDropdownOpen}
+                                  disabled={!selectedAccount}
+                                  aria-expanded={isChatAccountDropdownOpen}
                                   aria-haspopup="listbox"
                                 >
-                                  <Users className="w-3.5 h-3.5 text-slate-500" />
-                                  <span className="max-w-[120px] truncate font-mono">
-                                    {selectedChatReceiver === 'all'
-                                      ? 'All accounts'
-                                      : `@${selectedAccount?.ign || selectedAccount?.username || 'Account'}`}
-                                  </span>
-                                  <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isReceiverDropdownOpen ? 'rotate-180' : ''}`} />
+                                  {selectedAccount ? (
+                                    <>
+                                      <div className="w-5 h-5 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                        <img
+                                          src={getPlayerSkinHeadUrl(selectedAccount.ign || selectedAccount.username, 24)}
+                                          alt=""
+                                          className="w-full h-full object-cover [image-rendering:pixelated]"
+                                          onError={(e) => {
+                                            const img = e.currentTarget as HTMLImageElement;
+                                            const clean = (selectedAccount.ign || selectedAccount.username || 'Steve').replace(/^@/, '').trim();
+                                            if (!img.src.includes('mc-heads')) {
+                                              img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/24`;
+                                            } else {
+                                              img.src = 'https://minotar.net/helm/MHF_Steve/24.png';
+                                            }
+                                          }}
+                                        />
+                                      </div>
+                                      <span className="max-w-[150px] truncate whitespace-nowrap font-mono">@{selectedAccount.ign || selectedAccount.username}</span>
+                                      <span className={`w-2 h-2 rounded-full shrink-0 ${isSelectedOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Users className="w-3.5 h-3.5 text-slate-500" />
+                                      <span className="font-mono">Select account</span>
+                                    </>
+                                  )}
+                                  <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isChatAccountDropdownOpen ? 'rotate-180' : ''}`} />
                                 </button>
 
-                                {isReceiverDropdownOpen && (
+                                {isChatAccountDropdownOpen && (
                                   <div role="listbox" className="absolute bottom-full right-0 mb-2 w-64 max-h-72 overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-1.5 space-y-0.5 animate-in fade-in duration-100">
-                                    <button
-                                      type="button"
-                                      role="option"
-                                      aria-selected={selectedChatReceiver === 'all'}
-                                      onClick={() => {
-                                        setSelectedChatReceiver('all');
-                                        setIsReceiverDropdownOpen(false);
-                                      }}
-                                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-bold transition cursor-pointer ${
-                                        selectedChatReceiver === 'all' ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
-                                      }`}
-                                    >
-                                      <div className="flex items-center gap-2">
-                                        <Users className="w-4 h-4 text-emerald-600" />
-                                        <span>All Assigned Accounts ({targetAccounts.length})</span>
-                                      </div>
-                                      <span className={`w-2 h-2 rounded-full ${isAnyBotOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                                    </button>
-
-                                    <div className="border-t border-slate-100 my-1" />
-
                                     {targetAccounts.map((acc) => {
                                       const bId = `${activeServer.id}__${acc.id}`;
-                                      const st = botStates[bId] || botStates[acc.id];
+                                      const st = botStates[bId];
                                       const isLive = daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
-                                      const isSel = selectedChatReceiver === acc.id;
+                                      const isSel = selectedAccountId === acc.id;
 
                                       return (
                                         <button
@@ -2582,8 +2561,8 @@ export default function Home() {
                                           role="option"
                                           aria-selected={isSel}
                                           onClick={() => {
-                                            setSelectedChatReceiver(acc.id);
-                                            setIsReceiverDropdownOpen(false);
+                                            setSelectedChatAccountId(acc.id);
+                                            setIsChatAccountDropdownOpen(false);
                                           }}
                                           className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-bold transition cursor-pointer ${
                                             isSel ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
@@ -2619,7 +2598,7 @@ export default function Home() {
 
                             <button
                               type="submit"
-                              disabled={!isAnyBotOnline || !chatInput.trim()}
+                              disabled={!isSelectedOnline || !chatInput.trim()}
                               className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-[13px] transition shadow-xs cursor-pointer flex items-center gap-2 shrink-0"
                             >
                               <Send className="w-3.5 h-3.5" />
@@ -2676,7 +2655,7 @@ export default function Home() {
                                 >
                                   <option value="auto">Auto Detect (server ping)</option>
                                   <option value="1.26.30">1.26.30 (Bedrock 26.x)</option>
-                                  <option value="1.26.51">1.26.51 (DonutSMP / Bedrock Preview)</option>
+                                  <option value="1.26.51">1.26.51 (Bedrock Preview)</option>
                                   <option value="1.21.50">1.21.50 (Bedrock 1.21 Stable)</option>
                                   <option value="1.21.40">1.21.40</option>
                                   <option value="1.21.30">1.21.30</option>
@@ -2691,7 +2670,6 @@ export default function Home() {
                                   <option value="1.20.30">1.20.30</option>
                                   <option value="1.20.10">1.20.10</option>
                                   <option value="1.20.0">1.20.0</option>
-                                  <option value="1.26.51">1.26.51 (DonutSMP / Preview)</option>
                                 </select>
                                 <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 text-xs">
                                   ▼
