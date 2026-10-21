@@ -61,23 +61,29 @@ else
   echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Modules verified."
 fi
 
-# 4. Clean up any previous background instances silently
-pkill -9 -f "cloudflared" >/dev/null 2>&1 || true
-pkill -9 -f "tsx" >/dev/null 2>&1 || true
-pkill -9 -f "node.*index" >/dev/null 2>&1 || true
-pkill -9 -f "pebbleafk" >/dev/null 2>&1 || true
-pkill -9 -f "pebbleafk_heartbeat" >/dev/null 2>&1 || true
-pkill -9 -f "curl.*tunnel" >/dev/null 2>&1 || true
-if command -v fuser &> /dev/null; then
-  fuser -k -9 8080/tcp >/dev/null 2>&1 || true
-fi
-if command -v lsof &> /dev/null; then
-  (lsof -ti :8080 2>/dev/null || true) | xargs -r kill -9 >/dev/null 2>&1 || true
-fi
-if [ -f "$HOME/.pebbleafk_heartbeat.pid" ]; then
-  kill -9 "$(cat "$HOME/.pebbleafk_heartbeat.pid")" 2>/dev/null || true
-  rm -f "$HOME/.pebbleafk_heartbeat.pid"
-fi
+# 4. Stop only legacy PebbleAFK processes from this daemon directory.
+# Scope migration cleanup to this checkout and known commands; never kill
+# unrelated cloudflared/Node processes or every listener on port 8080.
+stop_legacy_pebbleafk() {
+  local daemon_path proc pid proc_cwd proc_cmd
+  daemon_path=$(pwd -P)
+  for proc in /proc/[0-9]*; do
+    [ -r "$proc/cmdline" ] || continue
+    pid=\${proc##*/}
+    [ "$pid" = "$$" ] && continue
+    [ "$pid" = "$PPID" ] && continue
+    proc_cwd=$(readlink "$proc/cwd" 2>/dev/null || true)
+    [ "$proc_cwd" = "$daemon_path" ] || continue
+    proc_cmd=$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)
+    case "$proc_cmd" in
+      *"start.sh"*|*"npm run start"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*)
+        echo "      Stopping legacy PebbleAFK process $pid ($proc_cmd)"
+        kill -KILL "$pid" 2>/dev/null || true
+        ;;
+    esac
+  done
+}
+stop_legacy_pebbleafk
 sleep 1
 
 # 5. Launch daemon & tunnel

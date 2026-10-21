@@ -91,25 +91,99 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git pull origin main 2>/dev/null || true
 fi
 
-# Clean up any residual processes on port 8080 silently
-echo "=== PebbleAFK Daemon Started $(date) ===" > daemon.log
-pkill -9 -f "cloudflared" >/dev/null 2>&1 || true
-pkill -9 -f "tsx" >/dev/null 2>&1 || true
-pkill -9 -f "node.*index" >/dev/null 2>&1 || true
-pkill -9 -f "pebbleafk" >/dev/null 2>&1 || true
-pkill -9 -f "pebbleafk_heartbeat" >/dev/null 2>&1 || true
-pkill -9 -f "curl.*tunnel" >/dev/null 2>&1 || true
-if command -v fuser &> /dev/null; then
-  fuser -k -9 8080/tcp >/dev/null 2>&1 || true
-fi
-if command -v lsof &> /dev/null; then
-  (lsof -ti :8080 2>/dev/null || true) | xargs -r kill -9 >/dev/null 2>&1 || true
-fi
-if [ -f "$HOME/.pebbleafk_heartbeat.pid" ]; then
-  kill -9 "$(cat "$HOME/.pebbleafk_heartbeat.pid")" 2>/dev/null || true
-  rm -f "$HOME/.pebbleafk_heartbeat.pid"
-fi
+DAEMON_DIR=$(pwd -P)
+LAUNCHER_PID_FILE="$HOME/.pebbleafk_launcher.pid"
+SUPERVISOR_PID_FILE="$HOME/.pebbleafk_supervisor.pid"
+DAEMON_PID_FILE="$HOME/.pebbleafk_daemon.pid"
+TUNNEL_PID_FILE="$HOME/.pebbleafk_tunnel.pid"
+HEARTBEAT_PID_FILE="$HOME/.pebbleafk_heartbeat.pid"
+INSTANCE_ID="termux-$(date +%s)-$$"
+DASHBOARD_SYNC_URL="https://pebbleafk.vercel.app/api/tunnel"
+TAIL_PID=""
+HEARTBEAT_PID=""
+TUNNEL_PID=""
+DAEMON_PID=""
+TUNNEL_REGISTERED=0
+
+# Only stop PIDs recorded by PebbleAFK and still running from this daemon
+# directory. Never sweep unrelated Node/cloudflared processes or kill every
+# listener on 8080: that was allowing stale launchers to race each other.
+is_managed_pid() {
+  local pid="$1" process_dir process_cmd
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  process_dir=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+  [ "$process_dir" = "$DAEMON_DIR" ] || return 1
+  process_cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+  case "$process_cmd" in
+    *"start.sh"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"npm run start"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+stop_pid_file() {
+  local file="$1" label="$2" pid attempt
+  [ -f "$file" ] || return 0
+  pid=$(tr -cd '0-9' < "$file" 2>/dev/null || true)
+  if [ -n "$pid" ] && [ "$pid" != "$$" ] && is_managed_pid "$pid"; then
+    echo -e "      ${YELLOW}Stopping previous ${label} (PID ${pid})...${NC}"
+    kill -TERM "$pid" 2>/dev/null || true
+    for attempt in {1..8}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.25
+    done
+    if kill -0 "$pid" 2>/dev/null && is_managed_pid "$pid"; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$file"
+}
+
+cleanup_and_exit() {
+  local exit_status=$?
+  trap - EXIT INT TERM
+  echo -e "\n\n${YELLOW}[!] Stopping PebbleAFK Bedrock Daemon cleanly...${NC}"
+  [ -n "$TAIL_PID" ] && kill "$TAIL_PID" 2>/dev/null || true
+  if [ -n "$HEARTBEAT_PID" ]; then
+    kill "$HEARTBEAT_PID" 2>/dev/null || true
+    wait "$HEARTBEAT_PID" 2>/dev/null || true
+  fi
+  stop_pid_file "$TUNNEL_PID_FILE" "Cloudflare tunnel"
+  stop_pid_file "$SUPERVISOR_PID_FILE" "daemon supervisor"
+  stop_pid_file "$DAEMON_PID_FILE" "daemon"
+  rm -f "$HEARTBEAT_PID_FILE" "$TUNNEL_PID_FILE" "$DAEMON_PID_FILE" "$SUPERVISOR_PID_FILE" "$LAUNCHER_PID_FILE" .env
+  if [ "$TUNNEL_REGISTERED" = "1" ]; then
+    curl -s --connect-timeout 3 --max-time 5 -X POST "$DASHBOARD_SYNC_URL" \
+      -H "Content-Type: application/json" \
+      -d "{\"username\":\"$APP_USER\",\"url\":\"\",\"token\":\"$APP_SECRET\",\"action\":\"disconnect\"}" >/dev/null 2>&1 || true
+  fi
+  if command -v termux-wake-unlock &> /dev/null; then
+    termux-wake-unlock 2>/dev/null || true
+  fi
+  if command -v termux-notification-remove &> /dev/null; then
+    termux-notification-remove pebbleafk_status 2>/dev/null || true
+  fi
+  echo -e "${GREEN}[✓] PebbleAFK stopped cleanly. Goodbye!${NC}\n"
+  exit "$exit_status"
+}
+
+trap cleanup_and_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+stop_pid_file "$HEARTBEAT_PID_FILE" "heartbeat"
+stop_pid_file "$TUNNEL_PID_FILE" "Cloudflare tunnel"
+stop_pid_file "$SUPERVISOR_PID_FILE" "daemon supervisor"
+stop_pid_file "$DAEMON_PID_FILE" "daemon"
+stop_pid_file "$LAUNCHER_PID_FILE" "launcher"
 sleep 1
+echo "=== PebbleAFK Daemon Started $(date) ===" > daemon.log
+
+if [ -z "$APP_SECRET" ]; then
+  echo -e "      ${RED}✗ No daemon secret is available for @${APP_USER}. The website connection cannot be authenticated.${NC}"
+  echo -e "      ${YELLOW}Sign in to the website and rerun its current Termux launch command.${NC}"
+  exit 1
+fi
 
 # Apply pure-JS high-speed RakNet transport patches for Android/Termux
 node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
@@ -117,24 +191,45 @@ node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
 # Prepare native RakNet backend for Termux (enables full RakNet 11 + anti-DDoS cookie support)
 bash ./scripts/prepare-mobile-raknet.sh || true
 
-cat << ENVEOF > .env
-PORT=8080
-PEBBLEAFK_OWNER=$APP_USER
-ENVEOF
+umask 077
+printf 'PORT=8080\nPEBBLEAFK_OWNER=%s\nDAEMON_AUTH_TOKEN=%s\nPEBBLEAFK_INSTANCE_ID=%s\n' \
+  "$APP_USER" "$APP_SECRET" "$INSTANCE_ID" > .env
+chmod 600 .env 2>/dev/null || true
 
 run_daemon_loop() {
+  trap - EXIT INT TERM
   export TERMUX_SUPERVISOR=1
   export PEBBLEAFK_OWNER="$APP_USER"
+  export DAEMON_AUTH_TOKEN="$APP_SECRET"
+  export PEBBLEAFK_INSTANCE_ID="$INSTANCE_ID"
+  DAEMON_CHILD_PID=""
+  stop_daemon_child() {
+    if [ -n "$DAEMON_CHILD_PID" ] && kill -0 "$DAEMON_CHILD_PID" 2>/dev/null; then
+      kill -TERM "$DAEMON_CHILD_PID" 2>/dev/null || true
+      wait "$DAEMON_CHILD_PID" 2>/dev/null || true
+    fi
+    rm -f "$DAEMON_PID_FILE"
+  }
+  trap 'stop_daemon_child; exit 0' TERM INT
   RESTART_DELAY=2
   while true; do
-    npm run start >> daemon.log 2>&1
+    ./node_modules/.bin/tsx src/index.ts >> daemon.log 2>&1 &
+    DAEMON_CHILD_PID=$!
+    echo "$DAEMON_CHILD_PID" > "$DAEMON_PID_FILE"
+    wait "$DAEMON_CHILD_PID"
     EXIT_CODE=$?
+    rm -f "$DAEMON_PID_FILE"
     if [ "$EXIT_CODE" -eq 42 ]; then
       echo -e "\n[$(date +%T)] 🔄 Dashboard requested daemon restart. Rebooting in 1s..." >> daemon.log
       sleep 1
       RESTART_DELAY=2
       continue
     fi
+    if [ "$EXIT_CODE" -eq 43 ]; then
+      echo -e "\n[$(date +%T)] ❌ Fatal port conflict: another process owns 127.0.0.1:8080. Stopping supervisor; no tunnel URL will be published." >> daemon.log
+      exit 43
+    fi
+    [ "${STOPPING:-0}" = "1" ] && exit 0
     echo -e "\n[$(date +%T)] ⚠️ Daemon process exited with code ${EXIT_CODE}. Restarting in ${RESTART_DELAY}s..." >> daemon.log
     sleep "$RESTART_DELAY"
     RESTART_DELAY=$((RESTART_DELAY * 2))
@@ -144,21 +239,35 @@ run_daemon_loop() {
 
 run_daemon_loop &
 DAEMON_PID=$!
-sleep 2
+echo "$DAEMON_PID" > "$SUPERVISOR_PID_FILE"
+echo "$$" > "$LAUNCHER_PID_FILE"
 
-if ps -p $DAEMON_PID > /dev/null; then
-  echo -e "      ${GREEN}✓ Bedrock engine running on port 8080 (Supervisor PID: ${DAEMON_PID})${NC}"
-else
-  echo -e "      ${RED}✗ Failed to start daemon. Showing daemon.log:${NC}"
-  cat daemon.log | tail -n 10
+echo -ne "      ${YELLOW}⌛ Waiting for this daemon instance to become healthy...${NC}"
+LOCAL_HEALTH=""
+for i in {1..30}; do
+  LOCAL_HEALTH=$(curl -fsS --connect-timeout 1 --max-time 2 http://127.0.0.1:8080/ 2>/dev/null || true)
+  if echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then break; fi
+  if ! kill -0 "$DAEMON_PID" 2>/dev/null; then break; fi
+  if ps -o stat= -p "$DAEMON_PID" 2>/dev/null | grep -q '^Z'; then break; fi
+  echo -ne "${YELLOW}.${NC}"
+  sleep 1
+done
+echo ""
+if ! echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
+  echo -e "      ${RED}✗ This launch did not acquire port 8080 or failed its health check. It will not publish a tunnel URL.${NC}"
+  tail -n 20 daemon.log
+  kill -TERM "$DAEMON_PID" 2>/dev/null || true
+  rm -f "$SUPERVISOR_PID_FILE" "$LAUNCHER_PID_FILE"
   exit 1
 fi
+echo -e "      ${GREEN}✓ This daemon instance is healthy on port 8080 (Supervisor PID: ${DAEMON_PID})${NC}"
 
 # 3. Start Cloudflare Tunnel (its origin is local to this phone; the public URL is network-independent)
 echo -e "\n${CYAN}[3/4]${NC} 🛡️  ${BOLD}Creating secure Cloudflare Tunnel (HTTP/2)...${NC}"
 echo -e "      ${GRAY}Phone-local origin: 127.0.0.1:8080 (not a Wi-Fi/mobile IP; public access uses the Cloudflare URL)${NC}"
 cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
 TUNNEL_PID=$!
+echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
 
 echo -ne "      ${YELLOW}⌛ Negotiating secure SSL tunnel address...${NC}"
 TUNNEL_URL=""
@@ -177,8 +286,21 @@ if [ -z "$TUNNEL_URL" ]; then
   exit 1
 fi
 
+echo -ne "      ${YELLOW}⌛ Verifying the public tunnel reaches this daemon...${NC}"
+PUBLIC_HEALTH=""
+for i in {1..30}; do
+  PUBLIC_HEALTH=$(curl -fsSL --connect-timeout 2 --max-time 5 "${TUNNEL_URL}/" 2>/dev/null || true)
+  if echo "$PUBLIC_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then break; fi
+  echo -ne "${YELLOW}.${NC}"
+  sleep 1
+done
+echo ""
+if ! echo "$PUBLIC_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
+  echo -e "      ${RED}✗ Cloudflare did not return this daemon instance. The URL was not registered; check tunnel.log.${NC}"
+  exit 1
+fi
+
 WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')
-DASHBOARD_SYNC_URL="https://pebbleafk.vercel.app/api/tunnel"
 
 # 4. Auto-sync to Vercel Website
 echo -e "\n${CYAN}[4/4]${NC} 🚀 ${BOLD}Auto-syncing tunnel to user @${APP_USER}...${NC}"
@@ -186,12 +308,12 @@ SYNC_RESP=$(curl -s --connect-timeout 6 --max-time 10 -X POST "$DASHBOARD_SYNC_U
   -H "Content-Type: application/json" \
   -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null)
 
-if echo "$SYNC_RESP" | grep -q "Unauthorized"; then
-  echo -e "      ${YELLOW}⚠ Auto-sync auth notice. Running tunnel locally & continuing...${NC}"
-elif echo "$SYNC_RESP" | grep -q "success"; then
+if echo "$SYNC_RESP" | grep -q '"success":true'; then
+  TUNNEL_REGISTERED=1
   echo -e "      ${GREEN}✓ AUTO-SYNC SUCCESSFUL! Dashboard paired automatically.${NC}"
 else
-  echo -e "      ${GREEN}✓ Live sync broadcasted.${NC}"
+  echo -e "      ${RED}✗ Website registration failed: ${SYNC_RESP:-no response}${NC}"
+  exit 1
 fi
 
 echo -e "\n  ${GREEN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
@@ -219,13 +341,33 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 
     cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
     TUNNEL_PID=$!
+    echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
     NEW_TUNNEL_URL=""
     for attempt in {1..30}; do
       NEW_TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log | tail -n 1)
       if [ -n "$NEW_TUNNEL_URL" ]; then
-        TUNNEL_URL="$NEW_TUNNEL_URL"
-        WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')
-        echo -e "[$(date +%T)] ✓ Cloudflare tunnel restored at ${WSS_URL}" >> daemon.log
+        # Do not switch the dashboard to a fresh quick-tunnel address until
+        # its public endpoint has been confirmed against this daemon instance.
+        for health_attempt in {1..15}; do
+          PUBLIC_HEALTH=$(curl -fsSL --connect-timeout 2 --max-time 5 "${NEW_TUNNEL_URL}/" 2>/dev/null || true)
+          if echo "$PUBLIC_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
+            NEW_WSS_URL=$(echo "$NEW_TUNNEL_URL" | sed 's/https:/wss:/')
+            SYNC_RESP=$(curl -s --connect-timeout 5 --max-time 10 -X POST "$DASHBOARD_SYNC_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"username\":\"$APP_USER\",\"url\":\"$NEW_WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null || true)
+            if ! echo "$SYNC_RESP" | grep -q '"success":true'; then
+              echo -e "[$(date +%T)] ❌ Website rejected replacement tunnel URL: ${SYNC_RESP:-no response}" >> daemon.log
+              return 1
+            fi
+            TUNNEL_URL="$NEW_TUNNEL_URL"
+            WSS_URL="$NEW_WSS_URL"
+            TUNNEL_REGISTERED=1
+            echo -e "[$(date +%T)] ✓ Cloudflare tunnel restored at ${WSS_URL}" >> daemon.log
+            return 0
+          fi
+          sleep 1
+        done
+        echo -e "[$(date +%T)] ❌ New tunnel failed daemon identity verification; keeping the previous dashboard URL." >> daemon.log
         return 0
       fi
       sleep 1
@@ -274,36 +416,7 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
   done
 ) &
 HEARTBEAT_PID=$!
-echo "$HEARTBEAT_PID" > "$HOME/.pebbleafk_heartbeat.pid"
-
-cleanup_and_exit() {
-  echo -e "\n\n${YELLOW}[!] Stopping PebbleAFK Bedrock Daemon cleanly...${NC}"
-  kill $TAIL_PID 2>/dev/null || true
-  kill $HEARTBEAT_PID 2>/dev/null || true
-  rm -f "$HOME/.pebbleafk_heartbeat.pid" 2>/dev/null || true
-  pkill -9 -f "cloudflared" >/dev/null 2>&1 || true
-  pkill -9 -f "tsx" >/dev/null 2>&1 || true
-  pkill -9 -f "node.*index" >/dev/null 2>&1 || true
-  pkill -9 -f "pebbleafk" >/dev/null 2>&1 || true
-  pkill -9 -f "pebbleafk_heartbeat" >/dev/null 2>&1 || true
-  if command -v fuser &> /dev/null; then
-    fuser -k -9 8080/tcp >/dev/null 2>&1 || true
-  fi
-  # Notify dashboard of disconnect
-  curl -s --connect-timeout 3 --max-time 5 -X POST "$DASHBOARD_SYNC_URL" \
-    -H "Content-Type: application/json" \
-    -d "{\"username\":\"$APP_USER\",\"url\":\"\",\"token\":\"$APP_SECRET\",\"action\":\"disconnect\"}" >/dev/null 2>&1 || true
-
-  if command -v termux-wake-unlock &> /dev/null; then
-    termux-wake-unlock 2>/dev/null || true
-  fi
-  if command -v termux-notification-remove &> /dev/null; then
-    termux-notification-remove pebbleafk_status 2>/dev/null || true
-  fi
-  echo -e "${GREEN}[✓] PebbleAFK stopped cleanly. Goodbye!${NC}\n"
-}
-
-trap 'cleanup_and_exit; exit 0' SIGINT SIGTERM
+echo "$HEARTBEAT_PID" > "$HEARTBEAT_PID_FILE"
 
 # Stream logs continuously in foreground
 tail -f daemon.log &

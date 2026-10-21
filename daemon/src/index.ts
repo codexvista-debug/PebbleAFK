@@ -14,6 +14,9 @@ process.on('uncaughtException', (err: any) => {
   if (err?.stack) {
     console.error(chalk.gray(err.stack));
   }
+  // A failed listen cannot recover inside this process. Let the Termux
+  // supervisor stop retrying and surface the port conflict to the launcher.
+  if (err?.code === 'EADDRINUSE') process.exit(43);
 });
 
 process.on('unhandledRejection', (reason: any) => {
@@ -36,6 +39,7 @@ const server = http.createServer((req, res) => {
     service: 'PebbleAFK Daemon (Bedrock Edition)',
     status: 'running',
     protocol: 'bedrock-protocol',
+    instanceId: process.env.PEBBLEAFK_INSTANCE_ID || '',
     uptime: Math.round(process.uptime()),
     timestamp: Date.now(),
   }));
@@ -283,10 +287,11 @@ wss.on('connection', (ws: WebSocket, req) => {
 server.on('error', (err: any) => {
   if (err?.code === 'EADDRINUSE') {
     console.error(chalk.red(`[PebbleAFK Fatal] Port ${PORT} is already in use by another process.`));
+    process.exit(43);
   } else {
     console.error(chalk.red(`[PebbleAFK Fatal Server Error] ${err?.message || err}`));
+    process.exit(1);
   }
-  process.exit(1);
 });
 
 // Cloudflare Tunnel runs locally on this phone, then exposes the secure public URL.
