@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Network, Check, Copy, Terminal, ChevronDown, RotateCw, Power } from 'lucide-react';
+import { X, Network, Check, Copy, Terminal, ChevronDown, RotateCw, Power, ArrowUpCircle } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -151,21 +151,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
                   <span>📱</span> Run this command in Termux:
                 </span>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2">
                   {onUpdateDaemon && isDaemonOnline && (
                     <button
                       type="button"
                       onClick={handleUpdate}
                       disabled={isUpdating}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 ${
+                      className={`relative flex items-center justify-center w-8 h-8 rounded-xl border text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 ${
                         updateSuccess
                           ? 'bg-emerald-100 border-emerald-300 text-emerald-800'
                           : 'bg-sky-50 hover:bg-sky-100 border-sky-300 text-sky-800'
                       }`}
-                      title="Fetch latest updates from GitHub and restart"
+                      title={
+                        isUpdating
+                          ? 'Updating engine...'
+                          : updateSuccess
+                          ? 'Update triggered!'
+                          : 'Update Engine (pull latest from GitHub)'
+                      }
+                      aria-label="Update Engine"
                     >
-                      <RotateCw
-                        className={`w-3.5 h-3.5 ${
+                      <ArrowUpCircle
+                        className={`w-4 h-4 ${
                           isUpdating
                             ? 'animate-spin text-sky-600'
                             : updateSuccess
@@ -173,13 +180,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             : 'text-sky-600'
                         }`}
                       />
-                      <span>
-                        {isUpdating
-                          ? 'Updating...'
-                          : updateSuccess
-                          ? 'Update Triggered!'
-                          : 'Update Engine'}
-                      </span>
                     </button>
                   )}
                   {onRestartDaemon && (
@@ -187,7 +187,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type="button"
                       onClick={handleRestart}
                       disabled={isRestarting || !isDaemonOnline}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 ${
+                      className={`relative flex items-center justify-center w-8 h-8 rounded-xl border text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 ${
                         restartSuccess
                           ? 'bg-emerald-100 border-emerald-300 text-emerald-800'
                           : isDaemonOnline
@@ -195,13 +195,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
                       }`}
                       title={
-                        isDaemonOnline
-                          ? 'Reboot daemon & reset all Bedrock bot connections'
+                        isRestarting
+                          ? 'Restarting daemon...'
+                          : restartSuccess
+                          ? 'Daemon restarted!'
+                          : isDaemonOnline
+                          ? 'Restart Daemon (reboot & reset bots)'
                           : 'Daemon is offline. Run the command in Termux first.'
                       }
+                      aria-label="Restart Daemon"
                     >
                       <RotateCw
-                        className={`w-3.5 h-3.5 ${
+                        className={`w-4 h-4 ${
                           isRestarting
                             ? 'animate-spin text-amber-600'
                             : restartSuccess
@@ -211,13 +216,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             : 'text-slate-400'
                         }`}
                       />
-                      <span>
-                        {isRestarting
-                          ? 'Restarting...'
-                          : restartSuccess
-                          ? 'Daemon Restarted!'
-                          : 'Restart Daemon'}
-                      </span>
                     </button>
                   )}
                   {onShutdownDaemon && (
@@ -225,21 +223,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type="button"
                       onClick={handleShutdown}
                       disabled={isShuttingDown || !isDaemonOnline}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400 text-xs font-bold transition shadow-xs cursor-pointer disabled:cursor-not-allowed active:scale-95"
-                      title="Stop the full Termux daemon stack and remove its active tunnel"
+                      className="relative flex items-center justify-center w-8 h-8 rounded-xl border border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400 text-xs font-bold transition shadow-xs cursor-pointer disabled:cursor-not-allowed active:scale-95"
+                      title={
+                        isShuttingDown
+                          ? 'Shutting down...'
+                          : isDaemonOnline
+                          ? 'Shut Down Daemon (stop processes & close tunnel)'
+                          : 'Daemon is offline'
+                      }
+                      aria-label="Shut Down Daemon"
                     >
-                      <Power className="w-3.5 h-3.5" />
-                      <span>{isShuttingDown ? 'Shutting Down...' : 'Shut Down'}</span>
+                      <Power className="w-4 h-4" />
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={handleCopyCommand}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs cursor-pointer active:scale-95"
-                  >
-                    {copiedCommand ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedCommand ? 'Copied to Clipboard!' : 'Copy Command'}</span>
-                  </button>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={handleCopyCommand}
+                      className={`flex items-center justify-center w-8 h-8 rounded-xl transition shadow-xs cursor-pointer active:scale-95 ${
+                        copiedCommand
+                          ? 'bg-emerald-500 text-white ring-2 ring-emerald-300'
+                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      }`}
+                      title={copiedCommand ? 'Copied to Clipboard!' : 'Copy Command'}
+                      aria-label="Copy Command"
+                    >
+                      {copiedCommand ? <Check className="w-4 h-4 text-white" /> : <Copy className="w-4 h-4 text-white" />}
+                    </button>
+                    {copiedCommand && (
+                      <span className="absolute -bottom-6 right-0 text-[10px] bg-emerald-700 text-white font-bold px-1.5 py-0.5 rounded shadow whitespace-nowrap z-10 animate-in fade-in">
+                        Copied!
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 

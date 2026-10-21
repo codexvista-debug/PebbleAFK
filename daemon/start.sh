@@ -282,19 +282,20 @@ echo -e "      ${GREEN}✓ This daemon instance is healthy on port 8080 (Supervi
 # 3. Start Cloudflare Tunnel (its origin is local to this phone; the public URL is network-independent)
 echo -e "\n${CYAN}[3/4]${NC} 🛡️  ${BOLD}Creating secure Cloudflare Tunnel (HTTP/2)...${NC}"
 echo -e "      ${GRAY}Phone-local origin: 127.0.0.1:8080 (not a Wi-Fi/mobile IP; public access uses the Cloudflare URL)${NC}"
+rm -f tunnel.log
 cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
 TUNNEL_PID=$!
 echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
 
 echo -ne "      ${YELLOW}⌛ Negotiating secure SSL tunnel address...${NC}"
 TUNNEL_URL=""
-for i in {1..30}; do
+for i in {1..60}; do
   echo -ne "${YELLOW}.${NC}"
-  TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log | head -n 1)
+  TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log 2>/dev/null | tail -n 1)
   if [ -n "$TUNNEL_URL" ]; then
     break
   fi
-  sleep 1
+  sleep 0.5
 done
 echo ""
 
@@ -320,12 +321,20 @@ WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')
 
 # 4. Auto-sync to Vercel Website
 echo -e "\n${CYAN}[4/4]${NC} 🚀 ${BOLD}Auto-syncing tunnel to user @${APP_USER}...${NC}"
-SYNC_RESP=$(curl -s --connect-timeout 6 --max-time 10 -X POST "$DASHBOARD_SYNC_URL" \
-  -H "Content-Type: application/json" \
-  -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null)
+TUNNEL_REGISTERED=0
+for sync_attempt in 1 2 3 4 5; do
+  SYNC_RESP=$(curl -s --connect-timeout 5 --max-time 8 -X POST "$DASHBOARD_SYNC_URL" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null || true)
+  if echo "$SYNC_RESP" | grep -q '"success":true'; then
+    TUNNEL_REGISTERED=1
+    break
+  fi
+  echo -ne "${YELLOW}↺${NC}"
+  sleep 1
+done
 
-if echo "$SYNC_RESP" | grep -q '"success":true'; then
-  TUNNEL_REGISTERED=1
+if [ "$TUNNEL_REGISTERED" = "1" ]; then
   echo -e "      ${GREEN}✓ AUTO-SYNC SUCCESSFUL! Dashboard paired automatically.${NC}"
 else
   echo -e "      ${RED}✗ Website registration failed: ${SYNC_RESP:-no response}${NC}"

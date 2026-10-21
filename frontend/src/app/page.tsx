@@ -371,6 +371,7 @@ export default function Home() {
     bossBarsByBot,
     messagesByBot,
     activityLogs,
+    reconnect,
     restartDaemon,
     updateDaemon,
     shutdownDaemon,
@@ -516,14 +517,17 @@ export default function Home() {
   authTokenRef.current = authToken;
   const tunnelRegistrationRef = useRef({ username: '', updatedAt: 0 });
 
-  // Auto-sync tunnel from Termux via /api/tunnel
+  // Auto-sync tunnel from Termux via /api/tunnel (Zero-delay fast polling & instant tab wakeup)
   useEffect(() => {
     if (!currentUser) return;
     let isMounted = true;
 
     const checkTunnel = async () => {
       try {
-        const res = await fetch(`/api/tunnel?username=${encodeURIComponent(currentUser)}`, { cache: 'no-store' });
+        const res = await fetch(`/api/tunnel?username=${encodeURIComponent(currentUser)}&_t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Pragma': 'no-cache', 'Cache-Control': 'no-cache' },
+        });
         if (res.ok && isMounted) {
           const data = await res.json();
           const targetUrl = (data?.url || data?.tunnel_url || '').trim();
@@ -543,18 +547,25 @@ export default function Home() {
             const lastAcceptedAt = tunnelRegistrationRef.current.updatedAt;
             const isNewerTermuxRegistration = Number.isFinite(updatedAt) && updatedAt > lastAcceptedAt;
             const isSameRegistration = updatedAt === lastAcceptedAt && cleanTarget === cleanCurrent;
+            const isDisconnected = daemonStatusRef.current !== 'AUTHENTICATED';
 
-            // Ignore out-of-order/stale API responses. Only a newer URL
-            // registration from the linked Termux process may retarget the
-            // browser's WebSocket; transient reads cannot flip it back.
-            if (isNewerTermuxRegistration || isSameRegistration) {
-              if (isNewerTermuxRegistration) {
-                tunnelRegistrationRef.current = { username, updatedAt };
+            // Accept registration if:
+            // 1. Termux published a newer timestamp, OR
+            // 2. We are currently DISCONNECTED and this tunnel is reported live with a valid URL, OR
+            // 3. It's the active registration
+            if (isNewerTermuxRegistration || (isDisconnected && data?.isLive && cleanTarget) || isSameRegistration) {
+              if (isNewerTermuxRegistration || isDisconnected) {
+                tunnelRegistrationRef.current = { username, updatedAt: updatedAt || Date.now() };
                 if (typeof window !== 'undefined') {
-                  localStorage.setItem(`pebbleafk_tunnel_updated_at_${username}`, String(updatedAt));
+                  localStorage.setItem(`pebbleafk_tunnel_updated_at_${username}`, String(updatedAt || Date.now()));
                 }
               }
-              if (cleanTarget !== cleanCurrent) setDaemonUrl(cleanTarget);
+              if (cleanTarget !== cleanCurrent) {
+                setDaemonUrl(cleanTarget);
+              } else if (isDisconnected) {
+                // Target URL is already saved but socket disconnected; force reconnect immediately
+                reconnect(true);
+              }
               if (targetToken) setAuthToken(targetToken);
             }
           }
@@ -563,12 +574,31 @@ export default function Home() {
     };
 
     checkTunnel();
-    const interval = setInterval(checkTunnel, daemonStatus === 'AUTHENTICATED' ? 8000 : 2000);
+
+    // Fast polling (1200ms) when disconnected or settings modal is open; relaxed (8000ms) when authenticated
+    const pollInterval = (daemonStatus === 'AUTHENTICATED' && !isSettingsOpen) ? 8000 : 1200;
+    const interval = setInterval(checkTunnel, pollInterval);
+
+    // Instant trigger when user switches back from Termux to the browser tab
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkTunnel();
+      }
+    };
+    const handleFocus = () => {
+      checkTunnel();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
     return () => {
       isMounted = false;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
     };
-  }, [currentUser, daemonStatus, secretCode, setDaemonUrl, setAuthToken]);
+  }, [currentUser, daemonStatus, isSettingsOpen, secretCode, setDaemonUrl, setAuthToken, reconnect]);
 
   // Stream Termux logs when user is on the Termux Stream page (live lines arrive via push)
   useEffect(() => {

@@ -8,6 +8,13 @@ export const dynamic = 'force-dynamic';
 
 const TUNNEL_TIMEOUT_MS = 300000; // 5 minutes (prevents premature disconnection on mobile backgrounding)
 
+const noCacheHeaders = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0',
+  'Pragma': 'no-cache',
+  'Expires': '0',
+  'Surrogate-Control': 'no-store',
+};
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const username = searchParams.get('username')?.trim().toLowerCase() || 'default';
@@ -40,18 +47,18 @@ export async function GET(req: NextRequest) {
           isLive,
         };
         userTunnels.set(username, tunnelObj);
-        return NextResponse.json(tunnelObj, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
+        return NextResponse.json(tunnelObj, { headers: noCacheHeaders });
       }
 
       // An explicit empty registration means there is no current URL. Do not
       // fall back to a possibly stale per-instance cache in this case.
       return NextResponse.json({ url: '', tunnel_url: '', token: '', updatedAt: 0, isLive: false }, {
-        headers: { 'Cache-Control': 'no-store, max-age=0' },
+        headers: noCacheHeaders,
       });
     } catch (_) {
       // A failed read must not cause a temporary URL switch. The dashboard
       // keeps its last known URL and retries on the next poll.
-      return NextResponse.json({ error: 'Tunnel registration store is temporarily unavailable.' }, { status: 503 });
+      return NextResponse.json({ error: 'Tunnel registration store is temporarily unavailable.' }, { status: 503, headers: noCacheHeaders });
     }
   }
 
@@ -64,7 +71,7 @@ export async function GET(req: NextRequest) {
       ...cached,
       tunnel_url: cached.url,
       isLive,
-    }, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
+    }, { headers: noCacheHeaders });
   }
 
   return NextResponse.json({
@@ -73,7 +80,7 @@ export async function GET(req: NextRequest) {
     token: '',
     updatedAt: cached?.updatedAt || 0,
     isLive: false,
-  }, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
+  }, { headers: noCacheHeaders });
 }
 
 export async function POST(req: NextRequest) {
@@ -151,10 +158,19 @@ export async function POST(req: NextRequest) {
           updated_at: new Date(updatedAt).toISOString(),
         }, { onConflict: 'username' });
         if (error) {
-          return NextResponse.json({ error: 'Could not persist tunnel registration.' }, { status: 503 });
+          // If upsert with onConflict hit an issue, fall back to clean delete + insert
+          await supabase.from('tunnels').delete().ilike('username', cleanUsername);
+          await supabase.from('tunnels').insert({
+            username: cleanUsername,
+            daemon_url: cleanUrl,
+            daemon_token: record.token,
+            updated_at: new Date(updatedAt).toISOString(),
+          });
         }
-      } catch (_) {
-        return NextResponse.json({ error: 'Could not persist tunnel registration.' }, { status: 503 });
+        // Clean up any older casing duplicates (e.g. 'Opera' vs 'opera')
+        await supabase.from('tunnels').delete().neq('username', cleanUsername).ilike('username', cleanUsername);
+      } catch (err) {
+        console.warn('[Tunnel API] Supabase persistence error, falling back to shared memory:', err);
       }
     }
 
@@ -164,7 +180,7 @@ export async function POST(req: NextRequest) {
       success: true,
       message: action === 'heartbeat' ? 'Heartbeat received' : `Tunnel paired for user @${cleanUsername}`,
       data: record,
-    });
+    }, { headers: noCacheHeaders });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
