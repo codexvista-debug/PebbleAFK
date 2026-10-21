@@ -1528,7 +1528,7 @@ export default function Home() {
           </header>
 
           {/* Main Scrollable Content */}
-          <main className="flex-1 bg-grid-slate p-3 sm:p-6 overflow-y-auto">
+          <main className="flex-1 min-w-0 w-full bg-grid-slate p-3 sm:p-6 overflow-y-auto overflow-x-hidden">
             {/* VIEW 1: DASHBOARD TAB */}
             {activeTab === 'dashboard' && (
               <div className="max-w-4xl mx-auto space-y-6">
@@ -1886,7 +1886,7 @@ export default function Home() {
 
             {/* VIEW 3: SERVERS VIEW (CONNECT, CHAT, SETTINGS) */}
             {activeTab === 'servers' && (
-              <div className="max-w-6xl mx-auto space-y-6 w-full">
+              <div className="w-full min-w-0 max-w-6xl mx-auto space-y-4 sm:space-y-6">
                 {!activeServer ? (
                   /* Empty state when no server profile exists */
                   <div className="p-12 rounded-3xl bg-white border border-slate-200/90 shadow-xs text-center space-y-4">
@@ -2305,11 +2305,11 @@ export default function Home() {
                       ];
 
                       return (
-                        <div className="space-y-3.5">
+                        <div className="w-full min-w-0 space-y-3.5">
                           {/* 2. Main Chat Box Container (Matching Image 3) */}
-                          <div className="bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
+                          <div className="w-full min-w-0 bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
                             {/* Card Header */}
-                            <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-slate-50/60">
+                            <div className="px-3 sm:px-5 py-3.5 border-b border-slate-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-slate-50/60">
                               <div className="flex items-center gap-3">
                                 <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 font-mono font-bold text-xs shrink-0 shadow-2xs">
                                   &gt;_
@@ -2322,15 +2322,15 @@ export default function Home() {
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2">
+                              <div className="flex w-full sm:w-auto items-center justify-between sm:justify-end gap-2">
                                 {/* Segmented Filter Tabs: All | Players | System */}
-                                <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80 text-xs font-semibold">
+                                <div className="flex flex-1 sm:flex-none items-center bg-slate-100 p-1 rounded-xl border border-slate-200/80 text-xs font-semibold">
                                   {(['all', 'players', 'system'] as const).map((tab) => (
                                     <button
                                       key={tab}
                                       type="button"
                                       onClick={() => setChatFilter(tab)}
-                                      className={`px-3 py-1 rounded-lg capitalize transition cursor-pointer text-[13px] ${
+                                      className={`flex-1 sm:flex-none px-2.5 sm:px-3 py-1 rounded-lg capitalize transition cursor-pointer text-[12px] sm:text-[13px] ${
                                         chatFilter === tab
                                           ? 'bg-white text-slate-900 font-bold shadow-2xs'
                                           : 'text-slate-500 hover:text-slate-800'
@@ -2354,8 +2354,8 @@ export default function Home() {
                             </div>
 
                             {/* Quick Command Chips Row */}
-                            <div className="flex items-center justify-between gap-2 px-5 py-2.5 bg-slate-50/40 border-b border-slate-200/80 overflow-x-auto text-xs">
-                              <div className="flex items-center gap-1.5 flex-wrap">
+                            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 px-3 sm:px-5 py-2.5 bg-slate-50/40 border-b border-slate-200/80 overflow-x-hidden text-xs">
+                              <div className="flex min-w-0 flex-1 items-center gap-1.5 flex-wrap">
                                 <span className="text-[10px] font-black text-slate-400 tracking-wider mr-1 uppercase select-none font-mono">
                                   QUICK:
                                 </span>
@@ -2374,7 +2374,7 @@ export default function Home() {
                               <button
                                 type="button"
                                 onClick={() => showToast('Tip: Click any quick command above or type your command below to send.', 'info')}
-                                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition cursor-pointer shrink-0"
+                                className="self-end sm:self-auto p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition cursor-pointer shrink-0"
                                 title="Quick commands guide"
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
@@ -2382,7 +2382,7 @@ export default function Home() {
                             </div>
 
                             {/* Chat Messages Stream Area (Spacious layout matching PocketAFK) */}
-                            <div className="h-[580px] sm:h-[650px] p-5 overflow-y-auto space-y-3 font-mono text-[13px] bg-white">
+                            <div className="h-[calc(100dvh-24rem)] min-h-[200px] md:h-[580px] p-3 sm:p-5 min-w-0 overflow-y-auto overflow-x-hidden space-y-3 font-mono text-[13px] bg-white">
                               {chatList.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400 space-y-3">
                                   <div className="w-11 h-11 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-center text-slate-400 shadow-2xs">
@@ -2492,8 +2492,8 @@ export default function Home() {
                           </div>
 
                           {/* 3. Bottom Chat Input Bar (Matching Image 3) */}
-                          <form onSubmit={handleSendChat} className="flex items-center gap-2">
-                            <div className="flex-1 flex items-center bg-white border border-slate-200/90 rounded-2xl shadow-2xs focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/10 transition px-3.5 py-1.5 gap-2">
+                          <form onSubmit={handleSendChat} className="w-full min-w-0 flex items-center gap-1.5 sm:gap-2">
+                            <div className="min-w-0 flex-1 flex items-center bg-white border border-slate-200/90 rounded-2xl shadow-2xs focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/10 transition px-2 sm:px-3.5 py-1.5 gap-1.5 sm:gap-2">
                               <span className="text-emerald-600 font-mono font-black text-sm select-none pl-1">&gt;</span>
                               <input
                                 type="text"
@@ -2505,13 +2505,13 @@ export default function Home() {
                                     ? "Send a message or command (e.g. /spawn)..."
                                     : "Bot offline [connect bot to send chat messages]..."
                                 }
-                                className="flex-1 bg-transparent border-none text-[13px] text-slate-900 placeholder-slate-400 focus:outline-none font-medium py-1.5"
+                                className="min-w-0 flex-1 bg-transparent border-none text-[13px] text-slate-900 placeholder-slate-400 focus:outline-none font-medium py-1.5"
                               />
                               <div className="relative shrink-0">
                                 <button
                                   type="button"
                                   onClick={() => setIsChatAccountDropdownOpen(!isChatAccountDropdownOpen)}
-                                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-[13px] font-bold transition cursor-pointer select-none"
+                                  className="flex max-w-[154px] sm:max-w-none items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-[12px] sm:text-[13px] font-bold transition cursor-pointer select-none"
                                   disabled={!selectedAccount}
                                   aria-expanded={isChatAccountDropdownOpen}
                                   aria-haspopup="listbox"
@@ -2534,7 +2534,7 @@ export default function Home() {
                                           }}
                                         />
                                       </div>
-                                      <span className="max-w-[150px] truncate whitespace-nowrap font-mono">@{selectedAccount.ign || selectedAccount.username}</span>
+                                      <span className="max-w-[82px] sm:max-w-[150px] truncate whitespace-nowrap font-mono">@{selectedAccount.ign || selectedAccount.username}</span>
                                       <span className={`w-2 h-2 rounded-full shrink-0 ${isSelectedOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
                                     </>
                                   ) : (
@@ -2599,11 +2599,11 @@ export default function Home() {
                             <button
                               type="submit"
                               disabled={!isSelectedOnline || !chatInput.trim()}
-                              className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-[13px] transition shadow-xs cursor-pointer flex items-center gap-2 shrink-0"
+                              className="px-3 sm:px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-[13px] transition shadow-xs cursor-pointer flex items-center gap-2 shrink-0"
                             >
                               <Send className="w-3.5 h-3.5" />
                               <span>Send</span>
-                              <CornerDownLeft className="w-3 h-3 text-emerald-200 select-none" />
+                              <CornerDownLeft className="hidden sm:block w-3 h-3 text-emerald-200 select-none" />
                             </button>
                           </form>
                         </div>
