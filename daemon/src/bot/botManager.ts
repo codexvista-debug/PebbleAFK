@@ -10,11 +10,70 @@ import { getAndSyncTokenFolder, ensureTokenAliases, backupTokens } from './token
 
 export class BotManager {
   private bots: Map<string, PebbleBotInstance> = new Map();
+  private desiredBots: Map<string, BotConfig> = new Map();
   private broadcastFn: (msg: DaemonMessage) => void;
   private currentVerificationId: number = 0;
+  private readonly desiredBotsPath = path.join(process.cwd(), '.pebbleafk-bots.json');
 
   constructor(broadcastFn: (msg: DaemonMessage) => void) {
     this.broadcastFn = broadcastFn;
+    this.loadDesiredBots();
+  }
+
+  private loadDesiredBots() {
+    try {
+      if (!fs.existsSync(this.desiredBotsPath)) return;
+      const saved = JSON.parse(fs.readFileSync(this.desiredBotsPath, 'utf8'));
+      if (!Array.isArray(saved)) return;
+
+      for (const config of saved.slice(0, 100)) {
+        if (
+          config && typeof config.id === 'string' && config.id &&
+          typeof config.username === 'string' && config.username &&
+          typeof config.host === 'string' && config.host &&
+          Number.isFinite(Number(config.port)) &&
+          (config.authType === 'microsoft' || config.authType === 'offline') &&
+          config.settings && typeof config.settings === 'object'
+        ) {
+          this.desiredBots.set(config.id, config as BotConfig);
+        }
+      }
+
+      if (this.desiredBots.size > 0) {
+        const configs = Array.from(this.desiredBots.values());
+        console.log(chalk.cyan(`[BotManager] Restoring ${configs.length} active bot${configs.length === 1 ? '' : 's'} after daemon restart...`));
+        // Let the daemon listener and tunnel supervisor finish starting, then
+        // rehydrate the sessions with the normal per-account handshake spacing.
+        setTimeout(() => {
+          configs.forEach((config, index) => {
+            setTimeout(() => {
+              // A user may have stopped an account while the dashboard was
+              // reconnecting; do not resurrect a config removed in that gap.
+              if (this.desiredBots.has(config.id)) this.startBot(config);
+            }, index * 1000);
+          });
+        }, 1200);
+      }
+    } catch (error: any) {
+      console.warn(chalk.yellow(`[BotManager] Could not restore saved bot sessions: ${error?.message || error}`));
+    }
+  }
+
+  private persistDesiredBots() {
+    const temporaryPath = `${this.desiredBotsPath}.tmp`;
+    try {
+      fs.writeFileSync(temporaryPath, JSON.stringify(Array.from(this.desiredBots.values())), { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(temporaryPath, this.desiredBotsPath);
+      try { fs.chmodSync(this.desiredBotsPath, 0o600); } catch (_) {}
+    } catch (error: any) {
+      try { if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath); } catch (_) {}
+      console.warn(chalk.yellow(`[BotManager] Could not persist active bot sessions: ${error?.message || error}`));
+    }
+  }
+
+  public clearDesiredBots() {
+    this.desiredBots.clear();
+    this.persistDesiredBots();
   }
 
   public getBot(id: string): PebbleBotInstance | undefined {
@@ -35,9 +94,12 @@ export class BotManager {
         console.log(chalk.yellow(`[BotManager] Stopping existing instance of ${existing.config.username} (${bId}) before starting new session`));
         existing.stop();
         this.bots.delete(bId);
+        this.desiredBots.delete(bId);
       }
     }
 
+    this.desiredBots.set(config.id, { ...config, settings: { ...config.settings } });
+    this.persistDesiredBots();
     const instance = new PebbleBotInstance(config, (msg) => this.broadcastFn(msg));
     this.bots.set(config.id, instance);
     instance.start();
@@ -52,6 +114,8 @@ export class BotManager {
     if (directBot) {
       directBot.stop();
       this.bots.delete(idOrName);
+      this.desiredBots.delete(idOrName);
+      this.persistDesiredBots();
       return;
     }
 
@@ -59,9 +123,22 @@ export class BotManager {
       if (bId.toLowerCase() === target || instance.config.username.toLowerCase() === target) {
         instance.stop();
         this.bots.delete(bId);
+        this.desiredBots.delete(bId);
+        this.persistDesiredBots();
         return;
       }
     }
+
+    // Also cancel a session that is queued for restoration but has not started
+    // yet, or remove it if the daemon recovered before the dashboard reconnects.
+    let removedDesiredBot = false;
+    for (const [botId, config] of Array.from(this.desiredBots.entries())) {
+      if (botId.toLowerCase() === target || config.username.toLowerCase() === target) {
+        this.desiredBots.delete(botId);
+        removedDesiredBot = true;
+      }
+    }
+    if (removedDesiredBot) this.persistDesiredBots();
   }
 
   public handleClientMessage(msg: ClientMessage) {
@@ -79,8 +156,11 @@ export class BotManager {
       case 'RESTART_BOT': {
         const bot = this.getBot(msg.payload.botId);
         if (bot) {
-          const cfg = bot.config;
-          this.stopBot(msg.payload.botId);
+          const cfg = { ...bot.config, settings: { ...bot.config.settings } };
+          bot.stop();
+          this.bots.delete(msg.payload.botId);
+          this.desiredBots.set(msg.payload.botId, cfg);
+          this.persistDesiredBots();
           setTimeout(() => this.startBot(cfg), 1000);
         }
         break;
@@ -125,6 +205,8 @@ export class BotManager {
         const bot = this.getBot(msg.payload.botId);
         if (bot) {
           bot.config.settings = { ...bot.config.settings, ...msg.payload.settings };
+          this.desiredBots.set(msg.payload.botId, { ...bot.config, settings: { ...bot.config.settings } });
+          this.persistDesiredBots();
           console.log(chalk.green(`[BotManager] Settings updated for ${bot.config.username}`));
         }
         break;

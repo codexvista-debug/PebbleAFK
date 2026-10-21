@@ -88,6 +88,14 @@ try {
   )
 
   patchFile(
+    'node_modules/bedrock-protocol/src/transforms/encryption.js',
+    '  function verify (chunk) {',
+    '  function verify (chunk) {\n    // The decipher can flush buffered data after close() removes client listeners.\n    if (client._closed) return',
+    'if (client._closed) return',
+    'late encrypted-packet guard after client shutdown'
+  )
+
+  patchFile(
     'node_modules/jsp-raknet/js/protocol/Packet.js',
     "        address.address.split('.', 4).forEach(b => this.writeByte(-b - 1));",
     "        const parts = String(address.address || '0.0.0.0').split('.'); for (let i = 0; i < 4; i++) { const num = parseInt(parts[i], 10); this.writeByte(Number.isFinite(num) ? (-num - 1) : 255); }",

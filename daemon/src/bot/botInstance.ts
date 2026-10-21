@@ -1354,19 +1354,28 @@ export class PebbleBotInstance {
     const baseDelay = Math.max(3000, this.config.settings.autoReconnectDelay || 5000);
     const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit/i.test(reason);
     const isTransportTimeout = /no reply to RakNet UDP packets|Connect timed out|filtering UDP|network path did not answer/i.test(reason);
+    const isEncryptedPacketFailure = /checksum mismatch|bad encrypted packet|badPacket/i.test(reason);
     let delay: number;
     if (isLoginThrottled) {
       this.loginThrottleCount++;
       delay = Math.max(12_000, Math.min(15_000 * (2 ** Math.min(this.loginThrottleCount - 1, 3)), 120_000));
     } else {
       this.reconnectFailureCount++;
-      delay = Math.max(baseDelay, Math.min(baseDelay * (2 ** Math.min(this.reconnectFailureCount - 1, 4)), 60_000));
+      const exponentialDelay = Math.min(baseDelay * (2 ** Math.min(this.reconnectFailureCount - 1, 4)), 60_000);
+      // Bad encrypted packets often happen during a server-side subserver
+      // transfer. Give the gateway time to settle instead of immediately
+      // repeating a handshake that is likely to be rejected again.
+      delay = isEncryptedPacketFailure
+        ? Math.max(15_000, Math.min(exponentialDelay, 120_000))
+        : Math.max(baseDelay, exponentialDelay);
     }
     // Add jitter so multiple concurrent bots stagger connection handshakes and avoid gateway rate-limiting
     const jitter = Math.floor(Math.random() * 4000);
     delay += jitter;
     const reconnectDescription = isLoginThrottled
       ? `Server login throttle; backing off for ${Math.ceil(delay / 1000)}s`
+      : isEncryptedPacketFailure
+        ? `Encrypted packet rejected; backing off for ${Math.ceil(delay / 1000)}s before reconnect`
       : isTransportTimeout
         ? `RakNet endpoint did not reply; retrying in ${Math.ceil(delay / 1000)}s`
         : `Reconnecting in ${Math.ceil(delay / 1000)}s`;

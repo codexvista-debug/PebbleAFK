@@ -40,3 +40,6 @@ daemon/profiles/
 daemon/tokens/
 tokens/
 daemon/nconf.json
+daemon/.pebbleafk-bots.json
+daemon/.pebbleafk-bots.json.tmp
+daemon/.pebbleafk-deps.sha256

@@ -24,6 +24,15 @@ process.on('unhandledRejection', (reason: any) => {
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const AUTH_TOKEN = (process.env.DAEMON_AUTH_TOKEN || '').trim();
+const path = require('path');
+const childProcess = require('child_process');
+const crypto = require('crypto');
+const repoDir = path.resolve(__dirname, '..', '..');
+let updateInProgress = false;
+let runningRevision = '';
+try {
+  runningRevision = childProcess.execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim();
+} catch (_) {}
 
 const server = http.createServer((req, res) => {
   if (req.url === '/logs') {
@@ -204,6 +213,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         if (shutdownRequested) return;
         shutdownRequested = true;
         console.warn('[Daemon] Full shutdown requested by the authenticated dashboard. Stopping all managed services...');
+        botManager.clearDesiredBots();
         try {
           ws.send(JSON.stringify({
             type: 'SHUTDOWN_RESULT',
@@ -239,62 +249,22 @@ wss.on('connection', (ws: WebSocket, req) => {
         return;
       }
 
-      // 1-Click Remote Update & Restart from Dashboard
-      if (parsed.type === 'UPDATE_DAEMON' || parsed.type === 'RESTART_DAEMON') {
-        const isUpdate = parsed.type === 'UPDATE_DAEMON';
-        console.log(chalk.cyan(`\n════════════════════════════════════════════════════`));
-        console.log(chalk.cyan(`[Daemon] Remote ${isUpdate ? 'update & restart' : 'restart'} requested by dashboard.`));
-        try {
-          ws.send(JSON.stringify({
-            type: 'DAEMON_STATUS_UPDATE',
-            payload: { message: isUpdate ? '🔄 Pulling latest code from GitHub & restarting...' : '🔁 Rebooting daemon core...' }
-          }));
-        } catch (_) {}
-
-        if (isUpdate) {
-          try {
-            const cp = require('child_process');
-            const path = require('path');
-            const fs = require('fs');
-            let repoDir = path.resolve(__dirname, '..', '..');
-            if (!fs.existsSync(path.join(repoDir, '.git')) && process.env.HOME) {
-              const homeRepo = path.join(process.env.HOME, 'PebbleAFK');
-              if (fs.existsSync(path.join(homeRepo, '.git'))) {
-                repoDir = homeRepo;
-              }
-            }
-
-            console.log(chalk.cyan(`[Update] 📥 Syncing repository from GitHub origin main...`));
-            const gitOut = cp.execSync('git reset --hard HEAD && git pull --force origin main', { cwd: repoDir, encoding: 'utf8' });
-            console.log(chalk.green(`[Update] ✓ Git Sync:\n${gitOut.trim()}`));
-
-            const daemonDir = path.join(repoDir, 'daemon');
-            const isTermux = /termux/i.test(process.env.PREFIX || '') || Boolean(process.env.TERMUX_VERSION);
-            if (isTermux) {
-              console.log(chalk.cyan(`[Update] 🔧 Preparing the Termux RakNet transport required by secured Bedrock servers...`));
-              try {
-                const patchOut = cp.execFileSync('node', ['./scripts/patch-mobile-raknet.cjs'], { cwd: daemonDir, encoding: 'utf8' });
-                if (patchOut.trim()) console.log(chalk.gray(patchOut.trim()));
-                const raknetOut = cp.execFileSync('bash', ['./scripts/prepare-mobile-raknet.sh'], { cwd: daemonDir, encoding: 'utf8' });
-                if (raknetOut.trim()) console.log(raknetOut.trim());
-              } catch (raknetErr: any) {
-                const output = [raknetErr?.stdout, raknetErr?.stderr].filter(Boolean).join('\n').trim();
-                console.error(chalk.yellow(`[Update] Native RakNet preparation failed; the daemon will continue with its available fallback.${output ? `\n${output}` : ` ${raknetErr?.message || raknetErr}`}`));
-              }
-            }
-
-            console.log(chalk.cyan(`[Update] ⚙️ Rebuilding daemon TypeScript core...`));
-            const buildOut = cp.execSync('npm run build', { cwd: daemonDir, encoding: 'utf8' });
-            console.log(chalk.green(`[Update] ✓ Build complete:\n${buildOut.trim()}`));
-            console.log(chalk.green(`[Update] ✨ Core engine successfully updated! Rebooting supervisor...`));
-          } catch (gitErr: any) {
-            console.error(chalk.yellow(`[Update] git notice: ${gitErr?.message || gitErr}`));
-          }
+      // Update the running daemon in place. All commands are asynchronous so
+      // WebSocket heartbeats and other bots keep running during fetch/build.
+      if (parsed.type === 'UPDATE_DAEMON') {
+        if (updateInProgress) {
+          ws.send(JSON.stringify({ type: 'DAEMON_STATUS_UPDATE', payload: { message: 'An engine update is already running.' } }));
+          return;
         }
-        console.log(chalk.cyan(`════════════════════════════════════════════════════\n`));
-        setTimeout(() => {
-          process.exit(42);
-        }, 1200);
+        updateInProgress = true;
+        void updateDaemonFromDashboard(ws).finally(() => { updateInProgress = false; });
+        return;
+      }
+
+      if (parsed.type === 'RESTART_DAEMON') {
+        console.log(chalk.cyan('[Daemon] Core restart requested by dashboard. Active accounts will be restored.'));
+        sendDaemonStatus(ws, '🔁 Restarting daemon core; active accounts will reconnect automatically...');
+        setTimeout(() => process.exit(42), 1200);
         return;
       }
 
@@ -316,6 +286,114 @@ wss.on('connection', (ws: WebSocket, req) => {
     console.error(chalk.red(`[Socket Error] ${err.message}`));
   });
 });
+
+function sendDaemonStatus(ws: WebSocket, message: string) {
+  try {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'DAEMON_STATUS_UPDATE', payload: { message } }));
+    }
+  } catch (_) {}
+}
+
+function runCommand(command: string, args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    childProcess.execFile(command, args, { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }, (error: any, stdout: string, stderr: string) => {
+      if (error) {
+        const output = [stdout, stderr].filter(Boolean).join('\n').trim();
+        reject(new Error(output || error.message || String(error)));
+        return;
+      }
+      resolve([stdout, stderr].filter(Boolean).join('\n').trim());
+    });
+  });
+}
+
+async function updateDaemonFromDashboard(ws: WebSocket) {
+  const fs = require('fs');
+  const daemonDir = path.join(repoDir, 'daemon');
+  const status = (message: string) => {
+    console.log(chalk.cyan(`[Update] ${message}`));
+    sendDaemonStatus(ws, message);
+  };
+
+  console.log(chalk.cyan('\n════════════════════════════════════════════════════'));
+  console.log(chalk.cyan('[Daemon] Remote update requested by dashboard.'));
+  try {
+    if (!fs.existsSync(path.join(repoDir, '.git'))) throw new Error(`Git repository not found at ${repoDir}`);
+    status('📥 Checking GitHub for the latest engine changes...');
+    const dirtyFiles = await runCommand('git', ['status', '--porcelain', '--untracked-files=no'], repoDir);
+    if (dirtyFiles) throw new Error('Update paused because tracked local files have edits. They were left untouched. Commit or revert those edits on the device, then retry.');
+
+    await runCommand('git', ['fetch', '--prune', 'origin', 'main'], repoDir);
+    const localHead = (await runCommand('git', ['rev-parse', 'HEAD'], repoDir)).trim();
+    const remoteHead = (await runCommand('git', ['rev-parse', 'FETCH_HEAD'], repoDir)).trim();
+    if (!remoteHead) throw new Error('GitHub did not provide a main-branch revision.');
+
+    if (localHead !== remoteHead) {
+      try {
+        await runCommand('git', ['merge-base', '--is-ancestor', localHead, remoteHead], repoDir);
+      } catch (_) {
+        throw new Error('Local main has commits that are not on GitHub main; refusing to overwrite or merge device changes automatically.');
+      }
+      status(`⬇️ Fast-forwarding engine from ${localHead.slice(0, 7)} to ${remoteHead.slice(0, 7)}...`);
+      await runCommand('git', ['merge', '--ff-only', remoteHead], repoDir);
+    }
+
+    const targetHead = (await runCommand('git', ['rev-parse', 'HEAD'], repoDir)).trim();
+    const dependencyMarker = path.join(daemonDir, '.pebbleafk-deps.sha256');
+    const dependencyHash = crypto.createHash('sha256')
+      .update(fs.readFileSync(path.join(daemonDir, 'package.json')))
+      .update(fs.readFileSync(path.join(daemonDir, 'package-lock.json')))
+      .digest('hex');
+    let installedDependencyHash = '';
+    try { installedDependencyHash = fs.readFileSync(dependencyMarker, 'utf8').trim(); } catch (_) {}
+    const dependenciesNeedSync = installedDependencyHash !== dependencyHash || !fs.existsSync(path.join(daemonDir, 'node_modules'));
+
+    if (targetHead === runningRevision && !dependenciesNeedSync) {
+      status(`✓ Already up to date at ${targetHead.slice(0, 7)}. Existing account sessions remain connected.`);
+      console.log(chalk.cyan('════════════════════════════════════════════════════\n'));
+      return;
+    }
+
+    if (dependenciesNeedSync) {
+      status('📦 Synchronizing daemon dependencies with the current lockfile...');
+      // `npm install` reconciles a changed lockfile without deleting the whole
+      // module tree while this already-running daemon is serving its accounts.
+      const installOut = await runCommand('npm', ['install', '--ignore-scripts'], daemonDir);
+      if (installOut) console.log(chalk.gray(installOut));
+      const installedHash = crypto.createHash('sha256')
+        .update(fs.readFileSync(path.join(daemonDir, 'package.json')))
+        .update(fs.readFileSync(path.join(daemonDir, 'package-lock.json')))
+        .digest('hex');
+      fs.writeFileSync(dependencyMarker, `${installedHash}\n`, { encoding: 'utf8', mode: 0o600 });
+    }
+
+    const isTermux = /termux/i.test(process.env.PREFIX || '') || Boolean(process.env.TERMUX_VERSION);
+    if (isTermux) {
+      status('🔧 Preparing the Termux RakNet transport...');
+      const patchOut = await runCommand('node', ['./scripts/patch-mobile-raknet.cjs'], daemonDir);
+      if (patchOut) console.log(chalk.gray(patchOut));
+      try {
+        const raknetOut = await runCommand('bash', ['./scripts/prepare-mobile-raknet.sh'], daemonDir);
+        if (raknetOut) console.log(raknetOut);
+      } catch (error: any) {
+        console.warn(chalk.yellow(`[Update] Native RakNet preparation note; existing backend/fallback remains available: ${error?.message || error}`));
+      }
+    }
+
+    status('⚙️ Building updated daemon core...');
+    const buildOut = await runCommand('npm', ['run', 'build'], daemonDir);
+    if (buildOut) console.log(chalk.gray(buildOut));
+    status(`✨ Engine update complete (${targetHead.slice(0, 7)}). Restarting the core; active accounts will reconnect automatically.`);
+    console.log(chalk.cyan('════════════════════════════════════════════════════\n'));
+    setTimeout(() => process.exit(42), 1200);
+  } catch (error: any) {
+    const message = error?.message || String(error);
+    console.error(chalk.red(`[Update] ✗ Update failed safely: ${message}`));
+    sendDaemonStatus(ws, `⚠️ Update failed; the running daemon was left online. ${message}`);
+    console.log(chalk.cyan('════════════════════════════════════════════════════\n'));
+  }
+}
 
 function gracefulShutdown(signal: string) {
   if (shutdownRequested) return;
