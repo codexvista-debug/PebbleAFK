@@ -510,6 +510,7 @@ export default function Home() {
   daemonUrlRef.current = daemonUrl;
   const authTokenRef = useRef(authToken);
   authTokenRef.current = authToken;
+  const tunnelRegistrationRef = useRef({ username: '', updatedAt: 0 });
 
   // Auto-sync tunnel from Termux via /api/tunnel
   useEffect(() => {
@@ -526,8 +527,30 @@ export default function Home() {
           if (targetUrl && targetUrl.startsWith('wss://')) {
             const cleanTarget = targetUrl.replace(/\/+$/, '');
             const cleanCurrent = (daemonUrlRef.current || '').trim().replace(/\/+$/, '');
-            if (cleanTarget !== cleanCurrent) {
-              setDaemonUrl(cleanTarget);
+            const username = currentUser.trim().toLowerCase();
+            if (tunnelRegistrationRef.current.username !== username) {
+              const storedUpdatedAt = typeof window !== 'undefined'
+                ? Number(localStorage.getItem(`pebbleafk_tunnel_updated_at_${username}`) || 0)
+                : 0;
+              tunnelRegistrationRef.current = { username, updatedAt: storedUpdatedAt };
+            }
+
+            const updatedAt = Number(data?.updatedAt);
+            const lastAcceptedAt = tunnelRegistrationRef.current.updatedAt;
+            const isNewerTermuxRegistration = Number.isFinite(updatedAt) && updatedAt > lastAcceptedAt;
+            const isSameRegistration = updatedAt === lastAcceptedAt && cleanTarget === cleanCurrent;
+
+            // Ignore out-of-order/stale API responses. Only a newer URL
+            // registration from the linked Termux process may retarget the
+            // browser's WebSocket; transient reads cannot flip it back.
+            if (isNewerTermuxRegistration || isSameRegistration) {
+              if (isNewerTermuxRegistration) {
+                tunnelRegistrationRef.current = { username, updatedAt };
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem(`pebbleafk_tunnel_updated_at_${username}`, String(updatedAt));
+                }
+              }
+              if (cleanTarget !== cleanCurrent) setDaemonUrl(cleanTarget);
               if (targetToken) setAuthToken(targetToken);
             }
           }
@@ -2493,8 +2516,8 @@ export default function Home() {
                           </div>
 
                           {/* 3. Bottom Chat Input Bar (Matching Image 3) */}
-                          <form onSubmit={handleSendChat} className="mt-2 w-full min-w-0 shrink-0 flex items-center gap-1.5 sm:gap-2">
-                            <div className="min-w-0 flex-1 flex items-center bg-white border border-slate-200/90 rounded-2xl shadow-2xs focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/10 transition px-2 sm:px-3.5 py-1.5 gap-1.5 sm:gap-2">
+                          <form onSubmit={handleSendChat} className="mt-2 w-full min-w-0 shrink-0 flex items-center gap-1 sm:gap-2">
+                            <div className="min-w-0 min-h-12 flex-1 flex items-center bg-white border border-slate-200/90 rounded-2xl shadow-2xs focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/10 transition px-2 sm:px-3.5 py-1.5 gap-1 sm:gap-2">
                               <span className="text-emerald-600 font-mono font-black text-sm select-none pl-1">&gt;</span>
                               <input
                                 type="text"
@@ -2506,16 +2529,18 @@ export default function Home() {
                                     ? "Send a message or command (e.g. /spawn)..."
                                     : "Bot offline [connect bot to send chat messages]..."
                                 }
-                                className="min-w-0 flex-1 bg-transparent border-none text-[13px] text-slate-900 placeholder-slate-400 focus:outline-none font-medium py-1.5"
+                                className="min-w-0 flex-1 bg-transparent border-none text-base sm:text-[13px] text-slate-900 placeholder-slate-400 focus:outline-none font-medium py-2 sm:py-1.5"
                               />
                               <div className="relative shrink-0">
                                 <button
                                   type="button"
                                   onClick={() => setIsChatAccountDropdownOpen(!isChatAccountDropdownOpen)}
-                                  className="flex max-w-[154px] sm:max-w-none items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-[12px] sm:text-[13px] font-bold transition cursor-pointer select-none"
+                                  className="flex w-[58px] sm:w-auto max-w-[154px] sm:max-w-none justify-center items-center gap-1 sm:gap-1.5 px-1 sm:px-2.5 py-2 sm:py-1 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-200 text-slate-700 text-[12px] sm:text-[13px] font-bold transition cursor-pointer select-none"
                                   disabled={!selectedAccount}
                                   aria-expanded={isChatAccountDropdownOpen}
                                   aria-haspopup="listbox"
+                                  aria-label={`Select chat account${selectedAccount ? `, currently @${selectedAccount.ign || selectedAccount.username}` : ''}`}
+                                  title={selectedAccount ? `Chat as @${selectedAccount.ign || selectedAccount.username}` : 'Select chat account'}
                                 >
                                   {selectedAccount ? (
                                     <>
@@ -2535,7 +2560,7 @@ export default function Home() {
                                           }}
                                         />
                                       </div>
-                                      <span className="max-w-[82px] sm:max-w-[150px] truncate whitespace-nowrap font-mono">@{selectedAccount.ign || selectedAccount.username}</span>
+                                      <span className="hidden max-w-[82px] sm:max-w-[150px] truncate whitespace-nowrap font-mono sm:inline">@{selectedAccount.ign || selectedAccount.username}</span>
                                       <span className={`w-2 h-2 rounded-full shrink-0 ${isSelectedOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
                                     </>
                                   ) : (
@@ -2600,10 +2625,12 @@ export default function Home() {
                             <button
                               type="submit"
                               disabled={!isSelectedOnline || !chatInput.trim()}
-                              className="px-3 sm:px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-[13px] transition shadow-xs cursor-pointer flex items-center gap-2 shrink-0"
+                              className="w-11 h-11 sm:w-auto sm:h-auto justify-center px-0 sm:px-5 py-0 sm:py-2.5 rounded-xl sm:rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-[13px] transition shadow-xs cursor-pointer flex items-center gap-2 shrink-0"
+                              aria-label="Send chat message"
+                              title="Send message"
                             >
-                              <Send className="w-3.5 h-3.5" />
-                              <span>Send</span>
+                              <Send className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                              <span className="hidden sm:inline">Send</span>
                               <CornerDownLeft className="hidden sm:block w-3 h-3 text-emerald-200 select-none" />
                             </button>
                           </form>

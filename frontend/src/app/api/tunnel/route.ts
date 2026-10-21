@@ -12,21 +12,12 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const username = searchParams.get('username')?.trim().toLowerCase() || 'default';
 
-  // 1. Check in-memory cache
-  const cached = userTunnels.get(username);
-  if (cached && cached.url) {
-    const isLive = Date.now() - cached.updatedAt < TUNNEL_TIMEOUT_MS;
-    return NextResponse.json({
-      ...cached,
-      tunnel_url: cached.url,
-      isLive,
-    });
-  }
-
-  // 2. Check Supabase
+  // Supabase is the shared source of truth in production. An in-memory cache
+  // can be different on each Vercel instance and may otherwise send the
+  // browser back to an expired Cloudflare quick-tunnel URL.
   if (supabase) {
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('tunnels')
         .select('*')
         .ilike('username', username)
@@ -34,7 +25,11 @@ export async function GET(req: NextRequest) {
         .limit(1)
         .maybeSingle();
 
-      if (data && data.daemon_url) {
+      if (error) {
+        return NextResponse.json({ error: 'Tunnel registration store is temporarily unavailable.' }, { status: 503 });
+      }
+
+      if (data?.daemon_url) {
         const updatedAt = data.updated_at ? new Date(data.updated_at).getTime() : 0;
         const isLive = Date.now() - updatedAt < TUNNEL_TIMEOUT_MS;
         const tunnelObj = {
@@ -45,9 +40,31 @@ export async function GET(req: NextRequest) {
           isLive,
         };
         userTunnels.set(username, tunnelObj);
-        return NextResponse.json(tunnelObj);
+        return NextResponse.json(tunnelObj, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
       }
-    } catch (_) {}
+
+      // An explicit empty registration means there is no current URL. Do not
+      // fall back to a possibly stale per-instance cache in this case.
+      return NextResponse.json({ url: '', tunnel_url: '', token: '', updatedAt: 0, isLive: false }, {
+        headers: { 'Cache-Control': 'no-store, max-age=0' },
+      });
+    } catch (_) {
+      // A failed read must not cause a temporary URL switch. The dashboard
+      // keeps its last known URL and retries on the next poll.
+      return NextResponse.json({ error: 'Tunnel registration store is temporarily unavailable.' }, { status: 503 });
+    }
+  }
+
+  // Local/development fallback only. Production reads above never trust this
+  // instance-local map over the shared registration record.
+  const cached = userTunnels.get(username);
+  if (cached && cached.url) {
+    const isLive = Date.now() - cached.updatedAt < TUNNEL_TIMEOUT_MS;
+    return NextResponse.json({
+      ...cached,
+      tunnel_url: cached.url,
+      isLive,
+    }, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
   }
 
   return NextResponse.json({
@@ -56,7 +73,7 @@ export async function GET(req: NextRequest) {
     token: '',
     updatedAt: cached?.updatedAt || 0,
     isLive: false,
-  });
+  }, { headers: { 'Cache-Control': 'no-store, max-age=0' } });
 }
 
 export async function POST(req: NextRequest) {
@@ -93,12 +110,17 @@ export async function POST(req: NextRequest) {
 
     // 1. Handle Disconnect
     if (action === 'disconnect' || !url || (typeof url === 'string' && url.trim() === '')) {
-      userTunnels.delete(cleanUsername);
       if (supabase) {
         try {
-          await supabase.from('tunnels').delete().ilike('username', cleanUsername);
-        } catch (_) {}
+          const { error } = await supabase.from('tunnels').delete().ilike('username', cleanUsername);
+          if (error) {
+            return NextResponse.json({ error: 'Could not persist tunnel disconnect.' }, { status: 503 });
+          }
+        } catch (_) {
+          return NextResponse.json({ error: 'Could not persist tunnel disconnect.' }, { status: 503 });
+        }
       }
+      userTunnels.delete(cleanUsername);
       return NextResponse.json({
         success: true,
         message: `Phone daemon tunnel disconnected for @${cleanUsername}`,
@@ -113,24 +135,30 @@ export async function POST(req: NextRequest) {
 
     const effectiveToken = (typeof token === 'string' && token.trim()) ? token.trim() : expectedSecret;
 
+    const updatedAt = Date.now();
     const record = {
       url: cleanUrl,
       token: effectiveToken,
-      updatedAt: Date.now(),
+      updatedAt,
     };
-
-    userTunnels.set(cleanUsername, record);
 
     if (supabase) {
       try {
-        await supabase.from('tunnels').upsert({
+        const { error } = await supabase.from('tunnels').upsert({
           username: cleanUsername,
           daemon_url: cleanUrl,
           daemon_token: record.token,
-          updated_at: new Date().toISOString(),
+          updated_at: new Date(updatedAt).toISOString(),
         }, { onConflict: 'username' });
-      } catch (_) {}
+        if (error) {
+          return NextResponse.json({ error: 'Could not persist tunnel registration.' }, { status: 503 });
+        }
+      } catch (_) {
+        return NextResponse.json({ error: 'Could not persist tunnel registration.' }, { status: 503 });
+      }
     }
+
+    userTunnels.set(cleanUsername, record);
 
     return NextResponse.json({
       success: true,
