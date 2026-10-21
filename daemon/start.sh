@@ -86,10 +86,7 @@ fi
 
 # 2. Start PebbleAFK Node.js Daemon
 echo -e "\n${CYAN}[2/4]${NC} 🪨 ${BOLD}Starting PebbleAFK Bedrock Core (Node.js LTS)...${NC}"
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo -e "      ${CYAN}Syncing latest PebbleAFK core from GitHub...${NC}"
-  git pull origin main 2>/dev/null || true
-fi
+echo -e "      ${GRAY}Using the installed engine revision; use Update Engine to sync changes without relaunching.${NC}"
 
 DAEMON_DIR=$(pwd -P)
 LAUNCHER_PID_FILE="$HOME/.pebbleafk_launcher.pid"
@@ -97,6 +94,8 @@ SUPERVISOR_PID_FILE="$HOME/.pebbleafk_supervisor.pid"
 DAEMON_PID_FILE="$HOME/.pebbleafk_daemon.pid"
 TUNNEL_PID_FILE="$HOME/.pebbleafk_tunnel.pid"
 HEARTBEAT_PID_FILE="$HOME/.pebbleafk_heartbeat.pid"
+NATIVE_PREP_PID_FILE="$HOME/.pebbleafk_native_prep.pid"
+NATIVE_STATUS_FILE="$HOME/.pebbleafk_native_status"
 INSTANCE_ID="termux-$(date +%s)-$$"
 DASHBOARD_SYNC_URL="https://pebbleafk.vercel.app/api/tunnel"
 TAIL_PID=""
@@ -117,7 +116,7 @@ is_managed_pid() {
   [ "$process_dir" = "$DAEMON_DIR" ] || return 1
   process_cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
   case "$process_cmd" in
-    *"start.sh"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"npm run start"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*) return 0 ;;
+    *"start.sh"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"npm run start"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*|*"prepare-mobile-raknet.sh"*|*"cmake-js"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -152,7 +151,8 @@ cleanup_and_exit() {
   stop_pid_file "$TUNNEL_PID_FILE" "Cloudflare tunnel"
   stop_pid_file "$SUPERVISOR_PID_FILE" "daemon supervisor"
   stop_pid_file "$DAEMON_PID_FILE" "daemon"
-  rm -f "$HEARTBEAT_PID_FILE" "$TUNNEL_PID_FILE" "$DAEMON_PID_FILE" "$SUPERVISOR_PID_FILE" "$LAUNCHER_PID_FILE" .env
+  stop_pid_file "$NATIVE_PREP_PID_FILE" "native RakNet preparation"
+  rm -f "$HEARTBEAT_PID_FILE" "$TUNNEL_PID_FILE" "$DAEMON_PID_FILE" "$SUPERVISOR_PID_FILE" "$LAUNCHER_PID_FILE" "$NATIVE_STATUS_FILE" "$NATIVE_STATUS_FILE.tmp" .env
   if [ "$TUNNEL_REGISTERED" = "1" ]; then
     curl -s --connect-timeout 3 --max-time 5 -X POST "$DASHBOARD_SYNC_URL" \
       -H "Content-Type: application/json" \
@@ -176,8 +176,9 @@ stop_pid_file "$HEARTBEAT_PID_FILE" "heartbeat"
 stop_pid_file "$TUNNEL_PID_FILE" "Cloudflare tunnel"
 stop_pid_file "$SUPERVISOR_PID_FILE" "daemon supervisor"
 stop_pid_file "$DAEMON_PID_FILE" "daemon"
+stop_pid_file "$NATIVE_PREP_PID_FILE" "native RakNet preparation"
 stop_pid_file "$LAUNCHER_PID_FILE" "launcher"
-sleep 1
+rm -f "$NATIVE_STATUS_FILE" "$NATIVE_STATUS_FILE.tmp"
 echo "=== PebbleAFK Daemon Started $(date) ===" > daemon.log
 
 if [ -z "$APP_SECRET" ]; then
@@ -189,8 +190,26 @@ fi
 # Apply pure-JS high-speed RakNet transport patches for Android/Termux
 node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
 
-# Prepare native RakNet backend for Termux (enables full RakNet 11 + anti-DDoS cookie support)
-bash ./scripts/prepare-mobile-raknet.sh || true
+# Do not make the dashboard wait for a potentially one-time native C++ build.
+# Prepare it in parallel with the daemon and Cloudflare tunnel, and expose a
+# status file so account connection attempts can wait for the stronger transport.
+if node -e "require('raknet-native')" >/dev/null 2>&1; then
+  printf 'ready\n' > "$NATIVE_STATUS_FILE"
+  echo "[Startup] Native RakNet is already available; starting the daemon immediately." >> daemon.log
+else
+  printf 'pending\n' > "$NATIVE_STATUS_FILE"
+  echo "[Startup] Preparing native RakNet in the background while the dashboard tunnel starts." >> daemon.log
+  (
+    bash ./scripts/prepare-mobile-raknet.sh || true
+    NATIVE_STATE="fallback"
+    if node -e "require('raknet-native')" >/dev/null 2>&1; then NATIVE_STATE="ready"; fi
+    printf '%s\n' "$NATIVE_STATE" > "$NATIVE_STATUS_FILE.tmp"
+    mv -f "$NATIVE_STATUS_FILE.tmp" "$NATIVE_STATUS_FILE"
+    echo "[Startup] Native RakNet preparation finished: ${NATIVE_STATE}." >> daemon.log
+  ) >> daemon.log 2>&1 &
+  NATIVE_PREP_PID=$!
+  echo "$NATIVE_PREP_PID" > "$NATIVE_PREP_PID_FILE"
+fi
 
 umask 077
 printf 'PORT=8080\nPEBBLEAFK_OWNER=%s\nDAEMON_AUTH_TOKEN=%s\nPEBBLEAFK_INSTANCE_ID=%s\n' \
@@ -204,6 +223,7 @@ run_daemon_loop() {
   export PEBBLEAFK_OWNER="$APP_USER"
   export DAEMON_AUTH_TOKEN="$APP_SECRET"
   export PEBBLEAFK_INSTANCE_ID="$INSTANCE_ID"
+  export PEBBLEAFK_NATIVE_STATUS_FILE="$NATIVE_STATUS_FILE"
   export NODE_OPTIONS="--max-old-space-size=512"
   DAEMON_CHILD_PID=""
   stop_daemon_child() {
@@ -259,15 +279,24 @@ DAEMON_PID=$!
 echo "$DAEMON_PID" > "$SUPERVISOR_PID_FILE"
 echo "$$" > "$LAUNCHER_PID_FILE"
 
+# Start Cloudflare alongside Node startup so edge negotiation overlaps the
+# local health check instead of adding a second full startup wait.
+echo -e "\n${CYAN}[3/4]${NC} 🛡️  ${BOLD}Creating secure Cloudflare Tunnel (HTTP/2)...${NC}"
+echo -e "      ${GRAY}Phone-local origin: 127.0.0.1:8080 (not a Wi-Fi/mobile IP; public access uses the Cloudflare URL)${NC}"
+rm -f tunnel.log
+cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
+TUNNEL_PID=$!
+echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
+
 echo -ne "      ${YELLOW}⌛ Waiting for this daemon instance to become healthy...${NC}"
 LOCAL_HEALTH=""
-for i in {1..30}; do
-  LOCAL_HEALTH=$(curl -fsS --connect-timeout 1 --max-time 2 http://127.0.0.1:8080/ 2>/dev/null || true)
+for i in {1..20}; do
+  LOCAL_HEALTH=$(curl -fsS --connect-timeout 1 --max-time 1 http://127.0.0.1:8080/ 2>/dev/null || true)
   if echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then break; fi
   if ! kill -0 "$DAEMON_PID" 2>/dev/null; then break; fi
   if ps -o stat= -p "$DAEMON_PID" 2>/dev/null | grep -q '^Z'; then break; fi
   echo -ne "${YELLOW}.${NC}"
-  sleep 1
+  sleep 0.5
 done
 echo ""
 if ! echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
@@ -279,17 +308,9 @@ if ! echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
 fi
 echo -e "      ${GREEN}✓ This daemon instance is healthy on port 8080 (Supervisor PID: ${DAEMON_PID})${NC}"
 
-# 3. Start Cloudflare Tunnel (its origin is local to this phone; the public URL is network-independent)
-echo -e "\n${CYAN}[3/4]${NC} 🛡️  ${BOLD}Creating secure Cloudflare Tunnel (HTTP/2)...${NC}"
-echo -e "      ${GRAY}Phone-local origin: 127.0.0.1:8080 (not a Wi-Fi/mobile IP; public access uses the Cloudflare URL)${NC}"
-rm -f tunnel.log
-cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
-TUNNEL_PID=$!
-echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
-
 echo -ne "      ${YELLOW}⌛ Negotiating secure SSL tunnel address...${NC}"
 TUNNEL_URL=""
-for i in {1..60}; do
+for i in {1..50}; do
   echo -ne "${YELLOW}.${NC}"
   TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log 2>/dev/null | tail -n 1)
   if [ -n "$TUNNEL_URL" ]; then
@@ -322,16 +343,18 @@ WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')
 # 4. Auto-sync to Vercel Website
 echo -e "\n${CYAN}[4/4]${NC} 🚀 ${BOLD}Auto-syncing tunnel to user @${APP_USER}...${NC}"
 TUNNEL_REGISTERED=0
-for sync_attempt in 1 2 3 4 5; do
-  SYNC_RESP=$(curl -s --connect-timeout 5 --max-time 8 -X POST "$DASHBOARD_SYNC_URL" \
+SYNC_DEADLINE=$((SECONDS + 20))
+for sync_attempt in 1 2 3 4 5 6 7 8; do
+  SYNC_RESP=$(curl -s --connect-timeout 2 --max-time 4 -X POST "$DASHBOARD_SYNC_URL" \
     -H "Content-Type: application/json" \
     -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null || true)
   if echo "$SYNC_RESP" | grep -q '"success":true'; then
     TUNNEL_REGISTERED=1
     break
   fi
+  [ "$SECONDS" -ge "$SYNC_DEADLINE" ] && break
   echo -ne "${YELLOW}↺${NC}"
-  sleep 1
+  sleep 0.5
 done
 
 if [ "$TUNNEL_REGISTERED" = "1" ]; then

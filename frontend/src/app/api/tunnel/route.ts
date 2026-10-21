@@ -159,18 +159,33 @@ export async function POST(req: NextRequest) {
         }, { onConflict: 'username' });
         if (error) {
           // If upsert with onConflict hit an issue, fall back to clean delete + insert
-          await supabase.from('tunnels').delete().ilike('username', cleanUsername);
-          await supabase.from('tunnels').insert({
+          const { error: deleteError } = await supabase.from('tunnels').delete().ilike('username', cleanUsername);
+          if (deleteError) throw deleteError;
+          const { error: insertError } = await supabase.from('tunnels').insert({
             username: cleanUsername,
             daemon_url: cleanUrl,
             daemon_token: record.token,
             updated_at: new Date(updatedAt).toISOString(),
           });
+          if (insertError) throw insertError;
         }
-        // Clean up any older casing duplicates (e.g. 'Opera' vs 'opera')
-        await supabase.from('tunnels').delete().neq('username', cleanUsername).ilike('username', cleanUsername);
+        // Cleanup is only needed on registration, not on each 15-second heartbeat.
+        // A cleanup failure does not invalidate the current, successfully-written URL;
+        // GET selects the newest record if old casing duplicates remain.
+        if (action !== 'heartbeat') {
+          const { error: cleanupError } = await supabase
+            .from('tunnels')
+            .delete()
+            .neq('username', cleanUsername)
+            .ilike('username', cleanUsername);
+          if (cleanupError) console.warn('[Tunnel API] Could not remove older username-casing tunnel rows:', cleanupError.message);
+        }
       } catch (err) {
-        console.warn('[Tunnel API] Supabase persistence error, falling back to shared memory:', err);
+        console.warn('[Tunnel API] Supabase persistence error; registration was not acknowledged:', err);
+        return NextResponse.json({ error: 'Tunnel registration store is temporarily unavailable.' }, {
+          status: 503,
+          headers: noCacheHeaders,
+        });
       }
     }
 

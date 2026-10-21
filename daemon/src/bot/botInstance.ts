@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import dns from 'dns';
+import fs from 'fs';
 import { randomUUID } from 'crypto';
 const bedrock = require('bedrock-protocol');
 import { BotConfig, BotLifecycleState, BossBarPayload, DaemonMessage, TelemetryPayload } from '../types';
@@ -69,6 +70,27 @@ const SERVER_VERSION_CACHE: Map<string, string> = new Map([
   ['play.freshsmp.fun', '1.26.51'],
 ]);
 const SERVER_ENDPOINT_CURSORS = new Map<string, number>();
+
+async function waitForNativeRaknetPreparation(): Promise<void> {
+  const statusFile = process.env.PEBBLEAFK_NATIVE_STATUS_FILE;
+  if (!statusFile) return;
+
+  const deadline = Date.now() + 180_000;
+  let announcedWait = false;
+  while (Date.now() < deadline) {
+    let status = '';
+    try { status = fs.readFileSync(statusFile, 'utf8').trim(); } catch (_) {}
+    if (status !== 'pending') return;
+
+    if (!announcedWait) {
+      announcedWait = true;
+      console.log(chalk.cyan('[PebbleAFK] Waiting for the one-time native RakNet setup before starting Bedrock handshakes.'));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  console.warn(chalk.yellow('[PebbleAFK] Native RakNet setup is still pending after 3 minutes; attempting the available fallback transport.'));
+}
 
 const BEDROCK_CYCLE_VERSIONS = [
   '1.26.30', '1.26.51', '1.26.45', '1.26.40', '1.26.20', '1.26.10', '1.26.0',
@@ -315,6 +337,12 @@ export class PebbleBotInstance {
         connectHost = ipv4Addresses[endpointIndex];
         console.log(chalk.gray(`[PebbleAFK] Pinned host ${cleanHost} -> IPv4 ${connectHost} (edge ${endpointIndex + 1}/${ipv4Addresses.length})`));
       }
+
+      // The web dashboard/tunnel is intentionally brought online before this
+      // potentially slow first-time native build. Do not silently choose the
+      // weaker JS transport while that build is still in progress.
+      await waitForNativeRaknetPreparation();
+      if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
 
       let hasNativeRaknet = false;
       try {
