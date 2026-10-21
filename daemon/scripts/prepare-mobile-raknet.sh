@@ -15,10 +15,12 @@ if node -e "require('raknet-native')" >/dev/null 2>&1; then
   exit 0
 fi
 
-# Native RakNet backend provides full RakNet 11 + security cookie + MTU negotiation support for Bedrock servers (e.g. FreshSMP, DonutSMP).
-# Disabled by default on Termux to prevent multi-minute clang/cmake build stalls; set PEBBLEAFK_BUILD_NATIVE=true to opt in.
-if [ "${PEBBLEAFK_BUILD_NATIVE:-${VISTAAFK_BUILD_NATIVE:-false}}" != "true" ]; then
-  echo "ℹ️ Using pure JavaScript RakNet transport for Termux (instant start)."
+# Native RakNet supports the full RakNet 11 handshake, security cookies, and MTU negotiation
+# required by some Bedrock gateways (including FreshSMP). Build it by default; the JS backend
+# remains available if Android build tools or the native build are unavailable. Set this to
+# false only to explicitly prefer the less compatible JavaScript transport.
+if [ "${PEBBLEAFK_BUILD_NATIVE:-${VISTAAFK_BUILD_NATIVE:-true}}" != "true" ]; then
+  echo "⚠️ Native RakNet build disabled by configuration; using the less compatible JSP fallback."
   exit 0
 fi
 

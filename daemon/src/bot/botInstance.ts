@@ -42,6 +42,15 @@ function pingBedrockJsp(host: string, port: number, timeoutMs = 2000): Promise<{
   });
 }
 
+async function resolveBedrockIpv4Addresses(host: string): Promise<string[]> {
+  try {
+    const results = await dns.promises.lookup(host, { family: 4, all: true, verbatim: true });
+    return [...new Set(results.map((result) => result.address))].sort();
+  } catch (_) {
+    return [];
+  }
+}
+
 function getBedrockSupportedVersions(): { versions: Record<string, number>; currentVersion: string } {
   try {
     const opts = (eval('require'))('bedrock-protocol/src/options');
@@ -59,6 +68,7 @@ const SERVER_VERSION_CACHE: Map<string, string> = new Map([
   ['freshsmp.fun', '1.26.51'],
   ['play.freshsmp.fun', '1.26.51'],
 ]);
+const SERVER_ENDPOINT_CURSORS = new Map<string, number>();
 
 const BEDROCK_CYCLE_VERSIONS = [
   '1.26.30', '1.26.51', '1.26.45', '1.26.40', '1.26.20', '1.26.10', '1.26.0',
@@ -220,6 +230,8 @@ export class PebbleBotInstance {
   private reconnectAttemptCount: number = 0;
   private reconnectFailureCount: number = 0;
   private loginThrottleCount: number = 0;
+  private endpointAttemptCursor: number = 0;
+  private hasAttemptedEndpoint: boolean = false;
   private currentVersionCandidate: string | null = null;
   private lastAttemptedVersion: string | null = null;
   private connectionStable: boolean = false;
@@ -287,15 +299,21 @@ export class PebbleBotInstance {
       const cleanHost = (this.config.host || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
       const cleanPort = Number(this.config.port) || 19132;
 
-      // Pin host to single IPv4 to prevent round-robin DNS splitting RakNet UDP packets across multiple edge servers
+      // Keep every RakNet packet in this attempt on one IPv4 (DNS round-robin must not
+      // split a session), but rotate to another advertised edge after a silent timeout.
+      const ipv4Addresses = await resolveBedrockIpv4Addresses(cleanHost);
       let connectHost = cleanHost;
-      try {
-        const lookup = await dns.promises.lookup(cleanHost, { family: 4 });
-        if (lookup?.address) {
-          connectHost = lookup.address;
-          console.log(chalk.gray(`[PebbleAFK] Pinned host ${cleanHost} -> IPv4 ${connectHost}`));
+      if (ipv4Addresses.length) {
+        const hostKey = cleanHost.toLowerCase();
+        if (!this.hasAttemptedEndpoint) {
+          this.endpointAttemptCursor = SERVER_ENDPOINT_CURSORS.get(hostKey) || 0;
+          SERVER_ENDPOINT_CURSORS.set(hostKey, (this.endpointAttemptCursor + 1) % ipv4Addresses.length);
+          this.hasAttemptedEndpoint = true;
         }
-      } catch (_) {}
+        const endpointIndex = this.endpointAttemptCursor % ipv4Addresses.length;
+        connectHost = ipv4Addresses[endpointIndex];
+        console.log(chalk.gray(`[PebbleAFK] Pinned host ${cleanHost} -> IPv4 ${connectHost} (edge ${endpointIndex + 1}/${ipv4Addresses.length})`));
+      }
 
       let hasNativeRaknet = false;
       try {
@@ -304,6 +322,12 @@ export class PebbleBotInstance {
       } catch (_) {}
 
       const rakBackend = hasNativeRaknet ? 'raknet-native' : 'jsp-raknet';
+      if (!hasNativeRaknet) {
+        this.logActivity('warning', 'Native RakNet is unavailable; using the JavaScript fallback, which some secured Bedrock gateways may reject.');
+        if (!ipv4Addresses.length && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(connectHost)) {
+          throw new Error(`Could not resolve an IPv4 address for ${cleanHost}; the JavaScript RakNet fallback requires an IPv4 endpoint.`);
+        }
+      }
 
       let pingRes: { motd?: string; protocol?: string; version?: string } | null = null;
       const rawUserVersion = this.config.version?.trim();
@@ -312,7 +336,9 @@ export class PebbleBotInstance {
       if (isAutoVersion) {
         this.logActivity('status', `🔍 Pinging Bedrock UDP port ${cleanHost}:${cleanPort}...`);
         try {
-          pingRes = await pingBedrockJsp(connectHost, cleanPort, 2500);
+          if (ipv4Addresses.length || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(connectHost)) {
+            pingRes = await pingBedrockJsp(connectHost, cleanPort, 2500);
+          }
           if (pingRes) {
             console.log(chalk.cyan(`[PebbleAFK] Bedrock ping response from ${cleanHost} (${connectHost}):${cleanPort}: protocol=${pingRes.protocol}, version=${pingRes.version}`));
             this.logActivity('status', `✓ Bedrock server online: Protocol ${pingRes.protocol || 'auto'}, Version ${pingRes.version || 'auto'}`);
@@ -345,7 +371,9 @@ export class PebbleBotInstance {
         raknetBackend: rakBackend,
         useRaknetWorkers: false,
         skipPing: rakBackend === 'jsp-raknet' || !pingRes,
-        connectTimeout: 45000,
+        // RakNet retries its open-connection request for several seconds. Avoid leaving
+        // silent endpoints hanging for 45s before endpoint rotation/reconnect can begin.
+        connectTimeout: 18000,
         onMsaCode: (data: any) => {
           console.log(chalk.yellow(`[MS Auth] Code for ${this.config.username}: ${data.user_code}`));
           const directUri = data.user_code
@@ -387,8 +415,8 @@ export class PebbleBotInstance {
       // Session event: Microsoft/Xbox authentication finished
       client.once('session', () => {
         this.hookConnectionDiagnostics(client);
-        console.log(chalk.green(`[PebbleAFK] Bedrock session established for ${this.config.username}`));
-        this.logActivity('connect', 'Microsoft/Xbox authentication verified; joining game server...');
+        console.log(chalk.green(`[PebbleAFK] Microsoft/Xbox authentication session established for ${this.config.username}; awaiting Bedrock RakNet handshake.`));
+        this.logActivity('connect', 'Microsoft/Xbox authentication verified; awaiting the Bedrock RakNet handshake...');
       });
 
       // Join event: Server accepted player connection
@@ -649,6 +677,13 @@ export class PebbleBotInstance {
         reason = formatDisconnectReason(reason);
         this.lastDisconnectReason = reason;
 
+        if (ipv4Addresses.length > 1 && /connect timed out|no reply to RakNet UDP packets|filtering UDP/i.test(reason)) {
+          this.endpointAttemptCursor = (this.endpointAttemptCursor + 1) % ipv4Addresses.length;
+          const nextAddress = ipv4Addresses[this.endpointAttemptCursor];
+          this.logActivity('status', `🔁 Bedrock edge ${connectHost} did not answer RakNet; next retry will use ${nextAddress}.`);
+          console.log(chalk.yellow(`[PebbleAFK] Rotating Bedrock IPv4 edge ${connectHost} -> ${nextAddress} after RakNet timeout.`));
+        }
+
         // Auto-detect version requirement if server reports client is outdated
         const versionMatch = reason.match(/(?:supports|requires|versions?:?)[\s:]*([0-9.]+)/i);
         if (versionMatch && versionMatch[1]) {
@@ -705,7 +740,7 @@ export class PebbleBotInstance {
         const errMsg = err?.message || String(err);
         let descriptiveReason = formatDisconnectReason(errMsg);
         if (errMsg.includes('Connect timed out') || errMsg.includes('timed out')) {
-          descriptiveReason = `Connect timed out: ${cleanHost}:${cleanPort} sent no reply to RakNet UDP packets. (Server Bedrock gateway offline or filtering UDP traffic).`;
+          descriptiveReason = `Connect timed out: ${cleanHost}:${cleanPort} sent no reply to RakNet UDP packets. The selected server edge or network path did not answer.`;
         }
         handleDisconnect(descriptiveReason, true);
       });
@@ -1312,7 +1347,8 @@ export class PebbleBotInstance {
     if (this.reconnectTimer) return;
 
     const baseDelay = Math.max(3000, this.config.settings.autoReconnectDelay || 5000);
-    const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit|no reply to RakNet UDP packets|Connect timed out|filtering UDP/i.test(reason);
+    const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit/i.test(reason);
+    const isTransportTimeout = /no reply to RakNet UDP packets|Connect timed out|filtering UDP|network path did not answer/i.test(reason);
     let delay: number;
     if (isLoginThrottled) {
       this.loginThrottleCount++;
@@ -1325,8 +1361,10 @@ export class PebbleBotInstance {
     const jitter = Math.floor(Math.random() * 4000);
     delay += jitter;
     const reconnectDescription = isLoginThrottled
-      ? `FreshSMP gateway throttle/timeout; backing off for ${Math.ceil(delay / 1000)}s`
-      : `Reconnecting in ${Math.ceil(delay / 1000)}s`;
+      ? `Server login throttle; backing off for ${Math.ceil(delay / 1000)}s`
+      : isTransportTimeout
+        ? `RakNet endpoint did not reply; retrying in ${Math.ceil(delay / 1000)}s`
+        : `Reconnecting in ${Math.ceil(delay / 1000)}s`;
     console.log(chalk.yellow(`[PebbleAFK] ${reconnectDescription} for ${this.config.username} (failure ${isLoginThrottled ? this.loginThrottleCount : this.reconnectFailureCount}).`));
     this.updateState('RECONNECTING', reconnectDescription);
 
