@@ -268,8 +268,23 @@ wss.on('connection', (ws: WebSocket, req) => {
             const gitOut = cp.execSync('git reset --hard HEAD && git pull --force origin main', { cwd: repoDir, encoding: 'utf8' });
             console.log(chalk.green(`[Update] ✓ Git Sync:\n${gitOut.trim()}`));
 
+            const daemonDir = path.join(repoDir, 'daemon');
+            const isTermux = /termux/i.test(process.env.PREFIX || '') || Boolean(process.env.TERMUX_VERSION);
+            if (isTermux) {
+              console.log(chalk.cyan(`[Update] 🔧 Preparing the Termux RakNet transport required by secured Bedrock servers...`));
+              try {
+                const patchOut = cp.execFileSync('node', ['./scripts/patch-mobile-raknet.cjs'], { cwd: daemonDir, encoding: 'utf8' });
+                if (patchOut.trim()) console.log(chalk.gray(patchOut.trim()));
+                const raknetOut = cp.execFileSync('bash', ['./scripts/prepare-mobile-raknet.sh'], { cwd: daemonDir, encoding: 'utf8' });
+                if (raknetOut.trim()) console.log(raknetOut.trim());
+              } catch (raknetErr: any) {
+                const output = [raknetErr?.stdout, raknetErr?.stderr].filter(Boolean).join('\n').trim();
+                console.error(chalk.yellow(`[Update] Native RakNet preparation failed; the daemon will continue with its available fallback.${output ? `\n${output}` : ` ${raknetErr?.message || raknetErr}`}`));
+              }
+            }
+
             console.log(chalk.cyan(`[Update] ⚙️ Rebuilding daemon TypeScript core...`));
-            const buildOut = cp.execSync('npm run build', { cwd: path.join(repoDir, 'daemon'), encoding: 'utf8' });
+            const buildOut = cp.execSync('npm run build', { cwd: daemonDir, encoding: 'utf8' });
             console.log(chalk.green(`[Update] ✓ Build complete:\n${buildOut.trim()}`));
             console.log(chalk.green(`[Update] ✨ Core engine successfully updated! Rebooting supervisor...`));
           } catch (gitErr: any) {

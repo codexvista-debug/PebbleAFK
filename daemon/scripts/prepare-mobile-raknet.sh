@@ -26,6 +26,7 @@ fi
 
 echo "📦 Preparing native RakNet backend for Termux (one-time build for FreshSMP/Bedrock)..."
 if ! command -v pkg >/dev/null 2>&1; then
+  echo "⚠️ Termux pkg is unavailable; cannot build native RakNet, so the daemon will use the JSP fallback."
   exit 0
 fi
 
