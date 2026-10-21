@@ -198,6 +198,8 @@ export class PebbleBotInstance {
   public chatHistory: any[] = [];
   private broadcastFn: (msg: DaemonMessage) => void;
   private client: any = null;
+  private startInProgress: boolean = false;
+  private startGeneration: number = 0;
   private connectStartTime: number = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private tickSyncInterval: NodeJS.Timeout | null = null;
@@ -208,6 +210,8 @@ export class PebbleBotInstance {
   private clientTick: bigint = 0n;
   private autoVersionOverride: string | null = null;
   private reconnectAttemptCount: number = 0;
+  private reconnectFailureCount: number = 0;
+  private loginThrottleCount: number = 0;
   private currentVersionCandidate: string | null = null;
   private lastAttemptedVersion: string | null = null;
   private connectionStable: boolean = false;
@@ -245,7 +249,14 @@ export class PebbleBotInstance {
   }
 
   public async start() {
+    if (this.startInProgress || (this.client && !this.isTransferring)) {
+      console.log(chalk.gray(`[PebbleAFK] Ignoring duplicate connect request for ${this.config.username}; a connection attempt is already active.`));
+      return;
+    }
+
     this.isExplicitlyStopped = false;
+    const startGeneration = ++this.startGeneration;
+    this.startInProgress = true;
     this.clearBossBars();
     this.connectionStable = false;
     this.lastServerNotice = '';
@@ -291,6 +302,10 @@ export class PebbleBotInstance {
           this.logActivity('warning', `⚠️ UDP ping probe failed for ${cleanHost}:${cleanPort}. Proceeding with default protocol.`);
         }
       }
+
+      // A stop or a newer lifecycle request can happen while the UDP version
+      // probe is pending. Never let that stale async start resurrect a bot.
+      if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
 
       const resolved = resolveBedrockTargetVersion(rawUserVersion, pingRes?.protocol, pingRes?.version, cleanHost);
       const targetVersion = this.autoVersionOverride || this.currentVersionCandidate || resolved.version;
@@ -364,6 +379,7 @@ export class PebbleBotInstance {
 
       // Spawn event: Player loaded into the world
       client.on('spawn', () => {
+        if (this.client !== client) return;
         this.hookConnectionDiagnostics(client);
         if (!this.connectStartTime) this.connectStartTime = Date.now();
         this.updateState('SPAWNED');
@@ -374,6 +390,8 @@ export class PebbleBotInstance {
         // versions later for ordinary queue timeouts, kicks, or network drops.
         this.connectionStable = true;
         this.reconnectAttemptCount = 0;
+        this.reconnectFailureCount = 0;
+        this.loginThrottleCount = 0;
         this.currentVersionCandidate = null;
         SERVER_VERSION_CACHE.set(cleanHost, targetVersion);
         this.scheduleJoinCommand(client);
@@ -537,6 +555,7 @@ export class PebbleBotInstance {
 
       // Subserver Transfer request (e.g. /lifesteal gateway)
       client.on('transfer', (packet: any) => {
+        if (this.client !== client || this.isTransferring) return;
         const targetHost = packet.server_address || this.config.host;
         const targetPort = packet.port || 19132;
         console.log(chalk.cyan(`[PebbleAFK] 🔄 Subserver transfer requested for @${this.config.username} -> ${targetHost}:${targetPort}`));
@@ -545,6 +564,7 @@ export class PebbleBotInstance {
 
         this.isTransferring = true;
         this.cleanup();
+        this.client = null;
         try {
           client.close();
         } catch (_) {}
@@ -557,9 +577,12 @@ export class PebbleBotInstance {
         }, 600);
       });
 
+      let disconnectHandled = false;
       const handleDisconnect = (rawReason: string, isError = false) => {
-        if (this.isTransferring) return;
-        if (this.state === 'DISCONNECTED') return;
+        if (this.isTransferring || disconnectHandled || this.client !== client || this.isExplicitlyStopped) return;
+        // bedrock-protocol can emit kick/disconnect/error/close for one server
+        // rejection. Handle the first event only so it schedules one reconnect.
+        disconnectHandled = true;
 
         const recentServerNotice = this.lastServerNotice && Date.now() - this.lastServerNoticeAt <= 30_000
           ? this.lastServerNotice
@@ -593,8 +616,10 @@ export class PebbleBotInstance {
         console.log(chalk.red(`[PebbleAFK] ❌ Bot @${this.config.username} disconnected from ${cleanHost}:${cleanPort}: ${reason}`));
         this.logActivity('disconnect', `Disconnected from ${cleanHost}: ${reason}`);
         this.cleanup();
+        if (this.client === client) this.client = null;
+        try { client.close(); } catch (_) {}
         this.updateState(isError ? 'ERROR' : 'DISCONNECTED', reason);
-        this.handleAutoReconnect();
+        this.handleAutoReconnect(reason);
       };
 
       // 1. Kick event from bedrock-protocol
@@ -645,14 +670,25 @@ export class PebbleBotInstance {
       });
 
     } catch (err: any) {
+      if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
       console.error(chalk.red(`[PebbleAFK] Failed to create Bedrock bot instance:`), err);
-      this.updateState('ERROR', err.message || 'Initialization error');
-      this.handleAutoReconnect();
+      const reason = err?.message || 'Initialization error';
+      this.cleanup();
+      if (this.client) {
+        try { this.client.close(); } catch (_) {}
+        this.client = null;
+      }
+      this.updateState('ERROR', reason);
+      this.handleAutoReconnect(reason);
+    } finally {
+      if (startGeneration === this.startGeneration) this.startInProgress = false;
     }
   }
 
   public stop() {
     this.isExplicitlyStopped = true;
+    this.startGeneration++;
+    this.startInProgress = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -1162,15 +1198,29 @@ export class PebbleBotInstance {
     }
   }
 
-  private handleAutoReconnect() {
+  private handleAutoReconnect(reason = '') {
     if (this.isExplicitlyStopped) return;
     if (!this.config.settings?.autoReconnect) return;
+    if (this.reconnectTimer) return;
 
-    const delay = Math.max(3000, this.config.settings.autoReconnectDelay || 5000);
-    console.log(chalk.yellow(`[PebbleAFK] Scheduling auto-reconnect in ${delay / 1000}s for ${this.config.username}...`));
-    this.updateState('RECONNECTING', `Reconnecting in ${delay / 1000}s`);
+    const baseDelay = Math.max(3000, this.config.settings.autoReconnectDelay || 5000);
+    const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit/i.test(reason);
+    let delay: number;
+    if (isLoginThrottled) {
+      this.loginThrottleCount++;
+      delay = Math.max(baseDelay, Math.min(15_000 * (2 ** Math.min(this.loginThrottleCount - 1, 3)), 120_000));
+    } else {
+      this.reconnectFailureCount++;
+      delay = Math.max(baseDelay, Math.min(baseDelay * (2 ** Math.min(this.reconnectFailureCount - 1, 4)), 60_000));
+    }
+    const reconnectDescription = isLoginThrottled
+      ? `FreshSMP login rate limit; backing off for ${Math.ceil(delay / 1000)}s`
+      : `Reconnecting in ${Math.ceil(delay / 1000)}s`;
+    console.log(chalk.yellow(`[PebbleAFK] ${reconnectDescription} for ${this.config.username} (failure ${isLoginThrottled ? this.loginThrottleCount : this.reconnectFailureCount}).`));
+    this.updateState('RECONNECTING', reconnectDescription);
 
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       if (!this.isExplicitlyStopped) {
         const shouldProbeVersion = this.shouldProbeVersionOnReconnect;
         this.shouldProbeVersionOnReconnect = false;

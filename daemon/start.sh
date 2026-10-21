@@ -335,6 +335,7 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 # 5. Heartbeat and end-to-end tunnel watchdog
 (
   CHECK_COUNTER=0
+  HEALTH_MISS_COUNT=0
 
   restart_tunnel() {
     echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel process exited; creating a replacement..." >> daemon.log
@@ -394,7 +395,29 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
       CHECK_COUNTER=0
       LOCAL_HEALTH=$(curl -fsS --connect-timeout 2 --max-time 4 http://127.0.0.1:8080/ 2>/dev/null || true)
       if ! echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
-        echo -e "[$(date +%T)] ⚠️ Local daemon health is temporarily unavailable; supervisor will recover it without replacing the public tunnel URL." >> daemon.log
+        HEALTH_MISS_COUNT=$((HEALTH_MISS_COUNT + 1))
+        HEALTH_CHILD_PID=$(tr -cd '0-9' < "$DAEMON_PID_FILE" 2>/dev/null || true)
+        if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID"; then
+          if [ "$HEALTH_MISS_COUNT" -eq 1 ] || [ $((HEALTH_MISS_COUNT % 3)) -eq 0 ]; then
+            echo -e "[$(date +%T)] ⚠️ Local daemon health probe missed ($HEALTH_MISS_COUNT consecutive); child PID $HEALTH_CHILD_PID is still running. A single missed probe will not restart it; the public tunnel URL is preserved." >> daemon.log
+          fi
+          if [ "$HEALTH_MISS_COUNT" -ge 3 ]; then
+            echo -e "[$(date +%T)] 🔄 Local health failed three checks in a row; restarting the unresponsive managed daemon child. Cloudflare tunnel URL remains unchanged; in-memory bot sessions will need to reconnect." >> daemon.log
+            kill -TERM "$HEALTH_CHILD_PID" 2>/dev/null || true
+            for attempt in {1..10}; do
+              is_managed_pid "$HEALTH_CHILD_PID" || break
+              sleep 0.5
+            done
+            if is_managed_pid "$HEALTH_CHILD_PID"; then
+              kill -KILL "$HEALTH_CHILD_PID" 2>/dev/null || true
+            fi
+            HEALTH_MISS_COUNT=0
+          fi
+        else
+          echo -e "[$(date +%T)] ⚠️ Local daemon health probe missed ($HEALTH_MISS_COUNT consecutive); daemon child is not running. The supervisor restart loop is recovering it; keeping the public tunnel URL." >> daemon.log
+        fi
+      else
+        HEALTH_MISS_COUNT=0
       fi
     fi
 
