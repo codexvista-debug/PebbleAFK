@@ -479,6 +479,13 @@ export class PebbleBotInstance {
           // subsequent radius updates are responses and must not be echoed.
           client.write('request_chunk_radius', { chunk_radius: 8 });
         } catch (_) {}
+
+        // If returned to FreshSMP Hub (Dimension 0), ensure the bot automatically re-enters /lifesteal
+        const dim = packet?.dimension;
+        const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
+        if (isFreshSmp && (dim === 0 || dim === 'overworld')) {
+          this.triggerJoinCommandRetry(10000);
+        }
       });
 
       client.on('respawn', (packet: any) => {
@@ -822,31 +829,40 @@ export class PebbleBotInstance {
     } catch (_) {}
   }
 
+  public triggerJoinCommandRetry(delayMs = 10000) {
+    if (this.joinCommandTimer) {
+      clearTimeout(this.joinCommandTimer);
+      this.joinCommandTimer = null;
+    }
+
+    const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
+    const configuredCommand = this.config.settings?.joinCommand?.trim().slice(0, 256) || (isFreshSmp ? '/lifesteal' : '');
+    if (!configuredCommand) return;
+
+    const command = configuredCommand.startsWith('/') ? configuredCommand : `/${configuredCommand}`;
+    const minDelay = command.toLowerCase().includes('lifesteal') ? 10000 : 3000;
+    const finalDelay = Math.max(delayMs, minDelay);
+
+    console.log(chalk.cyan(`[PebbleAFK] Scheduling join/transfer command for @${this.config.username} (${command}) in ${Math.round(finalDelay / 1000)}s...`));
+    this.logActivity('status', `Join/transfer command (${command}) scheduled in ${Math.round(finalDelay / 1000)}s.`);
+
+    this.joinCommandTimer = setTimeout(() => {
+      this.joinCommandTimer = null;
+      if (this.state === 'SPAWNED' || this.state === 'LOGGED_IN') {
+        console.log(chalk.cyan(`[PebbleAFK] Running join/transfer command for @${this.config.username}: ${command}`));
+        this.logActivity('command', `Running join command: ${command}`);
+        this.sendChat(command);
+      }
+    }, finalDelay);
+  }
+
   private scheduleJoinCommand(client: any) {
     if (this.joinCommandClient === client) return;
     this.joinCommandClient = client;
 
-    const settings = this.config.settings;
-    const configuredCommand = settings?.joinCommand?.trim().slice(0, 256) || '';
-    if (!settings?.joinCommandEnabled || !configuredCommand) return;
-
-    const command = configuredCommand.startsWith('/') ? configuredCommand : `/${configuredCommand}`;
-    const minDelay = command.toLowerCase().includes('lifesteal') ? 8 : 3;
-    const delaySeconds = Math.min(300, Math.max(minDelay, Number(settings.joinCommandDelay ?? minDelay) || minDelay));
-    this.logActivity('status', `Configured join command scheduled in ${delaySeconds}s.`);
-    this.joinCommandTimer = setTimeout(() => {
-      this.joinCommandTimer = null;
-      const currentCommand = this.config.settings?.joinCommand?.trim().slice(0, 256) || '';
-      if (
-        this.client !== client ||
-        this.state !== 'SPAWNED' ||
-        !this.config.settings?.joinCommandEnabled ||
-        currentCommand !== configuredCommand
-      ) return;
-
-      this.logActivity('command', `Running configured join command: ${command}`);
-      this.sendChat(command);
-    }, delaySeconds * 1000);
+    const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
+    const delaySeconds = isFreshSmp ? 10 : Math.min(300, Math.max(3, Number(this.config.settings?.joinCommandDelay ?? 3) || 3));
+    this.triggerJoinCommandRetry(delaySeconds * 1000);
   }
 
   private startTickSyncLoop(client: any) {
@@ -1189,24 +1205,19 @@ export class PebbleBotInstance {
       cleanSender = isSystem ? 'System' : 'Server';
     }
 
-    const isLifestealTimeout = /^lifesteal$/i.test(cleanSender) && /\btimed\s*out\b|\btimeout\b/i.test(cleanText);
+    const isLifestealTimeout =
+      (/^lifesteal$/i.test(cleanSender) && /\btimed\s*out\b|\btimeout\b/i.test(cleanText)) ||
+      /\b<lifesteal>\s*timed\s*out\b/i.test(rawMsg) ||
+      /\b<lifesteal>\s*timed\s*out\b/i.test(cleanText) ||
+      (/\blifesteal\b/i.test(cleanText) && /\btimed\s*out\b|\btimeout\b/i.test(cleanText));
+
     if (isLifestealTimeout) {
+      console.log(chalk.yellow(`[PebbleAFK] FreshSMP queue notice for @${this.config.username}: "${cleanText}". (Subserver queue timed out; rejoining /lifesteal in 8s)...`));
       this.logActivity(
         'warning',
-        `FreshSMP queue notice from ${cleanSender}: "${cleanText}". (Subserver transfer queue timed out; retrying transfer).`
+        `FreshSMP queue notice from ${cleanSender}: "${cleanText}". (Subserver transfer queue timed out; automatically rejoining /lifesteal in 8s).`
       );
-      if (this.config.settings?.joinCommandEnabled && this.config.settings?.joinCommand?.toLowerCase().includes('lifesteal')) {
-        if (!this.joinCommandTimer && (this.state === 'SPAWNED' || this.state === 'LOGGED_IN')) {
-          this.logActivity('status', `Automatically retrying /lifesteal transfer command in 6s...`);
-          this.joinCommandTimer = setTimeout(() => {
-            this.joinCommandTimer = null;
-            if ((this.state === 'SPAWNED' || this.state === 'LOGGED_IN') && this.config.settings?.joinCommandEnabled) {
-              this.logActivity('command', `Retrying configured join command: /lifesteal`);
-              this.sendChat('/lifesteal');
-            }
-          }, 6000);
-        }
-      }
+      this.triggerJoinCommandRetry(8000);
     }
     if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk') || isLifestealTimeout) {
       this.lastServerNotice = isLifestealTimeout ? `${cleanSender}: ${cleanText}` : cleanText;

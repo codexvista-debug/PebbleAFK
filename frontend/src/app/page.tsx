@@ -1001,6 +1001,18 @@ export default function Home() {
       `Protocol: ${srv.serverVersion || 'auto'}`,
       'info'
     );
+    const isFreshSmp = /freshsmp/i.test(srv.serverHost) || /freshsmp/i.test(srv.name);
+    const effectiveSettings: BotSettings = {
+      ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
+      ...(srv.settings || {}),
+    };
+    if (isFreshSmp) {
+      effectiveSettings.joinCommandEnabled = true;
+      if (!effectiveSettings.joinCommand) effectiveSettings.joinCommand = '/lifesteal';
+      if (!effectiveSettings.joinCommandDelay || effectiveSettings.joinCommandDelay < 8) {
+        effectiveSettings.joinCommandDelay = 10;
+      }
+    }
     const botConfig = {
       id: botId,
       username: acc.ign || acc.username,
@@ -1009,7 +1021,7 @@ export default function Home() {
       version: srv.serverVersion || 'auto',
       authType: 'microsoft',
       autoReconnect: srv.autoReconnect,
-      settings: srv.settings,
+      settings: effectiveSettings,
     };
     startBot(botConfig);
   };

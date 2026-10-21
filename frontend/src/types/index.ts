@@ -42,6 +42,7 @@ export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
   acceptResourcePacks: true,
   joinCommandEnabled: true,
   joinCommand: '/lifesteal',
+  joinCommandDelay: 10,
 };
 
 export const MAX_BEDROCK_ACCOUNTS = 10;
