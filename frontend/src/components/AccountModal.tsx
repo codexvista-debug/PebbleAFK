@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { BedrockAccount } from '../types';
+import { BedrockAccount, MAX_BEDROCK_ACCOUNTS } from '../types';
 import { X, UserPlus, Trash2, CheckCircle2, ShieldCheck, Sparkles, ExternalLink, KeyRound, AlertTriangle, RefreshCw } from 'lucide-react';
 import { ConfirmModal } from './ConfirmModal';
 
@@ -31,9 +31,8 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
   if (!isOpen) return null;
 
-  const MAX_ACCOUNTS = 5;
   const verifiedCount = accounts.filter((a) => a.verified).length;
-  const isLimitReached = verifiedCount >= MAX_ACCOUNTS;
+  const isLimitReached = verifiedCount >= MAX_BEDROCK_ACCOUNTS;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
@@ -63,7 +62,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
             <>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-slate-600 font-semibold">
-                  {verifiedCount}/5 accounts {isLimitReached ? '(Limit Reached)' : 'linked'}
+                  {verifiedCount}/{MAX_BEDROCK_ACCOUNTS} accounts {isLimitReached ? '(Limit Reached)' : 'linked'}
                 </span>
                 <button
                   disabled={isLimitReached}
@@ -72,10 +71,10 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                     setShowAddForm(true);
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold transition shadow-xs cursor-pointer"
-                  title={isLimitReached ? 'Maximum of 5 accounts reached' : 'Add Bedrock Account'}
+                  title={isLimitReached ? `Maximum of ${MAX_BEDROCK_ACCOUNTS} accounts reached` : 'Add Bedrock Account'}
                 >
                   <UserPlus className="w-3.5 h-3.5" />
-                  {isLimitReached ? '5/5 Limit' : '+ Add Account'}
+                  {isLimitReached ? `${MAX_BEDROCK_ACCOUNTS}/${MAX_BEDROCK_ACCOUNTS} Limit` : '+ Add Account'}
                 </button>
               </div>
 

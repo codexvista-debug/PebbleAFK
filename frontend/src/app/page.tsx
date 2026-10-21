@@ -56,7 +56,7 @@ import { ServerLogo } from '@/components/ServerLogo';
 import { RelativeTime } from '@/components/RelativeTime';
 import { MinecraftText } from '@/components/MinecraftText';
 import { useDaemonSocket } from '@/lib/useDaemonSocket';
-import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType } from '@/types';
+import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType, MAX_BEDROCK_ACCOUNTS } from '@/types';
 
 const getPlayerSkinHeadUrl = (name: string, size = 32) => {
   const clean = (name || 'Steve').replace(/^@/, '').trim();
@@ -568,8 +568,8 @@ export default function Home() {
       return;
     }
 
-    if (accounts.filter((a) => a.verified).length >= 5 && !target) {
-      showToast('Maximum account limit (5 accounts) reached.', 'error');
+    if (accounts.filter((a) => a.verified).length >= MAX_BEDROCK_ACCOUNTS && !target) {
+      showToast(`Maximum account limit (${MAX_BEDROCK_ACCOUNTS} accounts) reached.`, 'error');
       return;
     }
 
@@ -866,7 +866,6 @@ export default function Home() {
       settings: srv.settings,
     };
     startBot(botConfig);
-    showToast(`Connecting @${acc.ign || acc.username} to ${srv.name}...`, 'info');
   };
 
   const handleDisconnectAccount = (acc: BedrockAccount, srv: ServerProfile) => {
@@ -890,7 +889,6 @@ export default function Home() {
       undefined,
       'warning'
     );
-    showToast(`Disconnecting @${acc.ign || acc.username}...`, 'info');
   };
 
   // Automatic live bot lifecycle logging
@@ -1326,7 +1324,7 @@ export default function Home() {
                   <span>Accounts</span>
                 </div>
                 <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">
-                  {verifiedAccountsCount}/5
+                  {verifiedAccountsCount}/{MAX_BEDROCK_ACCOUNTS}
                 </span>
               </button>
             </div>
@@ -1564,7 +1562,7 @@ export default function Home() {
                         className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
                       >
                         <UserPlus className="w-4 h-4" />
-                        <span>Manage Bedrock Accounts ({verifiedAccountsCount}/5)</span>
+                        <span>Manage Bedrock Accounts ({verifiedAccountsCount}/{MAX_BEDROCK_ACCOUNTS})</span>
                       </button>
 
                       <button
@@ -1620,7 +1618,7 @@ export default function Home() {
                     <span className="text-[10px] font-bold uppercase text-slate-400 block">Bedrock Accounts</span>
                     <div className="flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5 text-slate-500" />
-                      <span className="text-xs font-bold text-slate-900">{verifiedAccountsCount} / 5</span>
+                      <span className="text-xs font-bold text-slate-900">{verifiedAccountsCount} / {MAX_BEDROCK_ACCOUNTS}</span>
                     </div>
                   </button>
 
@@ -1664,7 +1662,7 @@ export default function Home() {
                     <div className="flex items-center gap-2.5">
                       <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Accounts</h1>
                       <span className="text-[11px] bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded-full font-bold">
-                        {verifiedAccountsCount}/5
+                        {verifiedAccountsCount}/{MAX_BEDROCK_ACCOUNTS}
                       </span>
                     </div>
                     <p className="text-xs text-slate-500 mt-1">
@@ -1674,7 +1672,7 @@ export default function Home() {
 
                   <div className="flex items-center gap-2.5">
                     <button
-                      disabled={verifiedAccountsCount >= 5}
+                      disabled={verifiedAccountsCount >= MAX_BEDROCK_ACCOUNTS}
                       onClick={() => handleStartMicrosoftLogin()}
                       className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs transition shadow-xs cursor-pointer active:scale-95"
                     >
@@ -2255,11 +2253,11 @@ export default function Home() {
                         <div className="flex justify-start pt-1">
                           <button
                             type="button"
-                            disabled={accounts.length >= 10}
+                            disabled={verifiedAccountsCount >= MAX_BEDROCK_ACCOUNTS}
                             onClick={() => handleStartMicrosoftLogin()}
                             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-emerald-700 text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-40"
                           >
-                            <Plus className="w-4 h-4" /> Link Another Microsoft Bedrock Account ({accounts.length}/10)
+                            <Plus className="w-4 h-4" /> Link Another Microsoft Bedrock Account ({verifiedAccountsCount}/{MAX_BEDROCK_ACCOUNTS})
                           </button>
                         </div>
                       </div>
@@ -2330,113 +2328,6 @@ export default function Home() {
 
                       return (
                         <div className="space-y-3.5">
-                          {/* 1. Chat Receivers bar (Matching Image 3 arrow pointer) */}
-                          <div className="flex items-center gap-2.5">
-                            <span className="text-xs font-bold text-slate-600 select-none">Chat receivers:</span>
-                            <div className="relative">
-                              <button
-                                type="button"
-                                onClick={() => setIsReceiverDropdownOpen(!isReceiverDropdownOpen)}
-                                className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-xl shadow-2xs hover:bg-slate-50 transition text-xs font-bold text-slate-800 cursor-pointer"
-                              >
-                                {selectedAccount ? (
-                                  <>
-                                    <div className="w-5 h-5 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
-                                      <img
-                                        src={getPlayerSkinHeadUrl(selectedAccount.ign || selectedAccount.username, 24)}
-                                        alt="Skin"
-                                        className="w-full h-full object-cover [image-rendering:pixelated]"
-                                        onError={(e) => {
-                                          const img = e.currentTarget as HTMLImageElement;
-                                          const clean = (selectedAccount.ign || selectedAccount.username || 'Steve').replace(/^@/, '').trim();
-                                          if (!img.src.includes('mc-heads')) {
-                                            img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/24`;
-                                          } else {
-                                            img.src = 'https://minotar.net/helm/MHF_Steve/24.png';
-                                          }
-                                        }}
-                                      />
-                                    </div>
-                                    <span className="font-mono">@{selectedAccount.ign || selectedAccount.username}</span>
-                                    <span className={`w-2 h-2 rounded-full ${isSelectedOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                                  </>
-                                ) : (
-                                  <>
-                                    <Users className="w-4 h-4 text-emerald-600" />
-                                    <span>All Assigned Accounts ({targetAccounts.length})</span>
-                                    <span className={`w-2 h-2 rounded-full ${isAnyBotOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                                  </>
-                                )}
-                                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isReceiverDropdownOpen ? 'rotate-180 text-emerald-600' : ''}`} />
-                              </button>
-
-                              {isReceiverDropdownOpen && (
-                                <div className="absolute left-0 mt-1.5 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl z-30 p-1.5 space-y-0.5 animate-in fade-in duration-100">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedChatReceiver('all');
-                                      setIsReceiverDropdownOpen(false);
-                                    }}
-                                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-                                      selectedChatReceiver === 'all' ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
-                                    }`}
-                                  >
-                                    <div className="flex items-center gap-2">
-                                      <Users className="w-4 h-4 text-emerald-600" />
-                                      <span>All Assigned Accounts ({targetAccounts.length})</span>
-                                    </div>
-                                    <span className={`w-2 h-2 rounded-full ${isAnyBotOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                                  </button>
-
-                                  <div className="border-t border-slate-100 my-1" />
-
-                                  {targetAccounts.map((acc) => {
-                                    const bId = `${activeServer.id}__${acc.id}`;
-                                    const st = botStates[bId] || botStates[acc.id];
-                                    const isLive = daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
-                                    const isSel = selectedChatReceiver === acc.id;
-
-                                    return (
-                                      <button
-                                        key={acc.id}
-                                        type="button"
-                                        onClick={() => {
-                                          setSelectedChatReceiver(acc.id);
-                                          setIsReceiverDropdownOpen(false);
-                                        }}
-                                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-                                          isSel ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
-                                        }`}
-                                      >
-                                        <div className="flex items-center gap-2.5">
-                                          <div className="w-5 h-5 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
-                                            <img
-                                              src={getPlayerSkinHeadUrl(acc.ign || acc.username, 24)}
-                                              alt="Skin"
-                                              className="w-full h-full object-cover [image-rendering:pixelated]"
-                                              onError={(e) => {
-                                                const img = e.currentTarget as HTMLImageElement;
-                                                const clean = (acc.ign || acc.username || 'Steve').replace(/^@/, '').trim();
-                                                if (!img.src.includes('mc-heads')) {
-                                                  img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/24`;
-                                                } else {
-                                                  img.src = 'https://minotar.net/helm/MHF_Steve/24.png';
-                                                }
-                                              }}
-                                            />
-                                          </div>
-                                          <span className="font-mono">@{acc.ign || acc.username}</span>
-                                        </div>
-                                        <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
                           {/* 2. Main Chat Box Container (Matching Image 3) */}
                           <div className="bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
                             {/* Card Header */}
@@ -2461,7 +2352,7 @@ export default function Home() {
                                       key={tab}
                                       type="button"
                                       onClick={() => setChatFilter(tab)}
-                                      className={`px-3 py-1 rounded-lg capitalize transition cursor-pointer text-xs ${
+                                      className={`px-3 py-1 rounded-lg capitalize transition cursor-pointer text-[13px] ${
                                         chatFilter === tab
                                           ? 'bg-white text-slate-900 font-bold shadow-2xs'
                                           : 'text-slate-500 hover:text-slate-800'
@@ -2496,7 +2387,7 @@ export default function Home() {
                                     type="button"
                                     onClick={() => handleQuickCommand(q.cmd)}
                                     disabled={!isAnyBotOnline}
-                                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-mono font-bold transition shadow-2xs active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${q.cls}`}
+                                    className={`px-2.5 py-1.5 rounded-lg border text-xs font-mono font-bold transition shadow-2xs active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${q.cls}`}
                                   >
                                     {q.label}
                                   </button>
@@ -2513,14 +2404,14 @@ export default function Home() {
                             </div>
 
                             {/* Chat Messages Stream Area (Spacious layout matching PocketAFK) */}
-                            <div className="h-[580px] sm:h-[650px] p-5 overflow-y-auto space-y-2.5 font-mono text-xs bg-white">
+                            <div className="h-[580px] sm:h-[650px] p-5 overflow-y-auto space-y-3 font-mono text-[13px] bg-white">
                               {chatList.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-400 space-y-3">
                                   <div className="w-11 h-11 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-center text-slate-400 shadow-2xs">
                                     <MessageSquare className="w-5 h-5 text-slate-400" />
                                   </div>
-                                  <p className="text-xs font-bold text-slate-700">No chat messages received yet.</p>
-                                  <p className="text-[11px] text-slate-400 max-w-sm leading-relaxed">
+                                  <p className="text-[13px] font-bold text-slate-700">No chat messages received yet.</p>
+                                  <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
                                     In-game chat and system logs will stream here in real-time.
                                   </p>
                                   <div className="pt-2">
@@ -2542,7 +2433,7 @@ export default function Home() {
                                   {chatList.map((m) => {
                                     if (m.type === 'session_divider') {
                                       return (
-                                        <div key={m.id} className="flex items-center gap-3 py-2 px-2 text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                                        <div key={m.id} className="flex items-center gap-3 py-2 px-2 text-[11px] font-bold uppercase tracking-wider text-emerald-700">
                                           <span className="h-px flex-1 bg-emerald-200" />
                                           <span>New session started</span>
                                           <RelativeTime timestamp={m.timestamp} className="normal-case tracking-normal text-slate-400" />
@@ -2580,22 +2471,22 @@ export default function Home() {
                                     const cleanSender = effectiveSender;
 
                                     return (
-                                      <div key={m.id} className="flex items-start gap-2.5 py-1 text-xs hover:bg-slate-50/80 rounded-lg px-2 transition">
-                                        <RelativeTime timestamp={m.timestamp} className="text-[10px] text-slate-400 select-none pt-0.5 font-mono shrink-0" />
+                                      <div key={m.id} className="flex items-start gap-2.5 py-1 text-[13px] hover:bg-slate-50/80 rounded-lg px-2 transition">
+                                        <RelativeTime timestamp={m.timestamp} className="text-[11px] text-slate-400 select-none pt-0.5 font-mono shrink-0" />
 
                                         {isPlayer ? (
                                           <div className="flex items-center gap-1.5 shrink-0">
-                                            <div className="w-4 h-4 rounded-xs overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                            <div className="w-[18px] h-[18px] rounded-xs overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
                                               <img
-                                                src={getPlayerSkinHeadUrl(cleanSender, 20)}
+                                                src={getPlayerSkinHeadUrl(cleanSender, 24)}
                                                 alt={cleanSender}
                                                 className="w-full h-full object-cover [image-rendering:pixelated]"
                                                 onError={(e) => {
                                                   const img = e.currentTarget as HTMLImageElement;
                                                   if (!img.src.includes('mc-heads')) {
-                                                    img.src = `https://mc-heads.net/avatar/${encodeURIComponent(cleanSender)}/20`;
+                                                    img.src = `https://mc-heads.net/avatar/${encodeURIComponent(cleanSender)}/24`;
                                                   } else {
-                                                    img.src = 'https://minotar.net/helm/MHF_Steve/20.png';
+                                                    img.src = 'https://minotar.net/helm/MHF_Steve/24.png';
                                                   }
                                                 }}
                                               />
@@ -2605,7 +2496,7 @@ export default function Home() {
                                             </span>
                                           </div>
                                         ) : (
-                                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200/90 font-mono shrink-0">
+                                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-600 border border-slate-200/90 font-mono shrink-0">
                                             [{cleanSender}]
                                           </span>
                                         )}
@@ -2636,27 +2527,100 @@ export default function Home() {
                                     ? "Send a message or command (e.g. /spawn)..."
                                     : "Bot offline [connect bot to send chat messages]..."
                                 }
-                                className="flex-1 bg-transparent border-none text-xs text-slate-900 placeholder-slate-400 focus:outline-none font-medium py-1.5"
+                                className="flex-1 bg-transparent border-none text-[13px] text-slate-900 placeholder-slate-400 focus:outline-none font-medium py-1.5"
                               />
-                              <button
-                                type="button"
-                                onClick={() => setIsReceiverDropdownOpen(!isReceiverDropdownOpen)}
-                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer select-none"
-                              >
-                                <Users className="w-3.5 h-3.5 text-slate-500" />
-                                <span className="max-w-[120px] truncate font-mono">
-                                  {selectedChatReceiver === 'all'
-                                    ? 'All accounts'
-                                    : `@${selectedAccount?.ign || selectedAccount?.username || 'Account'}`}
-                                </span>
-                                <ChevronDown className="w-3 h-3 text-slate-400" />
-                              </button>
+                              <div className="relative shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setIsReceiverDropdownOpen(!isReceiverDropdownOpen)}
+                                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-[13px] font-bold transition cursor-pointer select-none"
+                                  aria-expanded={isReceiverDropdownOpen}
+                                  aria-haspopup="listbox"
+                                >
+                                  <Users className="w-3.5 h-3.5 text-slate-500" />
+                                  <span className="max-w-[120px] truncate font-mono">
+                                    {selectedChatReceiver === 'all'
+                                      ? 'All accounts'
+                                      : `@${selectedAccount?.ign || selectedAccount?.username || 'Account'}`}
+                                  </span>
+                                  <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isReceiverDropdownOpen ? 'rotate-180' : ''}`} />
+                                </button>
+
+                                {isReceiverDropdownOpen && (
+                                  <div role="listbox" className="absolute bottom-full right-0 mb-2 w-64 max-h-72 overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-1.5 space-y-0.5 animate-in fade-in duration-100">
+                                    <button
+                                      type="button"
+                                      role="option"
+                                      aria-selected={selectedChatReceiver === 'all'}
+                                      onClick={() => {
+                                        setSelectedChatReceiver('all');
+                                        setIsReceiverDropdownOpen(false);
+                                      }}
+                                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-bold transition cursor-pointer ${
+                                        selectedChatReceiver === 'all' ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <Users className="w-4 h-4 text-emerald-600" />
+                                        <span>All Assigned Accounts ({targetAccounts.length})</span>
+                                      </div>
+                                      <span className={`w-2 h-2 rounded-full ${isAnyBotOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                    </button>
+
+                                    <div className="border-t border-slate-100 my-1" />
+
+                                    {targetAccounts.map((acc) => {
+                                      const bId = `${activeServer.id}__${acc.id}`;
+                                      const st = botStates[bId] || botStates[acc.id];
+                                      const isLive = daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
+                                      const isSel = selectedChatReceiver === acc.id;
+
+                                      return (
+                                        <button
+                                          key={acc.id}
+                                          type="button"
+                                          role="option"
+                                          aria-selected={isSel}
+                                          onClick={() => {
+                                            setSelectedChatReceiver(acc.id);
+                                            setIsReceiverDropdownOpen(false);
+                                          }}
+                                          className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-bold transition cursor-pointer ${
+                                            isSel ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
+                                          }`}
+                                        >
+                                          <div className="flex items-center gap-2.5 min-w-0">
+                                            <div className="w-5 h-5 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                              <img
+                                                src={getPlayerSkinHeadUrl(acc.ign || acc.username, 24)}
+                                                alt=""
+                                                className="w-full h-full object-cover [image-rendering:pixelated]"
+                                                onError={(e) => {
+                                                  const img = e.currentTarget as HTMLImageElement;
+                                                  const clean = (acc.ign || acc.username || 'Steve').replace(/^@/, '').trim();
+                                                  if (!img.src.includes('mc-heads')) {
+                                                    img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/24`;
+                                                  } else {
+                                                    img.src = 'https://minotar.net/helm/MHF_Steve/24.png';
+                                                  }
+                                                }}
+                                              />
+                                            </div>
+                                            <span className="font-mono truncate">@{acc.ign || acc.username}</span>
+                                          </div>
+                                          <span className={`w-2 h-2 rounded-full shrink-0 ${isLive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
                             </div>
 
                             <button
                               type="submit"
                               disabled={!isAnyBotOnline || !chatInput.trim()}
-                              className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs transition shadow-xs cursor-pointer flex items-center gap-2 shrink-0"
+                              className="px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-[13px] transition shadow-xs cursor-pointer flex items-center gap-2 shrink-0"
                             >
                               <Send className="w-3.5 h-3.5" />
                               <span>Send</span>

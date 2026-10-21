@@ -13,6 +13,8 @@ export interface BotSettings {
   joinDelay?: number;
 }
 
+export const MAX_BEDROCK_ACCOUNTS = 10;
+
 export interface BedrockAccount {
   id: string;
   username: string;
