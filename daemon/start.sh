@@ -286,18 +286,28 @@ if [ -z "$TUNNEL_URL" ]; then
   exit 1
 fi
 
-echo -ne "      ${YELLOW}⌛ Verifying the public tunnel reaches this daemon...${NC}"
+echo -ne "      ${YELLOW}⌛ Checking whether Cloudflare's public edge is already reachable...${NC}"
 PUBLIC_HEALTH=""
-for i in {1..30}; do
-  PUBLIC_HEALTH=$(curl -fsSL --connect-timeout 2 --max-time 5 "${TUNNEL_URL}/" 2>/dev/null || true)
+PUBLIC_HTTP_STATUS=""
+for i in {1..3}; do
+  PUBLIC_HEALTH=$(curl -sSL --connect-timeout 2 --max-time 4 -w '\n__HTTP_STATUS__%{http_code}' "${TUNNEL_URL}/" 2>/dev/null || true)
+  PUBLIC_HTTP_STATUS=$(echo "$PUBLIC_HEALTH" | sed -n 's/^__HTTP_STATUS__//p' | tail -n 1)
   if echo "$PUBLIC_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then break; fi
-  echo -ne "${YELLOW}.${NC}"
   sleep 1
 done
 echo ""
-if ! echo "$PUBLIC_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
-  echo -e "      ${RED}✗ Cloudflare did not return this daemon instance. The URL was not registered; check tunnel.log.${NC}"
+if echo "$PUBLIC_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
+  echo -e "      ${GREEN}✓ Public edge returned this daemon instance.${NC}"
+elif ! is_managed_pid "$TUNNEL_PID"; then
+  echo -e "      ${RED}✗ Cloudflare tunnel exited before registration. Check tunnel.log:${NC}"
+  tail -n 20 tunnel.log
   exit 1
+else
+  # A phone-side request to a newly-issued quick tunnel can be delayed or
+  # blocked independently of the tunnel's outbound connection. The local
+  # instance identity was already verified above and cloudflared targets that
+  # exact loopback listener, so do not tear down a healthy daemon on this probe.
+  echo -e "      ${YELLOW}⚠ Public self-check is inconclusive (HTTP ${PUBLIC_HTTP_STATUS:-no response}); keeping the live tunnel and allowing the dashboard to retry.${NC}"
 fi
 
 WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')
@@ -329,14 +339,15 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 # 5. Heartbeat and end-to-end tunnel watchdog
 (
   CHECK_COUNTER=0
-  TUNNEL_FAILURES=0
 
   restart_tunnel() {
-    echo -e "[$(date +%T)] ⚠️ Rebuilding the Cloudflare tunnel after failed health checks..." >> daemon.log
-    if kill -0 "$TUNNEL_PID" 2>/dev/null; then
+    echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel process exited; creating a replacement..." >> daemon.log
+    if is_managed_pid "$TUNNEL_PID"; then
       kill "$TUNNEL_PID" 2>/dev/null || true
       sleep 2
-      kill -9 "$TUNNEL_PID" 2>/dev/null || true
+      if is_managed_pid "$TUNNEL_PID"; then
+        kill -9 "$TUNNEL_PID" 2>/dev/null || true
+      fi
     fi
 
     cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
@@ -346,28 +357,23 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
     for attempt in {1..30}; do
       NEW_TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log | tail -n 1)
       if [ -n "$NEW_TUNNEL_URL" ]; then
-        # Do not switch the dashboard to a fresh quick-tunnel address until
-        # its public endpoint has been confirmed against this daemon instance.
-        for health_attempt in {1..15}; do
-          PUBLIC_HEALTH=$(curl -fsSL --connect-timeout 2 --max-time 5 "${NEW_TUNNEL_URL}/" 2>/dev/null || true)
-          if echo "$PUBLIC_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
-            NEW_WSS_URL=$(echo "$NEW_TUNNEL_URL" | sed 's/https:/wss:/')
-            SYNC_RESP=$(curl -s --connect-timeout 5 --max-time 10 -X POST "$DASHBOARD_SYNC_URL" \
-              -H "Content-Type: application/json" \
-              -d "{\"username\":\"$APP_USER\",\"url\":\"$NEW_WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null || true)
-            if ! echo "$SYNC_RESP" | grep -q '"success":true'; then
-              echo -e "[$(date +%T)] ❌ Website rejected replacement tunnel URL: ${SYNC_RESP:-no response}" >> daemon.log
-              return 1
-            fi
-            TUNNEL_URL="$NEW_TUNNEL_URL"
-            WSS_URL="$NEW_WSS_URL"
-            TUNNEL_REGISTERED=1
-            echo -e "[$(date +%T)] ✓ Cloudflare tunnel restored at ${WSS_URL}" >> daemon.log
-            return 0
-          fi
-          sleep 1
-        done
-        echo -e "[$(date +%T)] ❌ New tunnel failed daemon identity verification; keeping the previous dashboard URL." >> daemon.log
+        LOCAL_HEALTH=$(curl -fsS --connect-timeout 2 --max-time 4 http://127.0.0.1:8080/ 2>/dev/null || true)
+        if ! echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
+          echo -e "[$(date +%T)] ❌ Local daemon identity check failed; refusing to register replacement tunnel." >> daemon.log
+          return 1
+        fi
+        NEW_WSS_URL=$(echo "$NEW_TUNNEL_URL" | sed 's/https:/wss:/')
+        SYNC_RESP=$(curl -s --connect-timeout 5 --max-time 10 -X POST "$DASHBOARD_SYNC_URL" \
+          -H "Content-Type: application/json" \
+          -d "{\"username\":\"$APP_USER\",\"url\":\"$NEW_WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null || true)
+        if ! echo "$SYNC_RESP" | grep -q '"success":true'; then
+          echo -e "[$(date +%T)] ❌ Website rejected replacement tunnel URL: ${SYNC_RESP:-no response}" >> daemon.log
+          return 1
+        fi
+        TUNNEL_URL="$NEW_TUNNEL_URL"
+        WSS_URL="$NEW_WSS_URL"
+        TUNNEL_REGISTERED=1
+        echo -e "[$(date +%T)] ✓ Cloudflare tunnel URL refreshed at ${WSS_URL}; waiting for the web client to reconnect." >> daemon.log
         return 0
       fi
       sleep 1
@@ -380,33 +386,19 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
   while true; do
     sleep 15
     # Recover a dead cloudflared process immediately.
-    if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+    if ! is_managed_pid "$TUNNEL_PID"; then
       echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel interrupted. Re-opening tunnel (HTTP/2)..." >> daemon.log
       restart_tunnel || true
     fi
 
-    # A cloudflared PID can remain alive after its edge connection has gone stale.
-    # Check the complete public-to-phone path every 30 seconds, not just process state.
+    # Check the loopback daemon periodically, but do not recreate a live
+    # Cloudflare tunnel just because a phone-side public self-probe failed.
     CHECK_COUNTER=$((CHECK_COUNTER + 1))
     if [ "$CHECK_COUNTER" -ge 2 ]; then
       CHECK_COUNTER=0
       LOCAL_HEALTH=$(curl -fsS --connect-timeout 2 --max-time 4 http://127.0.0.1:8080/ 2>/dev/null || true)
-      if echo "$LOCAL_HEALTH" | grep -q '"status":"running"'; then
-        PUBLIC_HEALTH=$(curl -fsSL --connect-timeout 5 --max-time 10 "${TUNNEL_URL}/" 2>/dev/null || true)
-        if echo "$PUBLIC_HEALTH" | grep -q '"status":"running"'; then
-          TUNNEL_FAILURES=0
-        else
-          TUNNEL_FAILURES=$((TUNNEL_FAILURES + 1))
-          echo -e "[$(date +%T)] ⚠️ Public tunnel health check failed (${TUNNEL_FAILURES}/2)." >> daemon.log
-        fi
-      else
-        # The daemon supervisor is recovering; don't mistake its brief restart for a tunnel fault.
-        TUNNEL_FAILURES=0
-      fi
-
-      if [ "$TUNNEL_FAILURES" -ge 2 ]; then
-        restart_tunnel || true
-        TUNNEL_FAILURES=0
+      if ! echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
+        echo -e "[$(date +%T)] ⚠️ Local daemon health is temporarily unavailable; supervisor will recover it without replacing the public tunnel URL." >> daemon.log
       fi
     fi
 
