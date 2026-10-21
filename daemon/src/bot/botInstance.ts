@@ -1301,20 +1301,20 @@ export class PebbleBotInstance {
     if (this.reconnectTimer) return;
 
     const baseDelay = Math.max(3000, this.config.settings.autoReconnectDelay || 5000);
-    const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit/i.test(reason);
+    const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit|no reply to RakNet UDP packets|Connect timed out|filtering UDP/i.test(reason);
     let delay: number;
     if (isLoginThrottled) {
       this.loginThrottleCount++;
-      delay = Math.max(baseDelay, Math.min(15_000 * (2 ** Math.min(this.loginThrottleCount - 1, 3)), 120_000));
+      delay = Math.max(12_000, Math.min(15_000 * (2 ** Math.min(this.loginThrottleCount - 1, 3)), 120_000));
     } else {
       this.reconnectFailureCount++;
       delay = Math.max(baseDelay, Math.min(baseDelay * (2 ** Math.min(this.reconnectFailureCount - 1, 4)), 60_000));
     }
     // Add jitter so multiple concurrent bots stagger connection handshakes and avoid gateway rate-limiting
-    const jitter = Math.floor(Math.random() * 3000);
+    const jitter = Math.floor(Math.random() * 4000);
     delay += jitter;
     const reconnectDescription = isLoginThrottled
-      ? `FreshSMP login rate limit; backing off for ${Math.ceil(delay / 1000)}s`
+      ? `FreshSMP gateway throttle/timeout; backing off for ${Math.ceil(delay / 1000)}s`
       : `Reconnecting in ${Math.ceil(delay / 1000)}s`;
     console.log(chalk.yellow(`[PebbleAFK] ${reconnectDescription} for ${this.config.username} (failure ${isLoginThrottled ? this.loginThrottleCount : this.reconnectFailureCount}).`));
     this.updateState('RECONNECTING', reconnectDescription);

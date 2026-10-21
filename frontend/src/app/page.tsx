@@ -1167,14 +1167,14 @@ export default function Home() {
       showToast('Please select at least one assigned Bedrock account.', 'error');
       return;
     }
-    // Stagger multiple bot connections by 4.5s to avoid server login rate limiting
+    // Stagger multiple bot connections by 7.0s to avoid server login rate limiting
     targetAccounts.forEach((acc, idx) => {
       if (idx === 0) {
         handleConnectAccount(acc, activeServer);
       } else {
         setTimeout(() => {
           handleConnectAccount(acc, activeServer);
-        }, idx * 4500);
+        }, idx * 7000);
       }
     });
   };
