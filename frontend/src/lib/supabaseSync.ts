@@ -276,3 +276,41 @@ export async function loadAccountLogsFromSupabase(
     return [];
   }
 }
+
+/**
+ * Updates the real-time connection state of an account in Supabase.
+ */
+export async function updateAccountConnectionState(
+  currentUser: string,
+  botName: string,
+  isConnected: boolean
+) {
+  if (!supabase || !currentUser || !botName) return;
+  try {
+    const cleanUser = currentUser.trim();
+    const cleanBot = botName.trim().replace(/^@/, '');
+    const { data: rows } = await supabase
+      .from('accounts')
+      .select('id, settings')
+      .ilike('username', cleanUser)
+      .ilike('bot_name', cleanBot);
+
+    if (rows && rows.length > 0) {
+      for (const row of rows) {
+        const newSettings = {
+          ...(row.settings || {}),
+          is_connected: isConnected,
+          connected_at: isConnected ? (row.settings?.connected_at || Date.now()) : null,
+          last_seen: Date.now(),
+        };
+        await supabase
+          .from('accounts')
+          .update({ settings: newSettings, updated_at: new Date().toISOString() })
+          .eq('id', row.id);
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to update account connection state in Supabase:', err);
+  }
+}
+

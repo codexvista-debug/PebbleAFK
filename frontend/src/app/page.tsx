@@ -70,7 +70,8 @@ import {
   loadServersFromSupabase,
   saveServersToSupabase,
   saveAccountLogsToSupabase,
-  loadAccountLogsFromSupabase
+  loadAccountLogsFromSupabase,
+  updateAccountConnectionState
 } from '@/lib/supabaseSync';
 
 export default function Home() {
@@ -936,6 +937,9 @@ export default function Home() {
         if (srv && acc) {
           const ign = acc.ign || acc.username;
           if (st === 'SPAWNED' || st === 'LOGGED_IN') {
+            if (currentUser) {
+              updateAccountConnectionState(currentUser, ign, true);
+            }
             addPlayerLog(
               ign,
               srv.serverHost,
@@ -954,12 +958,21 @@ export default function Home() {
               'info'
             );
           } else if (st === 'KICKED') {
+            if (currentUser) {
+              updateAccountConnectionState(currentUser, ign, false);
+            }
             const reason = botReasons[botKey] ? `: ${botReasons[botKey]}` : '';
             addPlayerLog(ign, srv.serverHost, 'kicked', `Kicked from ${srv.serverHost}${reason}`, undefined, 'error');
           } else if (st === 'ERROR') {
+            if (currentUser) {
+              updateAccountConnectionState(currentUser, ign, false);
+            }
             const reason = botReasons[botKey] ? `: ${botReasons[botKey]}` : '';
             addPlayerLog(ign, srv.serverHost, 'error', `Connection error (${srv.serverHost})${reason}`, undefined, 'error');
           } else if (st === 'DISCONNECTED' && prevSt && prevSt !== 'DISCONNECTED') {
+            if (currentUser) {
+              updateAccountConnectionState(currentUser, ign, false);
+            }
             const reason = botReasons[botKey] ? `: ${botReasons[botKey]}` : '';
             addPlayerLog(ign, srv.serverHost, 'disconnected', `Disconnected from ${srv.serverHost}${reason}`, undefined, 'warning');
           }
@@ -967,7 +980,7 @@ export default function Home() {
       }
     });
     prevBotStatesRef.current = { ...botStates };
-  }, [botStates, botReasons, daemonStatus, servers, accounts, addPlayerLog]);
+  }, [botStates, botReasons, daemonStatus, servers, accounts, addPlayerLog, currentUser]);
 
   // Sync real-time daemon activity logs (version negotiation, UDP probe, errors) into Player Logs
   const prevActivityLogLenRef = useRef<Record<string, number>>({});

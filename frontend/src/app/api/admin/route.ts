@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabaseClient';
-import { RANKS, UserRank, getRankConfig } from '@/lib/ranks';
 import { hashPassword, generateSecretCode, USERNAME_REGEX } from '@/lib/authUtils';
 import { sharedUserTunnels } from '@/lib/tunnelStore';
 import { getRegistrationsPaused, setRegistrationsPaused } from '@/lib/systemConfig';
@@ -11,7 +10,6 @@ export const dynamic = 'force-dynamic';
 interface UserSummaryItem {
   id: string;
   username: string;
-  rank: UserRank;
   accountCount: number;
   connectedCount: number;
   secretCode?: string;
@@ -44,9 +42,81 @@ interface AccountItem {
 interface AdminTunnelItem {
   username: string;
   url: string;
+  token?: string;
   updatedAt: number;
   isRecent: boolean;
   activeBots: number;
+}
+
+// Proactively probes live phone daemons over WebSocket to detect running bots in real-time
+async function probeLiveDaemons(tunnels: Map<string, { url: string; token: string; updatedAt: number }>): Promise<Map<string, Set<string>>> {
+  const results = new Map<string, Set<string>>();
+  if (typeof WebSocket === 'undefined') return results;
+
+  const probePromises: Promise<void>[] = [];
+
+  tunnels.forEach((tData, owner) => {
+    const isLive = Boolean(tData.url && Date.now() - tData.updatedAt < 300000);
+    if (!isLive || (!tData.url.startsWith('ws://') && !tData.url.startsWith('wss://'))) return;
+
+    const p = new Promise<void>((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | null = null;
+      let ws: WebSocket | null = null;
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        try { ws?.close(); } catch (_) {}
+        resolve();
+      };
+
+      timer = setTimeout(finish, 1800);
+
+      try {
+        ws = new WebSocket(tData.url);
+        ws.onopen = () => {
+          ws?.send(JSON.stringify({
+            type: 'AUTH',
+            payload: { username: owner, token: tData.token }
+          }));
+        };
+
+        ws.onmessage = (event: any) => {
+          try {
+            const raw = typeof event.data === 'string' ? event.data : event.data?.toString();
+            const msg = JSON.parse(raw);
+            if (msg.type === 'AUTH_RESULT' && msg.payload?.success) {
+              ws?.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+            } else if (msg.type === 'BOT_STATE') {
+              const p = msg.payload;
+              if (p?.state === 'SPAWNED' || p?.state === 'LOGGED_IN') {
+                let userSet = results.get(owner);
+                if (!userSet) {
+                  userSet = new Set<string>();
+                  results.set(owner, userSet);
+                }
+                if (p.username) userSet.add(p.username.toLowerCase().trim());
+                if (p.botId) userSet.add(p.botId.toLowerCase().trim());
+                if (p.accountId) userSet.add(p.accountId.toLowerCase().trim());
+              }
+            }
+          } catch (_) {}
+        };
+
+        ws.onerror = finish;
+        ws.onclose = finish;
+      } catch (_) {
+        finish();
+      }
+    });
+
+    probePromises.push(p);
+  });
+
+  await Promise.allSettled(probePromises);
+  return results;
 }
 
 export async function GET(req: NextRequest) {
@@ -103,7 +173,10 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    // 4. Separate metadata rows from real Bedrock accounts & verify legitimacy
+    // 4. Live probe all active daemons to detect active bots
+    const liveOnlineBotsByOwner = await probeLiveDaemons(tunnelMap);
+
+    // 5. Separate metadata rows from real Bedrock accounts & determine connection state
     const realAccounts: AccountItem[] = [];
 
     (allAccounts || []).forEach((row) => {
@@ -115,8 +188,32 @@ export async function GET(req: NextRequest) {
         // Authoritative liveness: Phone daemon must have sent heartbeat within 300 seconds (5m)
         const isTunnelLive = Boolean(userTunnel?.url && Date.now() - userTunnel.updatedAt < 300000);
 
-        // A bot cannot be active if its phone daemon is offline
-        const rawConnected = Boolean(row.settings?.is_connected);
+        const onlineBotSet = liveOnlineBotsByOwner.get(lowerOwner);
+        const cleanBotName = botName.replace(/^@/, '').toLowerCase().trim();
+        const rowIdStr = String(row.id).toLowerCase();
+
+        // Check if detected as online by daemon probe or marked connected in DB
+        let isLiveOnDaemon = false;
+        if (onlineBotSet && isTunnelLive) {
+          if (
+            onlineBotSet.has(cleanBotName) ||
+            onlineBotSet.has(botName.toLowerCase()) ||
+            onlineBotSet.has(rowIdStr) ||
+            onlineBotSet.has(`acc_${rowIdStr}`)
+          ) {
+            isLiveOnDaemon = true;
+          } else {
+            // If user has active daemon with online bots and only 1 registered account, match it
+            const ownerAccounts = (allAccounts || []).filter(
+              (a) => (a.username || '').toLowerCase().trim() === lowerOwner && !a.bot_name?.startsWith('__')
+            );
+            if (ownerAccounts.length === 1 && onlineBotSet.size > 0) {
+              isLiveOnDaemon = true;
+            }
+          }
+        }
+
+        const rawConnected = Boolean(row.settings?.is_connected) || isLiveOnDaemon;
         const isConnected = rawConnected && isTunnelLive;
 
         const activeDaemonUrl = (row.settings?.daemon_url || '').trim() || (isConnected ? userTunnel?.url || '' : '');
@@ -203,7 +300,7 @@ export async function GET(req: NextRequest) {
           serverHost: row.server_host || 'play.freshsmp.fun',
           serverPort: row.server_port || 19132,
           isConnected,
-          connectedAt: isConnected ? row.settings?.connected_at : undefined,
+          connectedAt: isConnected ? (row.settings?.connected_at || Date.now()) : undefined,
           updatedAt: row.updated_at,
           createdAt: row.created_at,
           settings: row.settings || {},
@@ -214,14 +311,9 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    // 5. Build user summary list
+    // 6. Build user summary list
     const userList: UserSummaryItem[] = (users || []).map((u) => {
       const lowerU = (u.username || '').toLowerCase().trim();
-      let rank: UserRank = lowerU === 'chief' ? 'diamond' : 'iron';
-      if ((u as any).rank && RANKS[(u as any).rank?.toLowerCase() as UserRank]) {
-        rank = (u as any).rank.toLowerCase() as UserRank;
-      }
-
       const userAccounts = realAccounts.filter((a) => a.owner.toLowerCase().trim() === lowerU);
       const connectedCount = userAccounts.filter((a) => a.isConnected).length;
       const secretCode = u.password_hash ? generateSecretCode(u.username, u.password_hash) : undefined;
@@ -231,7 +323,6 @@ export async function GET(req: NextRequest) {
       return {
         id: u.id,
         username: u.username,
-        rank,
         accountCount: userAccounts.length,
         connectedCount,
         secretCode,
@@ -241,7 +332,7 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    // 6. Build tunnel overview list
+    // 7. Build tunnel overview list
     const tunnelList: AdminTunnelItem[] = [];
     tunnelMap.forEach((t, u) => {
       const activeBots = realAccounts.filter((a) => a.owner.toLowerCase().trim() === u && a.isConnected).length;
@@ -249,24 +340,11 @@ export async function GET(req: NextRequest) {
       tunnelList.push({
         username: u,
         url: t.url,
+        token: t.token || '',
         updatedAt: t.updatedAt,
         isRecent,
         activeBots,
       });
-    });
-
-    // 7. Aggregate stats
-    const rankBreakdown = {
-      iron: 0,
-      gold: 0,
-      diamond: 0,
-      emerald: 0,
-    };
-
-    userList.forEach((u) => {
-      if (rankBreakdown[u.rank] !== undefined) {
-        rankBreakdown[u.rank]++;
-      }
     });
 
     const activeTunnelsCount = tunnelList.filter((t) => t.isRecent).length;
@@ -278,7 +356,6 @@ export async function GET(req: NextRequest) {
         totalAccounts: realAccounts.length,
         totalConnected: realAccounts.filter((a) => a.isConnected).length,
         totalTunnels: activeTunnelsCount,
-        rankBreakdown,
         isRegistrationsPaused,
       },
       isRegistrationsPaused,
@@ -378,43 +455,6 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Action 1: Change user rank
-    if (action === 'change_rank') {
-      const { username, rank } = body;
-      if (!username || !rank) {
-        return NextResponse.json({ error: 'username and rank required' }, { status: 400 });
-      }
-
-      const cleanRank = (rank || '').toLowerCase().trim() as UserRank;
-      if (!RANKS[cleanRank]) {
-        return NextResponse.json({ error: 'Invalid rank' }, { status: 400 });
-      }
-
-      const cleanUser = username.trim();
-
-      // Update public.users table column directly
-      const { error: updateErr } = await supabase
-        .from('users')
-        .update({ rank: cleanRank })
-        .ilike('username', cleanUser);
-
-      if (updateErr) {
-        console.error('Failed to update rank in public.users:', updateErr);
-        // Fallback: save rank in accounts table as metadata row if column is missing
-        try {
-          await supabase.from('accounts').upsert({
-            username: cleanUser,
-            bot_name: '__meta_rank__',
-            server_host: 'pebbleafk.internal',
-            server_port: 19132,
-            settings: { rank: cleanRank, updatedAt: Date.now() },
-          }, { onConflict: 'username,bot_name' });
-        } catch (_) {}
-      }
-
-      return NextResponse.json({ success: true, message: `Rank for @${cleanUser} changed to ${RANKS[cleanRank].name}` });
-    }
-
     // Action 2: Reset user password
     if (action === 'reset_password') {
       const { username, newPassword } = body;
@@ -447,7 +487,7 @@ export async function POST(req: NextRequest) {
 
     // Action 3: Create new user
     if (action === 'create_user') {
-      const { username, password, rank } = body;
+      const { username, password } = body;
       if (!username || !password) {
         return NextResponse.json({ error: 'username and password required' }, { status: 400 });
       }
@@ -459,7 +499,6 @@ export async function POST(req: NextRequest) {
         }, { status: 400 });
       }
 
-      const cleanRank = (rank || 'iron').toLowerCase().trim() as UserRank;
       const hashedPassword = hashPassword(password);
 
       // Check duplicate
@@ -475,17 +514,11 @@ export async function POST(req: NextRequest) {
 
       // Insert user directly into public.users
       const { error: insErr } = await supabase.from('users').insert([
-        { username: cleanUsername, password_hash: hashedPassword, rank: cleanRank },
+        { username: cleanUsername, password_hash: hashedPassword },
       ]);
 
       if (insErr) {
-        // Retry without rank column if schema hasn't added rank column yet
-        const { error: fallbackErr } = await supabase.from('users').insert([
-          { username: cleanUsername, password_hash: hashedPassword },
-        ]);
-        if (fallbackErr) {
-          return NextResponse.json({ error: fallbackErr.message }, { status: 500 });
-        }
+        return NextResponse.json({ error: insErr.message }, { status: 500 });
       }
 
       // Create default server profile in __meta_servers__
@@ -516,7 +549,7 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: `User @${cleanUsername} created successfully with ${RANKS[cleanRank]?.name || 'Iron'} rank!`,
+        message: `User @${cleanUsername} created successfully!`,
       });
     }
 
@@ -543,7 +576,7 @@ export async function POST(req: NextRequest) {
         console.warn('Error purging user tunnel:', e);
       }
 
-      // 3. Delete all Minecraft accounts, server profiles, rank, and logs
+      // 3. Delete all Minecraft accounts, server profiles, and logs
       try {
         await supabase.from('accounts').delete().ilike('username', cleanUser);
         await supabase.from('accounts').delete().eq('username', cleanUser);

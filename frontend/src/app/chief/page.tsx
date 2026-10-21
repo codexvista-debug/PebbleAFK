@@ -42,13 +42,11 @@ import {
   UserX,
   Menu,
 } from 'lucide-react';
-import { RANKS, RANK_ORDER, UserRank } from '@/lib/ranks';
 import { MinecraftChatMessage } from '@/components/MinecraftChatMessage';
 
 interface UserItem {
   id: string;
   username: string;
-  rank: UserRank;
   accountCount: number;
   connectedCount: number;
   secretCode?: string;
@@ -60,6 +58,7 @@ interface UserItem {
 interface AdminTunnelItem {
   username: string;
   url: string;
+  token?: string;
   updatedAt: number;
   isRecent: boolean;
   activeBots: number;
@@ -91,7 +90,6 @@ interface AdminStats {
   totalAccounts: number;
   totalConnected: number;
   totalTunnels?: number;
-  rankBreakdown: Record<string, number>;
 }
 
 export default function ChiefAdminPage() {
@@ -100,7 +98,6 @@ export default function ChiefAdminPage() {
     totalAccounts: 0,
     totalConnected: 0,
     totalTunnels: 0,
-    rankBreakdown: { iron: 0, gold: 0, diamond: 0, emerald: 0 },
   });
   const [users, setUsers] = useState<UserItem[]>([]);
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
@@ -112,7 +109,6 @@ export default function ChiefAdminPage() {
 
   // Search & Filter States
   const [userSearch, setUserSearch] = useState<string>('');
-  const [userRankFilter, setUserRankFilter] = useState<string>('all');
   const [accountSearch, setAccountSearch] = useState<string>('');
   const [accountStatusFilter, setAccountStatusFilter] = useState<'all' | 'online' | 'offline' | 'legit' | 'suspicious'>('online');
 
@@ -128,7 +124,6 @@ export default function ChiefAdminPage() {
   const [isCreateUserOpen, setIsCreateUserOpen] = useState<boolean>(false);
   const [createUsername, setCreateUsername] = useState<string>('');
   const [createPassword, setCreatePassword] = useState<string>('');
-  const [createRank, setCreateRank] = useState<UserRank>('iron');
   const [isCreatingUser, setIsCreatingUser] = useState<boolean>(false);
 
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'user' | 'account'; id: string; name: string } | null>(null);
@@ -148,12 +143,9 @@ export default function ChiefAdminPage() {
   const [liveChats, setLiveChats] = useState<Record<string, Array<{ text: string; raw?: string; message?: string; formatted?: string; formattedText?: string; sender?: string; id?: string; type?: string; timestamp: number }>>>({});
   const daemonSocketsRef = useRef<Map<string, WebSocket>>(new Map());
 
-  // Connect WebSockets to online tunnels to receive live server chat
+  // Connect WebSockets to all active phone daemon tunnels to discover bots & receive live chat
   useEffect(() => {
     if (typeof window === 'undefined') return;
-
-    // Collect active tunnels from connected accounts
-    const targetTunnels = new Map<string, { url: string; owner: string; secret?: string }>();
 
     // Build user -> secret map
     const userSecretMap = new Map<string, string>();
@@ -163,15 +155,30 @@ export default function ChiefAdminPage() {
       }
     });
 
+    // Collect ALL live tunnels from registered tunnels list + accounts
+    const targetTunnels = new Map<string, { url: string; owner: string; secret?: string }>();
+
+    tunnels.forEach((t) => {
+      const url = (t.url || '').trim();
+      const owner = (t.username || '').trim().toLowerCase();
+      if (url && (url.startsWith('ws://') || url.startsWith('wss://'))) {
+        targetTunnels.set(url, {
+          url,
+          owner,
+          secret: t.token || userSecretMap.get(owner) || '',
+        });
+      }
+    });
+
     accounts.forEach((a) => {
-      if (a.isConnected) {
-        const url = (a.daemonUrl || a.registeredTunnel || '').trim();
-        const owner = (a.owner || '').trim().toLowerCase();
-        if (url && (url.startsWith('ws://') || url.startsWith('wss://'))) {
+      const url = (a.daemonUrl || a.registeredTunnel || '').trim();
+      const owner = (a.owner || '').trim().toLowerCase();
+      if (url && (url.startsWith('ws://') || url.startsWith('wss://'))) {
+        if (!targetTunnels.has(url)) {
           targetTunnels.set(url, {
             url,
             owner,
-            secret: userSecretMap.get(owner),
+            secret: userSecretMap.get(owner) || '',
           });
         }
       }
@@ -195,19 +202,128 @@ export default function ChiefAdminPage() {
       try {
         const ws = new WebSocket(url);
         daemonSocketsRef.current.set(url, ws);
+        let pingTimer: NodeJS.Timeout | null = null;
 
         ws.onopen = () => {
           ws.send(JSON.stringify({
             type: 'AUTH',
             payload: { username: info.owner, token: info.secret || '' }
           }));
+
+          // Send REQUEST_SYNC immediately and again after auth handshakes
+          setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+            }
+          }, 350);
+
+          pingTimer = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              try { ws.send(JSON.stringify({ type: 'PING' })); } catch {}
+            }
+          }, 10000);
         };
 
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
             if (data.type === 'AUTH_RESULT' && data.payload?.success) {
+              // Immediately request sync of all bots running on this daemon
               ws.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+            } else if (data.type === 'BOT_STATE') {
+              const p = data.payload;
+              const isOnline = p?.state === 'SPAWNED' || p?.state === 'LOGGED_IN';
+              const botUser = (p?.username || '').toLowerCase().trim();
+              const botId = (p?.botId || '').toLowerCase().trim();
+              const accId = (p?.accountId || '').toLowerCase().trim();
+
+              // Mark account online in state with fallback matching
+              setAccounts((prev) => {
+                let matched = false;
+                const next = prev.map((acc) => {
+                  const accIgn = acc.ign.replace(/^@/, '').toLowerCase().trim();
+                  const accIdStr = String(acc.id).replace(/^acc_/, '').toLowerCase().trim();
+                  const matchOwner = acc.owner.toLowerCase().trim() === info.owner.toLowerCase();
+
+                  const matchBot =
+                    accIgn === botUser ||
+                    accIgn === botId ||
+                    acc.ign.toLowerCase() === botUser ||
+                    acc.id.toLowerCase() === accId ||
+                    accIdStr === accId ||
+                    (botId && botId.includes(accIdStr)) ||
+                    (botUser && accIgn.includes(botUser)) ||
+                    (accIgn && botUser.includes(accIgn));
+
+                  // If owner matches and either bot matches or this user only has 1 account, update
+                  const ownerAccCount = prev.filter((x) => x.owner.toLowerCase() === info.owner.toLowerCase()).length;
+                  if (matchOwner && (matchBot || ownerAccCount === 1)) {
+                    matched = true;
+                    return {
+                      ...acc,
+                      isConnected: isOnline,
+                      daemonUrl: url,
+                      connectedAt: isOnline ? (acc.connectedAt || Date.now()) : undefined,
+                      legitimacy: {
+                        status: isOnline ? ('legit' as const) : ('offline' as const),
+                        badge: isOnline ? 'Verified Legit Owner' : 'Standby / Offline',
+                        description: isOnline
+                          ? `Legitimate connection: Running live on @${acc.owner}'s Termux phone daemon.`
+                          : `Bot offline on @${acc.owner}'s Termux phone daemon.`,
+                        isLegit: true,
+                      },
+                    };
+                  }
+                  return acc;
+                });
+
+                // Fallback: If online bot detected for this owner but didn't match specific account:
+                // 1) If user has accounts, attach to first account
+                // 2) If user has no accounts, create synthetic account entry so it is visible
+                if (isOnline && !matched) {
+                  const ownerIdx = next.findIndex((x) => x.owner.toLowerCase() === info.owner.toLowerCase());
+                  if (ownerIdx >= 0) {
+                    next[ownerIdx] = {
+                      ...next[ownerIdx],
+                      isConnected: true,
+                      daemonUrl: url,
+                      connectedAt: next[ownerIdx].connectedAt || Date.now(),
+                      legitimacy: {
+                        status: 'legit' as const,
+                        badge: 'Verified Legit Owner',
+                        description: `Legitimate connection: Running live on @${next[ownerIdx].owner}'s Termux phone daemon.`,
+                        isLegit: true,
+                      },
+                    };
+                  } else {
+                    next.push({
+                      id: `live_${botId || Date.now()}`,
+                      owner: info.owner,
+                      ign: p?.username || botId || `@${info.owner}'s Bot`,
+                      serverHost: p?.serverId || 'Bedrock Server',
+                      serverPort: 19132,
+                      isConnected: true,
+                      connectedAt: Date.now(),
+                      daemonUrl: url,
+                      registeredTunnel: url,
+                      legitimacy: {
+                        status: 'legit' as const,
+                        badge: 'Live Daemon Bot',
+                        description: `Running live on @${info.owner}'s Termux phone daemon.`,
+                        isLegit: true,
+                      },
+                    });
+                  }
+                }
+
+                return next;
+              });
+
+              // Dynamically re-evaluate totalConnected
+              setStats((prev) => ({
+                ...prev,
+                totalConnected: Math.max(prev.totalConnected, isOnline ? 1 : 0),
+              }));
             } else if (data.type === 'CHAT_MESSAGE') {
               const msg = data.payload;
               const ignKey = (msg.accountUsername || '').toLowerCase().trim();
@@ -239,16 +355,18 @@ export default function ChiefAdminPage() {
         };
 
         ws.onclose = () => {
+          if (pingTimer) clearInterval(pingTimer);
           daemonSocketsRef.current.delete(url);
         };
 
         ws.onerror = () => {
+          if (pingTimer) clearInterval(pingTimer);
           try { ws.close(); } catch {}
           daemonSocketsRef.current.delete(url);
         };
       } catch (e) {}
     });
-  }, [accounts, users]);
+  }, [accounts, users, tunnels]);
 
   useEffect(() => {
     return () => {
@@ -281,7 +399,6 @@ export default function ChiefAdminPage() {
         totalAccounts: 0,
         totalConnected: 0,
         totalTunnels: 0,
-        rankBreakdown: { iron: 0, gold: 0, diamond: 0, emerald: 0 },
       });
       setUsers(data.users || []);
       setAccounts(data.accounts || []);
@@ -320,28 +437,6 @@ export default function ChiefAdminPage() {
       showToast(err.message || 'Error toggling registrations', 'error');
     } finally {
       setIsTogglingRegistrations(false);
-    }
-  };
-
-  // Handle Rank Change
-  const handleChangeRank = async (username: string, newRank: UserRank) => {
-    try {
-      const res = await fetch('/api/admin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'change_rank', username, rank: newRank }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update rank');
-
-      showToast(`Updated @${username}'s rank to ${RANKS[newRank]?.name || newRank}!`, 'success');
-      // Optimistic update
-      setUsers((prev) =>
-        prev.map((u) => (u.username.toLowerCase() === username.toLowerCase() ? { ...u, rank: newRank } : u))
-      );
-      fetchData(true);
-    } catch (err: any) {
-      showToast(err.message, 'error');
     }
   };
 
@@ -387,17 +482,15 @@ export default function ChiefAdminPage() {
           action: 'create_user',
           username: createUsername,
           password: createPassword,
-          rank: createRank,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to create user');
 
-      showToast(`User @${createUsername} registered with ${RANKS[createRank]?.name} rank!`, 'success');
+      showToast(`User @${createUsername} registered successfully!`, 'success');
       setIsCreateUserOpen(false);
       setCreateUsername('');
       setCreatePassword('');
-      setCreateRank('iron');
       fetchData(true);
     } catch (err: any) {
       showToast(err.message, 'error');
@@ -470,36 +563,22 @@ export default function ChiefAdminPage() {
     }
   };
 
-  // Handle Disconnect / Clear Tunnel
-  const handleDisconnectTunnel = async (username: string) => {
-    try {
-      const res = await fetch('/api/admin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'disconnect_tunnel', username }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to disconnect tunnel');
-
-      showToast(`Tunnel and bots disconnected for @${username}`, 'success');
-      fetchData(true);
-    } catch (err: any) {
-      showToast(err.message, 'error');
-    }
-  };
-
   // Filtered Users
   const filteredUsers = useMemo(() => {
     return users.filter((u) => {
       const matchSearch =
         u.username.toLowerCase().includes(userSearch.toLowerCase()) ||
         (u.secretCode && u.secretCode.toLowerCase().includes(userSearch.toLowerCase()));
-      const matchRank = userRankFilter === 'all' || u.rank === userRankFilter;
-      return matchSearch && matchRank;
+      return matchSearch;
     });
-  }, [users, userSearch, userRankFilter]);
+  }, [users, userSearch]);
 
-  // Filtered Accounts (Connected bots first, then offline)
+  // Dynamically counted connected bots
+  const liveConnectedBots = useMemo(() => {
+    return accounts.filter((a) => a.isConnected);
+  }, [accounts]);
+
+  // Filtered Accounts
   const filteredAccounts = useMemo(() => {
     return accounts
       .filter((a) => {
@@ -527,10 +606,8 @@ export default function ChiefAdminPage() {
         return matchSearch && matchStatus;
       })
       .sort((a, b) => {
-        // Connected bots always appear first
         if (a.isConnected && !b.isConnected) return -1;
         if (!a.isConnected && b.isConnected) return 1;
-        // Secondary sort: most recently connected or created first
         const aTime = a.connectedAt || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
         const bTime = b.connectedAt || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
         return bTime - aTime;
@@ -707,7 +784,7 @@ export default function ChiefAdminPage() {
               </div>
               <span>Total Stats</span>
             </div>
-            {stats.totalConnected > 0 ? (
+            {liveConnectedBots.length > 0 ? (
               <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 Live
@@ -719,7 +796,7 @@ export default function ChiefAdminPage() {
             )}
           </button>
 
-          {/* Tab 2: Users & Ranks */}
+          {/* Tab 2: Users */}
           <button
             onClick={() => setActiveTab('users')}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
@@ -732,7 +809,7 @@ export default function ChiefAdminPage() {
               <div className={`p-1 rounded-lg ${activeTab === 'users' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
                 <Users className="w-3.5 h-3.5" />
               </div>
-              <span>Users & Ranks</span>
+              <span>Users</span>
             </div>
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
               activeTab === 'users' ? 'bg-emerald-200/80 text-emerald-900' : 'bg-slate-100 text-slate-600'
@@ -741,7 +818,7 @@ export default function ChiefAdminPage() {
             </span>
           </button>
 
-          {/* Tab 3: MC Accounts & Connections */}
+          {/* Tab 3: Bedrock Accounts & Connections */}
           <button
             onClick={() => setActiveTab('accounts')}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
@@ -757,8 +834,8 @@ export default function ChiefAdminPage() {
               <span>Bedrock Accounts</span>
             </div>
             <div className="flex items-center gap-1.5">
-              {stats.totalConnected > 0 && (
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title={`${stats.totalConnected} online`} />
+              {liveConnectedBots.length > 0 && (
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title={`${liveConnectedBots.length} online`} />
               )}
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
                 activeTab === 'accounts' ? 'bg-emerald-200/80 text-emerald-900' : 'bg-slate-100 text-slate-600'
@@ -780,8 +857,10 @@ export default function ChiefAdminPage() {
                   Active Bots
                 </span>
                 <span className="font-mono font-bold text-emerald-600 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  {stats.totalConnected}
+                  {liveConnectedBots.length > 0 && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  )}
+                  {liveConnectedBots.length}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -816,11 +895,11 @@ export default function ChiefAdminPage() {
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <span
-              className="px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider border flex items-center gap-1 shrink-0 bg-sky-50 text-sky-800 border-sky-200 shadow-2xs font-mono"
+              className="px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider border flex items-center gap-1 shrink-0 bg-emerald-50 text-emerald-800 border-emerald-200 shadow-2xs font-mono"
               title="Chief Administrator"
             >
-              <span>💎</span>
-              <span>DIAMOND</span>
+              <span>🛡️</span>
+              <span>ADMIN</span>
             </span>
             <Link
               href="/"
@@ -854,7 +933,7 @@ export default function ChiefAdminPage() {
               {activeTab === 'stats'
                 ? 'Total Stats & Overview'
                 : activeTab === 'users'
-                ? 'Users & Ranks'
+                ? 'User Management'
                 : 'Bedrock Accounts & Connections'}
             </span>
           </div>
@@ -939,77 +1018,87 @@ export default function ChiefAdminPage() {
                   </div>
                   <div className="mt-3 flex items-baseline gap-2">
                     <span className="text-2xl font-black text-emerald-600 flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                      {stats.totalConnected}
+                      {liveConnectedBots.length > 0 && (
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                      )}
+                      {liveConnectedBots.length}
                     </span>
                     <span className="text-xs text-slate-400 font-medium">online Bedrock bots</span>
                   </div>
                 </div>
 
-                {/* Rank Breakdown */}
+                {/* Termux Daemons */}
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs hover:shadow-sm transition">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Rank Breakdown</span>
-                    <div className="w-8 h-8 rounded-xl bg-amber-50 border border-amber-100 text-amber-600 flex items-center justify-center">
-                      <Sparkles className="w-4 h-4" />
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Termux Daemons</span>
+                    <div className="w-8 h-8 rounded-xl bg-purple-50 border border-purple-100 text-purple-600 flex items-center justify-center">
+                      <Radio className="w-4 h-4" />
                     </div>
                   </div>
-                  <div className="mt-3 flex items-center gap-1.5 flex-wrap">
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-slate-100 text-slate-700">
-                      Iron: {stats.rankBreakdown?.iron || 0}
+                  <div className="mt-3 flex items-baseline gap-2">
+                    <span className="text-2xl font-black text-purple-600 flex items-center gap-1.5">
+                      {tunnels.filter((t) => t.isRecent).length}
                     </span>
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-amber-100 text-amber-800">
-                      Gold: {stats.rankBreakdown?.gold || 0}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-sky-100 text-sky-800">
-                      Dia: {stats.rankBreakdown?.diamond || 0}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 text-emerald-800">
-                      Emr: {stats.rankBreakdown?.emerald || 0}
+                    <span className="text-xs text-slate-400 font-medium">
+                      active {tunnels.filter((t) => t.isRecent).length === 1 ? 'daemon' : 'daemons'}
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* Rank Allocation & Server Distribution */}
+              {/* Daemons & Server Distribution */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* Detailed Rank Quotas & Distribution */}
+                {/* Active Termux Daemons */}
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-2xs space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">Rank Allocation</h3>
-                      <p className="text-[11px] text-slate-500">User limits & bot capacity tier breakdown</p>
+                      <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">Active Termux Daemons</h3>
+                      <p className="text-[11px] text-slate-500">Phone daemons paired and reporting heartbeats</p>
                     </div>
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-slate-100 text-slate-700 font-mono">
-                      {stats.totalUsers} TOTAL
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-purple-100 text-purple-800 font-mono">
+                      {tunnels.filter((t) => t.isRecent).length} LIVE
                     </span>
                   </div>
-                  <div className="space-y-3">
-                    {[
-                      { key: 'iron', name: 'Iron Tier', maxBots: 1, color: 'bg-slate-400', count: stats.rankBreakdown?.iron || 0 },
-                      { key: 'gold', name: 'Gold Tier', maxBots: 3, color: 'bg-amber-400', count: stats.rankBreakdown?.gold || 0 },
-                      { key: 'diamond', name: 'Diamond Tier', maxBots: 6, color: 'bg-sky-400', count: stats.rankBreakdown?.diamond || 0 },
-                      { key: 'emerald', name: 'Emerald Tier', maxBots: 10, color: 'bg-emerald-500', count: stats.rankBreakdown?.emerald || 0 },
-                    ].map((tier) => {
-                      const pct = stats.totalUsers > 0 ? Math.round((tier.count / stats.totalUsers) * 100) : 0;
-                      return (
-                        <div key={tier.key} className="space-y-1">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="font-bold text-slate-700 flex items-center gap-1.5">
-                              <span className={`w-2 h-2 rounded-full ${tier.color}`} />
-                              {tier.name}
-                              <span className="text-[10px] text-slate-400 font-normal">({tier.maxBots} bot limit)</span>
-                            </span>
-                            <span className="font-mono font-bold text-slate-900">
-                              {tier.count} <span className="text-slate-400 font-normal text-[11px]">({pct}%)</span>
-                            </span>
+                  <div className="space-y-2.5">
+                    {tunnels.length === 0 ? (
+                      <div className="text-center py-6 text-slate-400 text-xs italic">
+                        No phone daemons registered yet.
+                      </div>
+                    ) : (
+                      tunnels.map((tun) => {
+                        const isLive = tun.isRecent;
+                        const ageMin = Math.max(1, Math.round((Date.now() - tun.updatedAt) / 60000));
+                        return (
+                          <div key={tun.username} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200/80">
+                            <div className="flex items-center gap-2 truncate min-w-0">
+                              <div className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-purple-600 flex items-center justify-center font-bold text-xs shrink-0">
+                                <Smartphone className="w-3.5 h-3.5" />
+                              </div>
+                              <div className="min-w-0 truncate">
+                                <span className="text-xs font-mono font-bold text-slate-800 block truncate">
+                                  @{tun.username}
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-mono block truncate" title={tun.url}>
+                                  {tun.url || 'No tunnel URL'}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {isLive ? (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                  Live
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-500">
+                                  {ageMin}m ago
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                            <div className={`h-full ${tier.color} transition-all duration-500`} style={{ width: `${pct}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })
+                    )}
                   </div>
                 </div>
 
@@ -1021,7 +1110,7 @@ export default function ChiefAdminPage() {
                       <p className="text-[11px] text-slate-500">Configured Bedrock servers across all accounts</p>
                     </div>
                     <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 font-mono">
-                      {stats.totalConnected} ONLINE
+                      {liveConnectedBots.length} ONLINE
                     </span>
                   </div>
                   <div className="space-y-2.5">
@@ -1059,12 +1148,12 @@ export default function ChiefAdminPage() {
             </div>
           )}
 
-          {/* TAB 1: USERS & RANKS */}
+          {/* TAB 1: USERS */}
           {activeTab === 'users' && (
             <div className="space-y-4">
               {/* Controls Bar */}
               <div className="bg-white border border-slate-200 rounded-2xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xs">
-                <div className="relative w-full sm:w-80">
+                <div className="relative w-full sm:w-96">
                   <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
@@ -1111,22 +1200,6 @@ export default function ChiefAdminPage() {
                     </>
                   )}
                 </button>
-
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <Filter className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="text-xs text-slate-500 font-medium">Rank:</span>
-                  <select
-                    value={userRankFilter}
-                    onChange={(e) => setUserRankFilter(e.target.value)}
-                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 focus:outline-none focus:border-emerald-500"
-                  >
-                    <option value="all">All Ranks</option>
-                    <option value="iron">Iron (1 Bot)</option>
-                    <option value="gold">Gold (3 Bots)</option>
-                    <option value="diamond">Diamond (6 Bots)</option>
-                    <option value="emerald">Emerald (10 Bots)</option>
-                  </select>
-                </div>
               </div>
 
               {/* Users Table */}
@@ -1136,8 +1209,7 @@ export default function ChiefAdminPage() {
                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase text-[10px] tracking-wider font-bold">
                       <tr>
                         <th className="p-3.5">User</th>
-                        <th className="p-3.5">Assigned Rank</th>
-                        <th className="p-3.5">Linked Bedrock Bots</th>
+                        <th className="p-3.5">Linked Bedrock Accounts</th>
                         <th className="p-3.5">Secret Code</th>
                         <th className="p-3.5">Registered</th>
                         <th className="p-3.5 text-right">Admin Actions</th>
@@ -1146,21 +1218,19 @@ export default function ChiefAdminPage() {
                     <tbody className="divide-y divide-slate-100">
                       {loading ? (
                         <tr>
-                          <td colSpan={6} className="p-8 text-center text-slate-400">
+                          <td colSpan={5} className="p-8 text-center text-slate-400">
                             <RefreshCw className="w-5 h-5 animate-spin mx-auto text-emerald-600 mb-2" />
                             <span>Loading users from Supabase...</span>
                           </td>
                         </tr>
                       ) : filteredUsers.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="p-8 text-center text-slate-400">
+                          <td colSpan={5} className="p-8 text-center text-slate-400">
                             No users found matching your search.
                           </td>
                         </tr>
                       ) : (
                         filteredUsers.map((u) => {
-                          const rankCfg = RANKS[u.rank] || RANKS.iron;
-
                           return (
                             <tr key={u.id} className="hover:bg-slate-50/80 transition">
                               {/* User details */}
@@ -1187,28 +1257,11 @@ export default function ChiefAdminPage() {
                                 </div>
                               </td>
 
-                              {/* Rank Selector */}
-                              <td className="p-3.5">
-                                <div className="flex items-center gap-2">
-                                  <select
-                                    value={u.rank}
-                                    onChange={(e) => handleChangeRank(u.username, e.target.value as UserRank)}
-                                    className={`px-2.5 py-1 rounded-xl text-xs font-black border transition cursor-pointer shadow-2xs ${rankCfg.badgeBg} ${rankCfg.badgeText} ${rankCfg.badgeBorder}`}
-                                  >
-                                    {RANK_ORDER.map((r) => (
-                                      <option key={r} value={r}>
-                                        {RANKS[r].gemIcon} {RANKS[r].name} ({RANKS[r].maxAccounts} Max)
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-                              </td>
-
                               {/* Accounts & Active */}
                               <td className="p-3.5">
                                 <div className="flex items-center gap-2">
                                   <span className="font-bold text-slate-900">
-                                    {u.accountCount} / {rankCfg.maxAccounts}
+                                    {u.accountCount} {u.accountCount === 1 ? 'account' : 'accounts'}
                                   </span>
                                   {u.connectedCount > 0 && (
                                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1">
@@ -1309,7 +1362,7 @@ export default function ChiefAdminPage() {
                     className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 focus:outline-none focus:border-emerald-500 cursor-pointer"
                   >
                     <option value="all">All Accounts ({accounts.length})</option>
-                    <option value="online">Online Bots Only ({accounts.filter((a) => a.isConnected).length})</option>
+                    <option value="online">Online Bots Only ({liveConnectedBots.length})</option>
                     <option value="legit">Verified Legit Only ({accounts.filter((a) => a.isConnected && a.legitimacy?.status === 'legit').length})</option>
                     <option value="suspicious">Security Warnings / Leaks ({accounts.filter((a) => a.isConnected && a.legitimacy?.status !== 'legit').length})</option>
                     <option value="offline">Offline Only ({accounts.filter((a) => !a.isConnected).length})</option>
@@ -1556,7 +1609,7 @@ export default function ChiefAdminPage() {
         >
           <div className="relative">
             <Server className="w-4 h-4" />
-            {stats.totalConnected > 0 && (
+            {liveConnectedBots.length > 0 && (
               <span className="w-2 h-2 rounded-full bg-emerald-500 absolute -top-0.5 -right-0.5 animate-pulse" />
             )}
           </div>
@@ -1678,20 +1731,6 @@ export default function ChiefAdminPage() {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Initial Rank Tier</label>
-                <select
-                  value={createRank}
-                  onChange={(e) => setCreateRank(e.target.value as UserRank)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 bg-white"
-                >
-                  <option value="iron">Iron (1 Bot)</option>
-                  <option value="gold">Gold (3 Bots)</option>
-                  <option value="diamond">Diamond (6 Bots)</option>
-                  <option value="emerald">Emerald (10 Bots)</option>
-                </select>
-              </div>
-
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -1746,7 +1785,6 @@ export default function ChiefAdminPage() {
                 Cancel
               </button>
               <button
-                type="button"
                 onClick={handleConfirmDelete}
                 disabled={isDeleting}
                 className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-50"
