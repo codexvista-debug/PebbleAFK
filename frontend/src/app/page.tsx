@@ -1166,14 +1166,14 @@ export default function Home() {
       showToast('Please select at least one assigned Bedrock account.', 'error');
       return;
     }
-    // Stagger multiple bot connections by 2.5s to avoid server login rate limiting
+    // Stagger multiple bot connections by 4.5s to avoid server login rate limiting
     targetAccounts.forEach((acc, idx) => {
       if (idx === 0) {
         handleConnectAccount(acc, activeServer);
       } else {
         setTimeout(() => {
           handleConnectAccount(acc, activeServer);
-        }, idx * 2500);
+        }, idx * 4500);
       }
     });
   };
@@ -1221,9 +1221,27 @@ export default function Home() {
   const handleSendChat = (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || !activeServer) return;
+    const msg = chatInput.trim();
+
+    if (selectedChatAccountId === '__ALL__') {
+      const targetAccs = assignedAccounts.length > 0 ? assignedAccounts : accounts;
+      const onlineAccs = targetAccs.filter((acc) => {
+        const bId = `${activeServer.id}__${acc.id}`;
+        const st = botStates[bId] || botStates[acc.id];
+        return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
+      });
+      const toSend = onlineAccs.length > 0 ? onlineAccs : targetAccs;
+      toSend.forEach((acc, idx) => {
+        setTimeout(() => {
+          sendChat(`${activeServer.id}__${acc.id}`, msg);
+        }, idx * 150);
+      });
+      setChatInput('');
+      return;
+    }
+
     const chatAccountId = selectedChatAccountId || assignedAccounts[0]?.id || accounts[0]?.id;
     if (!chatAccountId) return;
-    const msg = chatInput.trim();
     sendChat(`${activeServer.id}__${chatAccountId}`, msg);
     setChatInput('');
   };
@@ -2690,26 +2708,34 @@ export default function Home() {
                     {/* SUBTAB 2: CHAT (Matching PocketAFK Image 3 Pixel-Perfect!) */}
                     {activeSubTab === 'chat' && (() => {
                       const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
-                      const selectedAccountId = targetAccounts.some((a) => a.id === selectedChatAccountId)
-                        ? selectedChatAccountId
-                        : targetAccounts[0]?.id || '';
-                      const selectedAccount = targetAccounts.find((a) => a.id === selectedAccountId) || null;
-                      const selectedBotId = `${activeServer.id}__${selectedAccountId}`;
-                      // The chat account picker selects exactly one bot. The separate
-                      // selectedAccountIds state belongs to Connect's bulk controls and
-                      // must not suppress this account's live boss bar.
-                      const selectedBossBar = selectedAccount ? bossBarsByBot[selectedBotId] : null;
+                      const isAllSelected = selectedChatAccountId === '__ALL__';
+                      const selectedAccountId = isAllSelected
+                        ? '__ALL__'
+                        : (targetAccounts.some((a) => a.id === selectedChatAccountId)
+                          ? selectedChatAccountId
+                          : targetAccounts[0]?.id || '');
+                      const selectedAccount = isAllSelected ? null : (targetAccounts.find((a) => a.id === selectedAccountId) || null);
+                      const selectedBotId = selectedAccount ? `${activeServer.id}__${selectedAccountId}` : '';
+                      const selectedBossBar = selectedAccount ? bossBarsByBot[selectedBotId] : Object.values(bossBarsByBot)[0] || null;
 
-                      const isSelectedOnline = selectedAccount ? (() => {
-                        const bId = `${activeServer.id}__${selectedAccount.id}`;
-                        const st = botStates[bId];
-                        return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
-                      })() : false;
+                      const isSelectedOnline = isAllSelected
+                        ? targetAccounts.some((acc) => {
+                            const bId = `${activeServer.id}__${acc.id}`;
+                            const st = botStates[bId] || botStates[acc.id];
+                            return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
+                          })
+                        : (selectedAccount ? (() => {
+                            const bId = `${activeServer.id}__${selectedAccount.id}`;
+                            const st = botStates[bId];
+                            return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
+                          })() : false);
 
                       // Collect chat messages
-                      let chatList: ChatMessage[] = selectedAccountId
-                        ? [...(messagesByBot[`${activeServer.id}__${selectedAccountId}`] || [])]
-                        : [];
+                      let chatList: ChatMessage[] = isAllSelected
+                        ? targetAccounts.flatMap((acc) => messagesByBot[`${activeServer.id}__${acc.id}`] || [])
+                        : (selectedAccountId
+                          ? [...(messagesByBot[`${activeServer.id}__${selectedAccountId}`] || [])]
+                          : []);
 
                       chatList.sort((a, b) => a.timestamp - b.timestamp);
 
@@ -2936,13 +2962,21 @@ export default function Home() {
                                   type="button"
                                   onClick={() => setIsChatAccountDropdownOpen(!isChatAccountDropdownOpen)}
                                   className="flex w-[58px] sm:w-auto max-w-[154px] sm:max-w-none justify-center items-center gap-1 sm:gap-1.5 px-1 sm:px-2.5 py-2 sm:py-1 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-200 text-slate-700 text-[12px] sm:text-[13px] font-bold transition cursor-pointer select-none"
-                                  disabled={!selectedAccount}
+                                  disabled={!selectedAccount && !isAllSelected}
                                   aria-expanded={isChatAccountDropdownOpen}
                                   aria-haspopup="listbox"
-                                  aria-label={`Select chat account${selectedAccount ? `, currently @${selectedAccount.ign || selectedAccount.username}` : ''}`}
-                                  title={selectedAccount ? `Chat as @${selectedAccount.ign || selectedAccount.username}` : 'Select chat account'}
+                                  aria-label={`Select chat account${isAllSelected ? ', currently All Accounts' : (selectedAccount ? `, currently @${selectedAccount.ign || selectedAccount.username}` : '')}`}
+                                  title={isAllSelected ? 'Chat as All Accounts' : (selectedAccount ? `Chat as @${selectedAccount.ign || selectedAccount.username}` : 'Select chat account')}
                                 >
-                                  {selectedAccount ? (
+                                  {isAllSelected ? (
+                                    <>
+                                      <div className="w-5 h-5 rounded-md flex items-center justify-center bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
+                                        <Users className="w-3.5 h-3.5" />
+                                      </div>
+                                      <span className="hidden max-w-[82px] sm:max-w-[150px] truncate whitespace-nowrap font-mono sm:inline">All Accounts</span>
+                                      <span className={`w-2 h-2 rounded-full shrink-0 ${isSelectedOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                    </>
+                                  ) : selectedAccount ? (
                                     <>
                                       <div className="w-5 h-5 rounded-md overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
                                         <img
@@ -2974,6 +3008,34 @@ export default function Home() {
 
                                 {isChatAccountDropdownOpen && (
                                   <div role="listbox" className="absolute bottom-full right-0 mb-2 w-64 max-h-72 overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-1.5 space-y-0.5 animate-in fade-in duration-100">
+                                    {/* All Accounts Option */}
+                                    <button
+                                      type="button"
+                                      role="option"
+                                      aria-selected={isAllSelected}
+                                      onClick={() => {
+                                        setSelectedChatAccountId('__ALL__');
+                                        setIsChatAccountDropdownOpen(false);
+                                      }}
+                                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-bold transition cursor-pointer border-b border-slate-100 mb-0.5 ${
+                                        isAllSelected ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2.5 min-w-0">
+                                        <div className="w-5 h-5 rounded-md flex items-center justify-center bg-emerald-100 text-emerald-800 border border-emerald-300 shrink-0">
+                                          <Users className="w-3.5 h-3.5" />
+                                        </div>
+                                        <span className="font-mono truncate">All Accounts</span>
+                                      </div>
+                                      <span className={`w-2 h-2 rounded-full shrink-0 ${
+                                        targetAccounts.some((a) => {
+                                          const bId = `${activeServer.id}__${a.id}`;
+                                          const st = botStates[bId] || botStates[a.id];
+                                          return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
+                                        }) ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                                      }`} />
+                                    </button>
+
                                     {targetAccounts.map((acc) => {
                                       const bId = `${activeServer.id}__${acc.id}`;
                                       const st = botStates[bId];

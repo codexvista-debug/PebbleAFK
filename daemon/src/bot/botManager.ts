@@ -80,6 +80,15 @@ export class BotManager {
       }
 
       case 'SEND_CHAT': {
+        if (msg.payload.botId === '__ALL__' || msg.payload.botId === 'all') {
+          console.log(chalk.cyan(`[BotManager] Broadcasting chat to all active bots: ${msg.payload.message}`));
+          this.getAllBots().forEach((bot, idx) => {
+            setTimeout(() => {
+              bot.sendChat(msg.payload.message);
+            }, idx * 150);
+          });
+          break;
+        }
         const bot = this.getBot(msg.payload.botId);
         if (bot) {
           bot.sendChat(msg.payload.message);

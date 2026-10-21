@@ -224,6 +224,8 @@ export class PebbleBotInstance {
   private shouldProbeVersionOnReconnect: boolean = false;
   private joinCommandTimer: NodeJS.Timeout | null = null;
   private joinCommandClient: any = null;
+  private isInSubserver: boolean = false;
+  private static lastSubserverCommandAt: number = 0;
   private lastAuthInputErrorAt: number = 0;
   private originalHost: string;
   private originalPort: number;
@@ -447,22 +449,19 @@ export class PebbleBotInstance {
 
       // Handle subserver dimension changes (e.g. transfer to /lifesteal)
       client.on('change_dimension', (packet: any) => {
-        const targetPosition = {
-          x: finiteCoordinate(packet?.position?.x, this.position.x),
-          y: finiteCoordinate(packet?.position?.y, this.position.y),
-          z: finiteCoordinate(packet?.position?.z, this.position.z),
-        };
+        const targetX = finiteCoordinate(packet?.position?.x, this.position.x);
+        const targetY = finiteCoordinate(packet?.position?.y, this.position.y);
+        const targetZ = finiteCoordinate(packet?.position?.z, this.position.z);
         const ackPosition = {
-          x: Math.floor(targetPosition.x),
-          y: Math.floor(targetPosition.y),
-          z: Math.floor(targetPosition.z),
+          x: Math.floor(targetX),
+          y: Math.floor(targetY),
+          z: Math.floor(targetZ),
         };
-        this.position = {
-          ...this.position,
-          x: Math.round(targetPosition.x * 100) / 100,
-          y: Math.round(targetPosition.y * 100) / 100,
-          z: Math.round(targetPosition.z * 100) / 100,
-        };
+        this.position.x = Math.round(targetX * 100) / 100;
+        this.position.z = Math.round(targetZ * 100) / 100;
+        if (Number.isFinite(targetY) && targetY >= -128 && targetY <= 1000) {
+          this.position.y = Math.round(targetY * 100) / 100;
+        }
         this.hasSpawnedPosition = true;
 
         console.log(chalk.cyan(`[PebbleAFK] Dimension ${packet?.dimension ?? 'change'} acknowledged for @${this.config.username}`));
@@ -479,13 +478,6 @@ export class PebbleBotInstance {
           // subsequent radius updates are responses and must not be echoed.
           client.write('request_chunk_radius', { chunk_radius: 8 });
         } catch (_) {}
-
-        // If returned to FreshSMP Hub (Dimension 0), ensure the bot automatically re-enters /lifesteal
-        const dim = packet?.dimension;
-        const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
-        if (isFreshSmp && (dim === 0 || dim === 'overworld')) {
-          this.triggerJoinCommandRetry(10000);
-        }
       });
 
       client.on('respawn', (packet: any) => {
@@ -835,19 +827,34 @@ export class PebbleBotInstance {
       this.joinCommandTimer = null;
     }
 
+    // If already in Lifesteal / AFK zone, do not trigger transfer command
+    if (this.isInSubserver) return;
+
     const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
     const configuredCommand = this.config.settings?.joinCommand?.trim().slice(0, 256) || (isFreshSmp ? '/lifesteal' : '');
     if (!configuredCommand) return;
 
     const command = configuredCommand.startsWith('/') ? configuredCommand : `/${configuredCommand}`;
     const minDelay = command.toLowerCase().includes('lifesteal') ? 10000 : 3000;
-    const finalDelay = Math.max(delayMs, minDelay);
+    let finalDelay = Math.max(delayMs, minDelay);
+
+    // Stagger subserver transfer commands across bots so multiple bots never collide in FreshSMP queue
+    if (command.toLowerCase().includes('lifesteal')) {
+      const now = Date.now();
+      const timeSinceLast = now - PebbleBotInstance.lastSubserverCommandAt;
+      const minSeparation = 8000;
+      if (timeSinceLast < minSeparation) {
+        finalDelay += (minSeparation - timeSinceLast);
+      }
+      PebbleBotInstance.lastSubserverCommandAt = now + finalDelay;
+    }
 
     console.log(chalk.cyan(`[PebbleAFK] Scheduling join/transfer command for @${this.config.username} (${command}) in ${Math.round(finalDelay / 1000)}s...`));
     this.logActivity('status', `Join/transfer command (${command}) scheduled in ${Math.round(finalDelay / 1000)}s.`);
 
     this.joinCommandTimer = setTimeout(() => {
       this.joinCommandTimer = null;
+      if (this.isInSubserver) return;
       if (this.state === 'SPAWNED' || this.state === 'LOGGED_IN') {
         console.log(chalk.cyan(`[PebbleAFK] Running join/transfer command for @${this.config.username}: ${command}`));
         this.logActivity('command', `Running join command: ${command}`);
@@ -1037,6 +1044,9 @@ export class PebbleBotInstance {
     const afkBar = Array.from(this.bossBars.values())
       .filter((bar) => /\b(?:afk|reward)\b/i.test(stripMinecraftFormatting(bar.title)))
       .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (afkBar) {
+      this.isInSubserver = true;
+    }
     const next: BossBarPayload | null = afkBar
       ? {
           botId: this.config.id,
@@ -1212,12 +1222,20 @@ export class PebbleBotInstance {
       (/\blifesteal\b/i.test(cleanText) && /\btimed\s*out\b|\btimeout\b/i.test(cleanText));
 
     if (isLifestealTimeout) {
+      this.isInSubserver = false;
       console.log(chalk.yellow(`[PebbleAFK] FreshSMP queue notice for @${this.config.username}: "${cleanText}". (Subserver queue timed out; rejoining /lifesteal in 8s)...`));
       this.logActivity(
         'warning',
         `FreshSMP queue notice from ${cleanSender}: "${cleanText}". (Subserver transfer queue timed out; automatically rejoining /lifesteal in 8s).`
       );
       this.triggerJoinCommandRetry(8000);
+    }
+
+    if (/entered the AFK zone/i.test(cleanText)) {
+      this.isInSubserver = true;
+    }
+    if (/welcome\s+_\S+\s+to\s+play\.freshsmp\.fun/i.test(cleanText)) {
+      this.isInSubserver = false;
     }
     if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk') || isLifestealTimeout) {
       this.lastServerNotice = isLifestealTimeout ? `${cleanSender}: ${cleanText}` : cleanText;
