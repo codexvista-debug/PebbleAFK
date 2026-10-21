@@ -1296,6 +1296,9 @@ export class PebbleBotInstance {
       this.reconnectFailureCount++;
       delay = Math.max(baseDelay, Math.min(baseDelay * (2 ** Math.min(this.reconnectFailureCount - 1, 4)), 60_000));
     }
+    // Add jitter so multiple concurrent bots stagger connection handshakes and avoid gateway rate-limiting
+    const jitter = Math.floor(Math.random() * 3000);
+    delay += jitter;
     const reconnectDescription = isLoginThrottled
       ? `FreshSMP login rate limit; backing off for ${Math.ceil(delay / 1000)}s`
       : `Reconnecting in ${Math.ceil(delay / 1000)}s`;

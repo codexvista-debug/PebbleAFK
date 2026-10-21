@@ -26,12 +26,19 @@ export class BotManager {
   }
 
   public startBot(config: BotConfig): PebbleBotInstance {
-    let instance = this.bots.get(config.id);
-    if (instance) {
-      instance.stop();
+    const cleanUser = (config.username || '').toLowerCase().trim();
+
+    // 1. Ensure any existing bot with the same ID OR the same Minecraft username is terminated first
+    for (const [bId, existing] of Array.from(this.bots.entries())) {
+      const existingUser = (existing.config?.username || '').toLowerCase().trim();
+      if (bId === config.id || (cleanUser && existingUser === cleanUser)) {
+        console.log(chalk.yellow(`[BotManager] Stopping existing instance of ${existing.config.username} (${bId}) before starting new session`));
+        existing.stop();
+        this.bots.delete(bId);
+      }
     }
 
-    instance = new PebbleBotInstance(config, (msg) => this.broadcastFn(msg));
+    const instance = new PebbleBotInstance(config, (msg) => this.broadcastFn(msg));
     this.bots.set(config.id, instance);
     instance.start();
     return instance;
