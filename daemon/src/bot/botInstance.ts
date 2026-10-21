@@ -414,20 +414,23 @@ export class PebbleBotInstance {
 
       // Start Game packet: captures spawn coordinates & world info, and confirms chunk radius
       client.on('start_game', (packet: any) => {
-        if (packet?.runtime_entity_id !== undefined) {
-          this.runtimeEntityId = BigInt(packet.runtime_entity_id);
-          client.entityId = this.runtimeEntityId;
-        }
-        if (packet?.player_position) {
-          this.position = {
-            x: Math.round(packet.player_position.x * 100) / 100,
-            y: Math.round(packet.player_position.y * 100) / 100,
-            z: Math.round(packet.player_position.z * 100) / 100,
-            yaw: Math.round((packet.rotation?.z ?? 0) * 10) / 10,
-            pitch: Math.round((packet.rotation?.x ?? 0) * 10) / 10,
-          };
-          this.hasSpawnedPosition = true;
-          this.emitTelemetry();
+        try {
+          if (packet?.runtime_entity_id !== undefined) {
+            this.runtimeEntityId = BigInt(packet.runtime_entity_id);
+          }
+          if (packet?.player_position) {
+            this.position = {
+              x: Math.round(packet.player_position.x * 100) / 100,
+              y: Math.round(packet.player_position.y * 100) / 100,
+              z: Math.round(packet.player_position.z * 100) / 100,
+              yaw: Math.round((packet.rotation?.z ?? 0) * 10) / 10,
+              pitch: Math.round((packet.rotation?.x ?? 0) * 10) / 10,
+            };
+            this.hasSpawnedPosition = true;
+            this.emitTelemetry();
+          }
+        } catch (err: any) {
+          console.error(chalk.red(`[PebbleAFK] start_game packet handling error: ${err?.message}`));
         }
       });
 
@@ -466,7 +469,7 @@ export class PebbleBotInstance {
         this.logActivity('status', `🔄 Dimension change acknowledged at ${ackPosition.x}, ${ackPosition.y}, ${ackPosition.z}`);
         try {
           client.write('player_action', {
-            runtime_entity_id: client.entityId || 1n,
+            runtime_entity_id: this.runtimeEntityId || (client as any)?.entityId || 1n,
             action: 'dimension_change_ack',
             position: ackPosition,
             result_position: ackPosition,
@@ -479,24 +482,23 @@ export class PebbleBotInstance {
       });
 
       client.on('respawn', (packet: any) => {
-        if (packet?.runtime_entity_id !== undefined) {
-          this.runtimeEntityId = BigInt(packet.runtime_entity_id);
-          client.entityId = this.runtimeEntityId;
-        }
-        if (packet?.position) {
-          this.position.x = Math.round(finiteCoordinate(packet.position.x, this.position.x) * 100) / 100;
-          this.position.y = Math.round(finiteCoordinate(packet.position.y, this.position.y) * 100) / 100;
-          this.position.z = Math.round(finiteCoordinate(packet.position.z, this.position.z) * 100) / 100;
-          this.hasSpawnedPosition = true;
-        }
-        const respawnPosition = {
-          x: Math.floor(this.position.x),
-          y: Math.floor(this.position.y),
-          z: Math.floor(this.position.z),
-        };
         try {
+          if (packet?.runtime_entity_id !== undefined) {
+            this.runtimeEntityId = BigInt(packet.runtime_entity_id);
+          }
+          if (packet?.position) {
+            this.position.x = Math.round(finiteCoordinate(packet.position.x, this.position.x) * 100) / 100;
+            this.position.y = Math.round(finiteCoordinate(packet.position.y, this.position.y) * 100) / 100;
+            this.position.z = Math.round(finiteCoordinate(packet.position.z, this.position.z) * 100) / 100;
+            this.hasSpawnedPosition = true;
+          }
+          const respawnPosition = {
+            x: Math.floor(this.position.x),
+            y: Math.floor(this.position.y),
+            z: Math.floor(this.position.z),
+          };
           client.write('player_action', {
-            runtime_entity_id: client.entityId || 1n,
+            runtime_entity_id: this.runtimeEntityId || (client as any)?.entityId || 1n,
             action: 'respawn',
             position: respawnPosition,
             result_position: respawnPosition,
@@ -772,7 +774,7 @@ export class PebbleBotInstance {
               type: 'player',
               uuid,
               request_id: '',
-              player_entity_id: this.client.entityId || 0n,
+              player_entity_id: this.runtimeEntityId || (this.client as any)?.entityId || 0n,
             },
             internal: false,
             version: this.client.versionGreaterThanOrEqualTo('1.26.0') ? 'latest' : '',
@@ -922,7 +924,7 @@ export class PebbleBotInstance {
         // Bedrock animate swing (arm swing is standard anti-AFK recognized by servers)
         this.client.write('animate', {
           action_id: 1, // Swing arm
-          runtime_entity_id: this.client.entityId || 1n,
+          runtime_entity_id: this.runtimeEntityId || (this.client as any)?.entityId || 1n,
         });
 
         // The regular per-tick input loop sends this updated yaw on its next tick.
@@ -1087,15 +1089,28 @@ export class PebbleBotInstance {
 
   private handleBedrockText(packet: any) {
     if (!packet) return;
+    try {
+      let rawMsg = packet.message || packet.text || '';
+      let sender = packet.source_name || packet.sender || '';
+      let isSystem = false;
 
-    let rawMsg = packet.message || '';
-    let sender = packet.source_name || '';
-    let isSystem = false;
+      // Handle when rawMsg is an object (rawtext JSON or text object)
+      if (typeof rawMsg === 'object' && rawMsg !== null) {
+        try {
+          if (rawMsg.rawtext && Array.isArray(rawMsg.rawtext)) {
+            rawMsg = rawMsg.rawtext.map((item: any) => item.text || '').join('');
+          } else if (rawMsg.text) {
+            rawMsg = rawMsg.text + (rawMsg.extra ? rawMsg.extra.map((e: any) => e.text || '').join('') : '');
+          } else {
+            rawMsg = JSON.stringify(rawMsg);
+          }
+        } catch (_) {}
+      }
 
-    // If message is empty but parameters array has values, join them
-    if (!rawMsg && Array.isArray(packet.parameters) && packet.parameters.length > 0) {
-      rawMsg = packet.parameters.join(' ');
-    }
+      // If message is empty but parameters array has values, join them
+      if (!rawMsg && Array.isArray(packet.parameters) && packet.parameters.length > 0) {
+        rawMsg = packet.parameters.join(' ');
+      }
 
     // 1. Handle JSON / rawtext
     if (typeof rawMsg === 'string' && (rawMsg.startsWith('{') || rawMsg.startsWith('['))) {
@@ -1196,7 +1211,10 @@ export class PebbleBotInstance {
       sender: cleanSender,
       type: isSystem ? 'system' : 'chat',
     });
+  } catch (err: any) {
+    console.warn(chalk.yellow(`[PebbleAFK] handleBedrockText parse notice: ${err?.message}`));
   }
+}
 
   private handleBedrockForm(packet: any) {
     try {

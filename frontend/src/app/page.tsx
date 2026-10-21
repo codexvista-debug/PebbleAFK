@@ -85,16 +85,6 @@ export default function Home() {
   // Accounts state & unlink confirmation
   const [accounts, setAccounts] = useState<BedrockAccount[]>([]);
   const [accountFilter, setAccountFilter] = useState('');
-  const [accountNotes, setAccountNotes] = useState<Record<string, string>>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const u = localStorage.getItem('pebbleafk_current_user') || 'guest';
-        const saved = localStorage.getItem(`pebbleafk_notes_${u}`);
-        if (saved) return JSON.parse(saved);
-      } catch (e) {}
-    }
-    return {};
-  });
   const [sessionStartTimes, setSessionStartTimes] = useState<Record<string, number>>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -443,7 +433,6 @@ export default function Home() {
     clearTerminalLogs();
     setAccounts([]);
     setServers([]);
-    setAccountNotes({});
     setSessionStartTimes({});
     setActiveServerId(null);
     setSelectedAccountIds([]);
@@ -490,7 +479,6 @@ export default function Home() {
     setSecretCode('');
     setAccounts([]);
     setServers([]);
-    setAccountNotes({});
     setSessionStartTimes({});
     setActiveServerId(null);
     setSelectedAccountIds([]);
@@ -757,10 +745,9 @@ export default function Home() {
       const q = accountFilter.toLowerCase().trim();
       if (!q) return true;
       const ign = (a.ign || a.username).toLowerCase();
-      const note = (accountNotes[a.id] || (a.ign ? accountNotes[a.ign.toLowerCase()] : '') || '').toLowerCase();
-      return ign.includes(q) || note.includes(q);
+      return ign.includes(q);
     });
-  }, [accounts, profileAccountIds, accountFilter, accountNotes]);
+  }, [accounts, profileAccountIds, accountFilter]);
 
   useEffect(() => {
     const chatAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
@@ -779,28 +766,15 @@ export default function Home() {
       const q = accountFilter.toLowerCase().trim();
       if (!q) return true;
       const ign = (a.ign || a.username).toLowerCase();
-      const note = (accountNotes[a.id] || (a.ign ? accountNotes[a.ign.toLowerCase()] : '') || '').toLowerCase();
-      return ign.includes(q) || note.includes(q);
+      return ign.includes(q);
     });
-  }, [accounts, profileAccountIds, accountFilter, accountNotes]);
+  }, [accounts, profileAccountIds, accountFilter]);
 
   // Reset selection when changing active server
   useEffect(() => {
     setSelectedAccountIds([]);
   }, [activeServerId]);
 
-  // Update notes locally & in state
-  const handleUpdateNote = (accId: string, noteText: string, ign?: string) => {
-    const updated: Record<string, string> = { ...accountNotes, [accId]: noteText };
-    if (ign) {
-      updated[ign.toLowerCase()] = noteText;
-    }
-    setAccountNotes(updated);
-    if (typeof window !== 'undefined') {
-      const u = currentUser || 'guest';
-      localStorage.setItem(`pebbleafk_notes_${u}`, JSON.stringify(updated));
-    }
-  };
 
   // Human readable uptime formatting
   const formatUptime = (seconds: number): string => {
@@ -2065,10 +2039,208 @@ export default function Home() {
                           </div>
                         )}
 
-                        {/* Accounts Table for this Server Profile */}
+                        {/* Accounts List for this Server Profile (Responsive Mobile Cards + Desktop Table) */}
                         <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                          <div className="overflow-x-auto touch-pan-x">
-                            <table className="w-full text-left text-xs min-w-[680px]">
+                          {/* 1. Mobile Cards View: 100% visible in one go with zero horizontal scrolling */}
+                          <div className="block md:hidden divide-y divide-slate-100">
+                            {assignedAccounts.length === 0 ? (
+                              <div className="p-6 text-center text-slate-500 space-y-2">
+                                <p className="text-xs font-semibold">No accounts assigned to this server profile yet.</p>
+                                {availableAccounts.length > 0 && (
+                                  <p className="text-[11px] text-slate-400">Tap &ldquo;+ Add to Profile&rdquo; below on any available account.</p>
+                                )}
+                                {accounts.length === 0 && (
+                                  <button
+                                    onClick={() => handleStartMicrosoftLogin()}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition cursor-pointer shadow-xs mt-2"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" /> Link Bedrock Microsoft Account
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              assignedAccounts.map((acc) => {
+                                const botId = `${activeServer.id}__${acc.id}`;
+                                const isDaemonLive = daemonStatus === 'AUTHENTICATED';
+                                const botState = isDaemonLive ? (botStates[botId] || botStates[acc.id] || 'DISCONNECTED') : 'DISCONNECTED';
+                                const isConnected = isDaemonLive && (botState === 'SPAWNED' || botState === 'LOGGED_IN');
+                                const isConnecting = isDaemonLive && (botState === 'CONNECTING' || botState === 'RECONNECTING');
+                                const isChecked = selectedAccountIds.includes(acc.id);
+
+                                const srvStart = sessionStartTimes[botId];
+                                const localSec = srvStart ? Math.max(0, Math.floor((nowTick - srvStart) / 1000)) : 0;
+                                const srvTel = telemetries?.[botId];
+                                const daemonUptime =
+                                  srvTel && typeof srvTel.uptime === 'number' && srvTel.uptime > 0
+                                    ? srvTel.uptime
+                                    : srvTel && typeof srvTel.connectedAt === 'number' && srvTel.connectedAt > 0
+                                    ? Math.max(0, Math.floor((nowTick - srvTel.connectedAt) / 1000))
+                                    : 0;
+                                const accountUptime = (daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0;
+
+                                return (
+                                  <div
+                                    key={acc.id}
+                                    className={`p-3 space-y-2.5 transition ${isChecked ? 'bg-emerald-50/40' : 'bg-white'}`}
+                                  >
+                                    {/* Top Row: Checkbox, Avatar, Name & Badges, Pin */}
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="flex items-center gap-2.5 min-w-0">
+                                        <input
+                                          type="checkbox"
+                                          checked={isChecked}
+                                          onChange={() => handleToggleSelectAccount(acc.id)}
+                                          className="rounded bg-white border-slate-300 text-emerald-600 focus:ring-0 cursor-pointer shrink-0"
+                                        />
+                                        <div className="w-8 h-8 rounded-lg overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                          <img
+                                            src={getPlayerSkinHeadUrl(acc.ign || acc.username, 32)}
+                                            alt="Skin"
+                                            className="w-full h-full object-cover [image-rendering:pixelated]"
+                                            onError={(e) => {
+                                              const img = e.currentTarget as HTMLImageElement;
+                                              const clean = (acc.ign || acc.username || 'Steve').replace(/^@/, '').trim();
+                                              if (!img.src.includes('mc-heads')) {
+                                                img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/32`;
+                                              } else {
+                                                img.src = 'https://minotar.net/helm/MHF_Steve/32.png';
+                                              }
+                                            }}
+                                          />
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="font-bold text-slate-900 font-mono text-xs flex items-center gap-1">
+                                            <span className="truncate">@{acc.ign || acc.username}</span>
+                                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleOpenAccountLogs(acc);
+                                              }}
+                                              className="p-1 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 border border-slate-200 transition cursor-pointer shadow-2xs shrink-0"
+                                              title="View connection & audit logs"
+                                            >
+                                              <FileText className="w-3 h-3 text-slate-500 hover:text-emerald-600" />
+                                            </button>
+                                          </div>
+                                          <div className="text-[10px] text-slate-400">Bedrock Edition</div>
+                                        </div>
+                                      </div>
+
+                                      {/* Pin Action */}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleTogglePin(acc.id)}
+                                        className={`p-1.5 rounded-lg transition shrink-0 cursor-pointer ${
+                                          pinnedAccountIds.includes(acc.id)
+                                            ? 'text-amber-600 bg-amber-50'
+                                            : 'text-slate-400 hover:text-slate-700'
+                                        }`}
+                                        title={pinnedAccountIds.includes(acc.id) ? 'Unpin' : 'Pin'}
+                                      >
+                                        <Pin className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+
+                                    {/* Bottom Row: Status Badge (clickable), Uptime, Connect/Disconnect button, Remove from Profile (-) */}
+                                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 flex-wrap">
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (!activeServer) return;
+                                            if (daemonStatus !== 'AUTHENTICATED') {
+                                              showToast('Cannot toggle: Termux daemon is offline. Start daemon first.', 'error');
+                                              return;
+                                            }
+                                            if (isConnected || isConnecting) {
+                                              handleDisconnectAccount(acc, activeServer);
+                                            } else {
+                                              handleConnectAccount(acc, activeServer);
+                                            }
+                                          }}
+                                          className="inline-flex items-center cursor-pointer active:scale-95 transition"
+                                          title={isConnected ? 'Click to disconnect' : 'Click to connect'}
+                                        >
+                                          {getStatusBadge(botState as BotLifecycleState)}
+                                        </button>
+
+                                        {/* Live Uptime */}
+                                        {isConnected ? (
+                                          <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-mono text-[11px] font-bold">
+                                            <Clock className="w-3 h-3 text-emerald-600 shrink-0" />
+                                            <span>{formatUptime(accountUptime)}</span>
+                                          </div>
+                                        ) : (
+                                          <span className="text-[11px] font-mono text-slate-400 font-medium px-1">-</span>
+                                        )}
+                                      </div>
+
+                                      {/* Quick Action Buttons */}
+                                      <div className="flex items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (!activeServer) return;
+                                            if (daemonStatus !== 'AUTHENTICATED') {
+                                              showToast('Cannot toggle: Termux daemon is offline.', 'error');
+                                              return;
+                                            }
+                                            if (isConnected || isConnecting) {
+                                              handleDisconnectAccount(acc, activeServer);
+                                            } else {
+                                              handleConnectAccount(acc, activeServer);
+                                            }
+                                          }}
+                                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs active:scale-95 cursor-pointer ${
+                                            isConnected
+                                              ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
+                                              : isConnecting
+                                              ? 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200'
+                                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                          }`}
+                                        >
+                                          {isConnected ? (
+                                            <>
+                                              <Square className="w-3 h-3" />
+                                              <span>Disconnect</span>
+                                            </>
+                                          ) : isConnecting ? (
+                                            <>
+                                              <RefreshCw className="w-3 h-3 animate-spin" />
+                                              <span>Connecting</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Play className="w-3 h-3 fill-current" />
+                                              <span>Connect</span>
+                                            </>
+                                          )}
+                                        </button>
+
+                                        {/* Remove from server profile button */}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveAccountFromProfile(acc.id)}
+                                          className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 border border-slate-200 hover:border-rose-200 transition cursor-pointer shadow-2xs"
+                                          title="Remove from this server profile"
+                                          aria-label="Remove from this server profile"
+                                        >
+                                          <Minus className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+
+                          {/* 2. Desktop Table View */}
+                          <div className="hidden md:block overflow-x-auto touch-pan-x">
+                            <table className="w-full text-left text-xs min-w-[580px]">
                               <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase text-[10px] tracking-wider font-bold">
                                 <tr>
                                   <th className="p-3 w-8 text-center">
@@ -2082,14 +2254,13 @@ export default function Home() {
                                   <th className="p-3">Account Name</th>
                                   <th className="p-3">Status</th>
                                   <th className="p-3">Uptime</th>
-                                  <th className="p-3">Note</th>
                                   <th className="p-3 text-right">Actions</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-100">
                                 {assignedAccounts.length === 0 ? (
                                   <tr>
-                                    <td colSpan={6} className="p-8 text-center text-slate-500">
+                                    <td colSpan={5} className="p-8 text-center text-slate-500">
                                       <div className="space-y-2">
                                         <p className="text-xs font-semibold">No accounts assigned to this server profile yet.</p>
                                         {availableAccounts.length > 0 && (
@@ -2219,15 +2390,6 @@ export default function Home() {
                                             <span className="text-xs font-mono text-slate-400 font-medium px-2">-</span>
                                           )}
                                         </td>
-                                        <td className="p-3">
-                                          <input
-                                            type="text"
-                                            placeholder="Add Note"
-                                            value={accountNotes[acc.id] || (acc.ign ? accountNotes[acc.ign.toLowerCase()] : '') || ''}
-                                            onChange={(e) => handleUpdateNote(acc.id, e.target.value, acc.ign)}
-                                            className="w-full max-w-xs px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-emerald-500"
-                                          />
-                                        </td>
                                         <td className="p-3 text-right">
                                           <div className="flex items-center justify-end gap-1.5">
                                             <button
@@ -2271,8 +2433,57 @@ export default function Home() {
                               <span className="text-[11px] text-slate-400 font-medium">Click &ldquo;+ Add to Profile&rdquo; to assign</span>
                             </div>
                             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                              <div className="overflow-x-auto touch-pan-x">
+                              {/* Mobile Available Accounts List */}
+                              <div className="block md:hidden divide-y divide-slate-100">
+                                {availableAccounts.map((acc) => (
+                                  <div key={acc.id} className="p-3 flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <div className="w-8 h-8 rounded-lg overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
+                                        <img
+                                          src={getPlayerSkinHeadUrl(acc.ign || acc.username, 32)}
+                                          alt="Skin"
+                                          className="w-full h-full object-cover [image-rendering:pixelated]"
+                                          onError={(e) => {
+                                            const img = e.currentTarget as HTMLImageElement;
+                                            const clean = (acc.ign || acc.username || 'Steve').replace(/^@/, '').trim();
+                                            if (!img.src.includes('mc-heads')) {
+                                              img.src = `https://mc-heads.net/avatar/${encodeURIComponent(clean)}/32`;
+                                            } else {
+                                              img.src = 'https://minotar.net/helm/MHF_Steve/32.png';
+                                            }
+                                          }}
+                                        />
+                                      </div>
+                                      <div className="min-w-0">
+                                        <div className="font-bold text-slate-900 flex items-center gap-1 font-mono text-xs">
+                                          <span className="truncate">@{acc.ign || acc.username}</span>
+                                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                        </div>
+                                        <div className="text-[10px] text-slate-400">Bedrock Edition</div>
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleAddAccountToProfile(acc.id)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition cursor-pointer shadow-2xs shrink-0 active:scale-95"
+                                      title="Add to this server profile"
+                                    >
+                                      <Plus className="w-3.5 h-3.5" />
+                                      <span>Add to Profile</span>
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+
+                              {/* Desktop Available Accounts Table */}
+                              <div className="hidden md:block overflow-x-auto touch-pan-x">
                                 <table className="w-full text-left text-xs min-w-[480px]">
+                                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase text-[10px] tracking-wider font-bold">
+                                    <tr>
+                                      <th className="p-3">Account Name</th>
+                                      <th className="p-3 text-right">Actions</th>
+                                    </tr>
+                                  </thead>
                                   <tbody className="divide-y divide-slate-100">
                                     {availableAccounts.map((acc) => (
                                       <tr key={acc.id} className="hover:bg-slate-50/80 transition">
@@ -2310,15 +2521,6 @@ export default function Home() {
                                               </button>
                                             </div>
                                           </div>
-                                        </td>
-                                        <td className="p-3">
-                                          <input
-                                            type="text"
-                                            placeholder="Add Note"
-                                            value={accountNotes[acc.id] || (acc.ign ? accountNotes[acc.ign.toLowerCase()] : '') || ''}
-                                            onChange={(e) => handleUpdateNote(acc.id, e.target.value, acc.ign)}
-                                            className="w-full max-w-xs px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-emerald-500"
-                                          />
                                         </td>
                                         <td className="p-3 text-right">
                                           <button
