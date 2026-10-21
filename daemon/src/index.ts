@@ -47,6 +47,7 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 const authenticatedClients = new Set<WebSocket>();
+let shutdownRequested = false;
 
 const terminalLogs: string[] = [];
 const MAX_LOGS = 500;
@@ -193,6 +194,23 @@ wss.on('connection', (ws: WebSocket, req) => {
       // Keepalive PING / PONG
       if (parsed.type === 'PING') {
         ws.send(JSON.stringify({ type: 'PONG', payload: { timestamp: Date.now() } }));
+        return;
+      }
+
+      // A dashboard shutdown is intentionally different from a daemon restart:
+      // exit code 44 tells the Termux supervisor to stop the launcher, which
+      // then cleans up the tunnel, heartbeat, wake lock, and registration.
+      if (parsed.type === 'SHUTDOWN_DAEMON') {
+        if (shutdownRequested) return;
+        shutdownRequested = true;
+        console.warn('[Daemon] Full shutdown requested by the authenticated dashboard. Stopping all managed services...');
+        try {
+          ws.send(JSON.stringify({
+            type: 'SHUTDOWN_RESULT',
+            payload: { success: true, message: 'Full daemon shutdown started.' },
+          }));
+        } catch (_) {}
+        setTimeout(() => process.exit(44), 300);
         return;
       }
 

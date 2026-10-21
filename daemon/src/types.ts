@@ -139,6 +139,7 @@ export type ClientMessage =
   | { type: 'VERIFY_ACCOUNT'; payload: { accountId: string; email?: string } }
   | { type: 'UPDATE_DAEMON'; payload?: { reason?: string } }
   | { type: 'RESTART_DAEMON'; payload?: { reason?: string } }
+  | { type: 'SHUTDOWN_DAEMON' }
   | { type: 'GET_TERMINAL_LOGS' }
   | { type: 'PING' };
 

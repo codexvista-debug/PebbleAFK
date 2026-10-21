@@ -104,6 +104,7 @@ HEARTBEAT_PID=""
 TUNNEL_PID=""
 DAEMON_PID=""
 TUNNEL_REGISTERED=0
+TERMUX_LAUNCHER_PID="$$"
 
 # Only stop PIDs recorded by PebbleAFK and still running from this daemon
 # directory. Never sweep unrelated Node/cloudflared processes or kill every
@@ -199,6 +200,7 @@ chmod 600 .env 2>/dev/null || true
 run_daemon_loop() {
   trap - EXIT INT TERM
   export TERMUX_SUPERVISOR=1
+  export TERMUX_LAUNCHER_PID
   export PEBBLEAFK_OWNER="$APP_USER"
   export DAEMON_AUTH_TOKEN="$APP_SECRET"
   export PEBBLEAFK_INSTANCE_ID="$INSTANCE_ID"
@@ -228,6 +230,11 @@ run_daemon_loop() {
     if [ "$EXIT_CODE" -eq 43 ]; then
       echo -e "\n[$(date +%T)] ❌ Fatal port conflict: another process owns 127.0.0.1:8080. Stopping supervisor; no tunnel URL will be published." >> daemon.log
       exit 43
+    fi
+    if [ "$EXIT_CODE" -eq 44 ]; then
+      echo -e "\n[$(date +%T)] 🛑 Dashboard requested a full daemon shutdown. Stopping the Termux launcher and all managed services." >> daemon.log
+      kill -TERM "$TERMUX_LAUNCHER_PID" 2>/dev/null || true
+      exit 0
     fi
     [ "${STOPPING:-0}" = "1" ] && exit 0
     echo -e "\n[$(date +%T)] ⚠️ Daemon process exited with code ${EXIT_CODE}. Restarting in ${RESTART_DELAY}s..." >> daemon.log
@@ -286,28 +293,17 @@ if [ -z "$TUNNEL_URL" ]; then
   exit 1
 fi
 
-echo -ne "      ${YELLOW}⌛ Checking whether Cloudflare's public edge is already reachable...${NC}"
-PUBLIC_HEALTH=""
-PUBLIC_HTTP_STATUS=""
-for i in {1..3}; do
-  PUBLIC_HEALTH=$(curl -sSL --connect-timeout 2 --max-time 4 -w '\n__HTTP_STATUS__%{http_code}' "${TUNNEL_URL}/" 2>/dev/null || true)
-  PUBLIC_HTTP_STATUS=$(echo "$PUBLIC_HEALTH" | sed -n 's/^__HTTP_STATUS__//p' | tail -n 1)
-  if echo "$PUBLIC_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then break; fi
-  sleep 1
-done
-echo ""
-if echo "$PUBLIC_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
-  echo -e "      ${GREEN}✓ Public edge returned this daemon instance.${NC}"
-elif ! is_managed_pid "$TUNNEL_PID"; then
+if ! is_managed_pid "$TUNNEL_PID"; then
   echo -e "      ${RED}✗ Cloudflare tunnel exited before registration. Check tunnel.log:${NC}"
   tail -n 20 tunnel.log
   exit 1
 else
-  # A phone-side request to a newly-issued quick tunnel can be delayed or
-  # blocked independently of the tunnel's outbound connection. The local
-  # instance identity was already verified above and cloudflared targets that
-  # exact loopback listener, so do not tear down a healthy daemon on this probe.
-  echo -e "      ${YELLOW}⚠ Public self-check is inconclusive (HTTP ${PUBLIC_HTTP_STATUS:-no response}); keeping the live tunnel and allowing the dashboard to retry.${NC}"
+  # The daemon's local health/instance check already passed and cloudflared
+  # targets this exact local listener. Waiting for a phone-side HTTP request
+  # through a fresh quick tunnel can stall for tens of seconds (or fail on
+  # mobile networks), so publish the URL immediately and let the browser
+  # perform the real WebSocket connection.
+  echo -e "      ${GREEN}✓ Tunnel process is live; publishing its URL without a blocking public-edge probe.${NC}"
 fi
 
 WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')

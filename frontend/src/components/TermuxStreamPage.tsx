@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Copy, Check, Trash2, ArrowDownCircle, ArrowUp } from 'lucide-react';
+import { Terminal, Copy, Check, Trash2, ArrowDownCircle, ArrowUp, Power } from 'lucide-react';
 
 interface TermuxStreamPageProps {
   logs: string[];
@@ -10,6 +10,7 @@ interface TermuxStreamPageProps {
   onClearLogs: () => void;
   onRestartDaemon?: () => void;
   onUpdateDaemon?: () => void;
+  onShutdownDaemon?: () => boolean;
   termuxCommand?: string;
 }
 
@@ -20,8 +21,10 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
   onClearLogs,
   onRestartDaemon,
   onUpdateDaemon,
+  onShutdownDaemon,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [isShuttingDown, setIsShuttingDown] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -50,6 +53,16 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
+  };
+
+  const handleShutdown = () => {
+    if (!onShutdownDaemon || isShuttingDown || !isOnline) return;
+    const confirmed = typeof window !== 'undefined' && window.confirm(
+      'Fully shut down the Termux daemon? This will stop the Minecraft accounts, Cloudflare tunnel, and remove its active tunnel from PebbleAFK.'
+    );
+    if (!confirmed) return;
+    setIsShuttingDown(true);
+    if (!onShutdownDaemon()) setIsShuttingDown(false);
   };
 
   const formatLogLine = (line: string, idx: number) => {
@@ -149,6 +162,18 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
               >
                 <ArrowUp className="w-4 h-4 stroke-[2.5]" />
                 <span className="hidden sm:inline">Update</span>
+              </button>
+            )}
+            {onShutdownDaemon && (
+              <button
+                type="button"
+                onClick={handleShutdown}
+                disabled={!isOnline || isShuttingDown}
+                title="Fully stop the Termux daemon, tunnel, and linked dashboard registration"
+                className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs border border-rose-200 disabled:bg-slate-100 disabled:border-slate-200 disabled:text-slate-400 shadow-xs transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                <Power className="w-4 h-4" />
+                <span className="hidden sm:inline">{isShuttingDown ? 'Stopping...' : 'Shut Down'}</span>
               </button>
             )}
           </div>

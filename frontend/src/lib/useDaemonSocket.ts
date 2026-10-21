@@ -63,6 +63,8 @@ export function useDaemonSocket(
   const authenticatedAtRef = useRef<number>(0);
   const reconnectAttemptsRef = useRef<number>(0);
   const chatSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const shutdownRequestedRef = useRef(false);
+  const shutdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
@@ -93,6 +95,13 @@ export function useDaemonSocket(
     if (clean === daemonUrlRef.current.trim().replace(/\/+$/, '')) {
       return;
     }
+    if (clean) {
+      shutdownRequestedRef.current = false;
+      if (shutdownTimeoutRef.current) {
+        clearTimeout(shutdownTimeoutRef.current);
+        shutdownTimeoutRef.current = null;
+      }
+    }
     daemonUrlRef.current = clean;
     setDaemonUrlState(clean);
     if (typeof window !== 'undefined') {
@@ -118,6 +127,11 @@ export function useDaemonSocket(
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
+    shutdownRequestedRef.current = false;
+    if (shutdownTimeoutRef.current) {
+      clearTimeout(shutdownTimeoutRef.current);
+      shutdownTimeoutRef.current = null;
+    }
     const savedUrl = localStorage.getItem(`pebbleafk_daemon_url_${u}`) || '';
     const cleanSaved = (savedUrl.includes('localhost') || savedUrl.includes('127.0.0.1')) ? '' : savedUrl;
     const savedToken = localStorage.getItem(`pebbleafk_daemon_token_${u}`) || localStorage.getItem(`pebbleafk_secret_${u}`) || '';
@@ -166,6 +180,7 @@ export function useDaemonSocket(
   }, [currentUser]);
 
   const connect = useCallback((force = false) => {
+    if (shutdownRequestedRef.current) return;
     const user = currentUserRef.current;
     const url = (daemonUrlRef.current || '').trim();
 
@@ -307,6 +322,16 @@ export function useDaemonSocket(
             }
           }
 
+          if (msg.type === 'SHUTDOWN_RESULT' && msg.payload?.success) {
+            // Keep the browser from reconnecting to the now-stopped quick tunnel.
+            shutdownRequestedRef.current = true;
+            if (shutdownTimeoutRef.current) {
+              clearTimeout(shutdownTimeoutRef.current);
+              shutdownTimeoutRef.current = null;
+            }
+            setDaemonUrl('');
+          }
+
           if (msg.type === 'PONG') {
             lastPongAtRef.current = Date.now();
             if (pingStartTimeRef.current) {
@@ -443,9 +468,20 @@ export function useDaemonSocket(
           reconnectAttemptsRef.current = 0;
         }
         authenticatedAtRef.current = 0;
+        if (shutdownRequestedRef.current) {
+          if (shutdownTimeoutRef.current) {
+            clearTimeout(shutdownTimeoutRef.current);
+            shutdownTimeoutRef.current = null;
+          }
+          setDaemonUrl('');
+          return;
+        }
         reconnectAttemptsRef.current += 1;
         if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        const backoff = Math.min(1000 * (2 ** Math.min(reconnectAttemptsRef.current - 1, 5)), 30000);
+        // Quick-tunnel URLs can be registered before every Cloudflare edge is
+        // ready. Keep retries responsive so one early handshake failure cannot
+        // leave the dashboard waiting 30 seconds for the next connection.
+        const backoff = Math.min(1000 * (2 ** Math.min(reconnectAttemptsRef.current - 1, 5)), 5000);
         const delay = backoff + Math.floor(Math.random() * 750);
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectTimeoutRef.current = null;
@@ -459,9 +495,13 @@ export function useDaemonSocket(
       };
     } catch (_) {
       setStatus('DISCONNECTED');
+      if (shutdownRequestedRef.current) {
+        setDaemonUrl('');
+        return;
+      }
       reconnectAttemptsRef.current += 1;
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      const backoff = Math.min(1000 * (2 ** Math.min(reconnectAttemptsRef.current - 1, 5)), 30000);
+      const backoff = Math.min(1000 * (2 ** Math.min(reconnectAttemptsRef.current - 1, 5)), 5000);
       reconnectTimeoutRef.current = setTimeout(() => {
         reconnectTimeoutRef.current = null;
         connect(false);
@@ -541,6 +581,27 @@ export function useDaemonSocket(
     return send({ type: 'UPDATE_DAEMON' });
   }, [send]);
 
+  const shutdownDaemon = useCallback(() => {
+    if (status !== 'AUTHENTICATED' || shutdownRequestedRef.current) return false;
+    const accepted = send({ type: 'SHUTDOWN_DAEMON' });
+    if (!accepted) return false;
+    shutdownRequestedRef.current = true;
+    setBotStates({});
+    // Fail closed if the server cannot acknowledge the request: don't reconnect
+    // repeatedly to a tunnel the user explicitly asked us to stop.
+    shutdownTimeoutRef.current = setTimeout(() => {
+      shutdownTimeoutRef.current = null;
+      setDaemonUrl('');
+      const socket = socketRef.current;
+      if (socket) {
+        safeClose(socket);
+        socketRef.current = null;
+      }
+      setStatus('DISCONNECTED');
+    }, 5000);
+    return true;
+  }, [send, setDaemonUrl, status]);
+
   const clearChat = useCallback((botId?: string) => {
     setMessagesByBot((prev) => {
       const next = { ...prev };
@@ -614,6 +675,7 @@ export function useDaemonSocket(
     reconnect: connect,
     restartDaemon,
     updateDaemon,
+    shutdownDaemon,
     clearChat,
     terminalLogs,
     fetchTerminalLogs,

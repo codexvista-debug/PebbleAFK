@@ -370,6 +370,7 @@ export default function Home() {
     activityLogs,
     restartDaemon,
     updateDaemon,
+    shutdownDaemon,
     verifyAccount,
     msAuthData,
     setMsAuthData,
@@ -559,12 +560,12 @@ export default function Home() {
     };
 
     checkTunnel();
-    const interval = setInterval(checkTunnel, 8000);
+    const interval = setInterval(checkTunnel, daemonStatus === 'AUTHENTICATED' ? 8000 : 2000);
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [currentUser, secretCode, setDaemonUrl, setAuthToken]);
+  }, [currentUser, daemonStatus, secretCode, setDaemonUrl, setAuthToken]);
 
   // Stream Termux logs when user is on the Termux Stream page (live lines arrive via push)
   useEffect(() => {
@@ -1899,6 +1900,7 @@ export default function Home() {
                 onClearLogs={clearTerminalLogs}
                 onRestartDaemon={restartDaemon}
                 onUpdateDaemon={updateDaemon}
+                onShutdownDaemon={shutdownDaemon}
                 termuxCommand={termux1ClickCmd}
               />
             )}
@@ -2930,6 +2932,7 @@ export default function Home() {
         termuxCommand={termux1ClickCmd}
         onRestartDaemon={restartDaemon}
         onUpdateDaemon={updateDaemon}
+        onShutdownDaemon={shutdownDaemon}
         isDaemonOnline={daemonStatus === 'AUTHENTICATED'}
       />
 
