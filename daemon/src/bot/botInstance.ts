@@ -650,6 +650,35 @@ export class PebbleBotInstance {
     this.logActivity('disconnect', 'Bot stopped.');
   }
 
+  private writeChatPacket(client: any, message: string) {
+    const packet = {
+      category: 'authored',
+      type: 'chat',
+      needs_translation: false,
+      source_name: client.username || this.config.username,
+      message,
+      xuid: '',
+      platform_chat_id: '',
+      has_filtered_message: false,
+    };
+
+    // Stable 1.26.40-1.26.51 uses a category-specific TextPacket type enum
+    // (authored chat = 0). The current minecraft-data schema selects the
+    // authored body correctly but writes the pre-change global chat value (1),
+    // which makes servers parse the packet as the wrong message type.
+    if (client.versionGreaterThanOrEqualTo('1.26.40') && client.versionLessThanOrEqualTo('1.26.51')) {
+      const encoded = client.serializer.createPacketBuffer({ name: 'text', params: packet });
+      if (encoded[0] !== 0x09 || encoded[2] !== 1) {
+        throw new Error('Unexpected Bedrock TextPacket layout for stable 1.26.x');
+      }
+      encoded[3] = 0;
+      client.sendBuffer(encoded, true);
+      return;
+    }
+
+    client.write('text', packet);
+  }
+
   public sendChat(message: string) {
     if (!this.client || (this.state !== 'LOGGED_IN' && this.state !== 'SPAWNED')) {
       console.log(chalk.yellow(`[PebbleAFK] Cannot send chat: bot is not connected`));
@@ -667,37 +696,21 @@ export class PebbleBotInstance {
             origin: {
               type: 'player',
               uuid,
-              request_id: uuid,
+              request_id: '',
               player_entity_id: this.client.entityId || 0n,
             },
             internal: false,
-            version: '',
+            version: this.client.versionGreaterThanOrEqualTo('1.26.0') ? 'latest' : '',
           });
         } catch (err: any) {
           console.warn(chalk.yellow(`[PebbleAFK] command_request notice: ${err?.message}`));
+          // Some older proxies only inspect chat packets for commands. Use that
+          // compatibility path only if the Bedrock command packet could not be serialized.
+          this.writeChatPacket(this.client, message);
         }
-
-        // Also send as chat packet for Geyser / Bungee / Velocity proxies that parse chat slash commands
-        try {
-          this.client.write('text', {
-            type: 'chat',
-            needs_translation: false,
-            source_name: this.client.username || this.config.username,
-            message,
-            xuid: '',
-            platform_chat_id: '',
-          });
-        } catch (_) {}
       } else {
         // Send as regular chat
-        this.client.write('text', {
-          type: 'chat',
-          needs_translation: false,
-          source_name: this.client.username || this.config.username,
-          message,
-          xuid: '',
-          platform_chat_id: '',
-        });
+        this.writeChatPacket(this.client, message);
       }
       this.pushChat({
         botId: this.config.id,
