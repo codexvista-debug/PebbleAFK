@@ -397,53 +397,73 @@ export class PebbleBotInstance {
           this.hasSpawnedPosition = true;
           this.emitTelemetry();
         }
-        try {
-          client.write('request_chunk_radius', { chunk_radius: 8 });
-        } catch (_) {}
       });
 
-      // Confirm chunk loading so server knows client finished downloading terrain
-      client.on('network_chunk_publisher_update', (packet: any) => {
-        try {
-          client.write('request_chunk_radius', { chunk_radius: 8 });
-        } catch (_) {}
-      });
-
-      client.on('chunk_radius_update', (packet: any) => {
-        try {
-          client.write('request_chunk_radius', { chunk_radius: packet.chunk_radius || 8 });
-        } catch (_) {}
-      });
+      // bedrock-protocol requests the initial chunk radius after resource-pack
+      // negotiation. Do not echo chunk_radius_update/network_chunk_publisher_update
+      // with another request_chunk_radius: servers reply to that request and the
+      // echo creates a request/update loop that can overwhelm proxy subservers.
+      const finiteCoordinate = (value: unknown, fallback: number) => {
+        const coordinate = Number(value);
+        return value !== null && value !== undefined && Number.isFinite(coordinate)
+          ? coordinate
+          : fallback;
+      };
 
       // Handle subserver dimension changes (e.g. transfer to /lifesteal)
       client.on('change_dimension', (packet: any) => {
-        console.log(chalk.cyan(`[PebbleAFK] Dimension change acknowledged for @${this.config.username}`));
-        this.logActivity('status', `🔄 Dimension change acknowledged (moving to subserver)`);
+        const targetPosition = {
+          x: finiteCoordinate(packet?.position?.x, this.position.x),
+          y: finiteCoordinate(packet?.position?.y, this.position.y),
+          z: finiteCoordinate(packet?.position?.z, this.position.z),
+        };
+        const ackPosition = {
+          x: Math.floor(targetPosition.x),
+          y: Math.floor(targetPosition.y),
+          z: Math.floor(targetPosition.z),
+        };
+        this.position = {
+          ...this.position,
+          x: Math.round(targetPosition.x * 100) / 100,
+          y: Math.round(targetPosition.y * 100) / 100,
+          z: Math.round(targetPosition.z * 100) / 100,
+        };
+        this.hasSpawnedPosition = true;
+
+        console.log(chalk.cyan(`[PebbleAFK] Dimension ${packet?.dimension ?? 'change'} acknowledged for @${this.config.username}`));
+        this.logActivity('status', `🔄 Dimension change acknowledged at ${ackPosition.x}, ${ackPosition.y}, ${ackPosition.z}`);
         try {
           client.write('player_action', {
             runtime_entity_id: client.entityId || 1n,
             action: 'dimension_change_ack',
-            position: { x: 0, y: 0, z: 0 },
-            result_position: { x: 0, y: 0, z: 0 },
+            position: ackPosition,
+            result_position: ackPosition,
             face: 0,
           });
+          // A dimension transition needs one radius request; the server's
+          // subsequent radius updates are responses and must not be echoed.
           client.write('request_chunk_radius', { chunk_radius: 8 });
         } catch (_) {}
       });
 
       client.on('respawn', (packet: any) => {
         if (packet?.position) {
-          this.position.x = Math.round(packet.position.x * 100) / 100;
-          this.position.y = Math.round(packet.position.y * 100) / 100;
-          this.position.z = Math.round(packet.position.z * 100) / 100;
+          this.position.x = Math.round(finiteCoordinate(packet.position.x, this.position.x) * 100) / 100;
+          this.position.y = Math.round(finiteCoordinate(packet.position.y, this.position.y) * 100) / 100;
+          this.position.z = Math.round(finiteCoordinate(packet.position.z, this.position.z) * 100) / 100;
           this.hasSpawnedPosition = true;
         }
+        const respawnPosition = {
+          x: Math.floor(this.position.x),
+          y: Math.floor(this.position.y),
+          z: Math.floor(this.position.z),
+        };
         try {
           client.write('player_action', {
             runtime_entity_id: client.entityId || 1n,
             action: 'respawn',
-            position: { x: 0, y: 0, z: 0 },
-            result_position: { x: 0, y: 0, z: 0 },
+            position: respawnPosition,
+            result_position: respawnPosition,
             face: 0,
           });
           client.write('request_chunk_radius', { chunk_radius: 8 });
