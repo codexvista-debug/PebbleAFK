@@ -138,6 +138,8 @@ export class BotManager {
               accountId: instance.config.accountId,
               version: instance.config.version,
               state: instance.state,
+              host: instance.config.host,
+              port: instance.config.port,
             },
           });
 

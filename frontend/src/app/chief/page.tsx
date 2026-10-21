@@ -70,6 +70,7 @@ interface AccountItem {
   ign: string;
   serverHost: string;
   serverPort: number;
+  serverName?: string;
   isConnected: boolean;
   connectedAt?: number;
   updatedAt?: string;
@@ -111,6 +112,8 @@ export default function ChiefAdminPage() {
   const [userSearch, setUserSearch] = useState<string>('');
   const [accountSearch, setAccountSearch] = useState<string>('');
   const [accountStatusFilter, setAccountStatusFilter] = useState<'all' | 'online' | 'offline' | 'legit' | 'suspicious'>('online');
+  const [accountUserFilter, setAccountUserFilter] = useState<string>('all');
+  const [accountSortBy, setAccountSortBy] = useState<'username-asc' | 'username-desc' | 'online-first' | 'uptime' | 'recent'>('username-asc');
 
   // System Config States
   const [isRegistrationsPaused, setIsRegistrationsPaused] = useState<boolean>(false);
@@ -578,9 +581,31 @@ export default function ChiefAdminPage() {
     return accounts.filter((a) => a.isConnected);
   }, [accounts]);
 
-  // Filtered Accounts
+  // Unique Users List for Filtering
+  const uniqueUsers = useMemo(() => {
+    const set = new Set<string>();
+    accounts.forEach((a) => {
+      if (a.owner) set.add(a.owner.toLowerCase().trim());
+    });
+    return Array.from(set).sort();
+  }, [accounts]);
+
+  // Filtered and Sorted Accounts (with deduplication)
   const filteredAccounts = useMemo(() => {
-    return accounts
+    // Deduplicate by owner + cleanIgn so duplicate DB rows never show twice
+    const dedupeMap = new Map<string, AccountItem>();
+    accounts.forEach((a) => {
+      const cleanIgn = a.ign.replace(/^@/, '').trim().toLowerCase();
+      const key = `${a.owner.toLowerCase().trim()}::${cleanIgn}`;
+      const existing = dedupeMap.get(key);
+      if (!existing) {
+        dedupeMap.set(key, a);
+      } else if (!existing.isConnected && a.isConnected) {
+        dedupeMap.set(key, a);
+      }
+    });
+
+    return Array.from(dedupeMap.values())
       .filter((a) => {
         const q = accountSearch.toLowerCase().trim();
         const matchSearch =
@@ -588,6 +613,7 @@ export default function ChiefAdminPage() {
           a.ign.toLowerCase().includes(q) ||
           a.owner.toLowerCase().includes(q) ||
           a.serverHost.toLowerCase().includes(q) ||
+          (a.serverName && a.serverName.toLowerCase().includes(q)) ||
           (a.daemonUrl && a.daemonUrl.toLowerCase().includes(q)) ||
           (a.registeredTunnel && a.registeredTunnel.toLowerCase().includes(q)) ||
           (a.legitimacy?.badge && a.legitimacy.badge.toLowerCase().includes(q));
@@ -603,18 +629,130 @@ export default function ChiefAdminPage() {
           matchStatus = a.isConnected && a.legitimacy?.status !== 'legit';
         }
 
-        return matchSearch && matchStatus;
+        let matchUser = true;
+        if (accountUserFilter !== 'all') {
+          matchUser = a.owner.toLowerCase().trim() === accountUserFilter.toLowerCase().trim();
+        }
+
+        return matchSearch && matchStatus && matchUser;
       })
       .sort((a, b) => {
+        if (accountSortBy === 'username-asc') {
+          return a.ign.localeCompare(b.ign);
+        }
+        if (accountSortBy === 'username-desc') {
+          return b.ign.localeCompare(a.ign);
+        }
+        if (accountSortBy === 'uptime') {
+          const aUptime = a.isConnected && a.connectedAt ? nowTick - a.connectedAt : 0;
+          const bUptime = b.isConnected && b.connectedAt ? nowTick - b.connectedAt : 0;
+          return bUptime - aUptime;
+        }
+        if (accountSortBy === 'recent') {
+          const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return bTime - aTime;
+        }
+        // 'online-first' default
         if (a.isConnected && !b.isConnected) return -1;
         if (!a.isConnected && b.isConnected) return 1;
-        const aTime = a.connectedAt || (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-        const bTime = b.connectedAt || (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-        return bTime - aTime;
+        return a.ign.localeCompare(b.ign);
       });
-  }, [accounts, accountSearch, accountStatusFilter]);
+  }, [accounts, accountSearch, accountStatusFilter, accountUserFilter, accountSortBy, nowTick]);
 
-  // Format seconds into uptime
+  // Categorize accounts first by User, then by Server
+  interface ServerGroup {
+    serverKey: string;
+    serverName: string;
+    serverHost: string;
+    serverPort: number;
+    accounts: AccountItem[];
+    connectedCount: number;
+  }
+
+  interface UserGroup {
+    owner: string;
+    totalAccounts: number;
+    connectedCount: number;
+    tunnelUrl?: string;
+    isTunnelActive?: boolean;
+    servers: ServerGroup[];
+  }
+
+  const groupedAccounts = useMemo(() => {
+    const userMap = new Map<string, Map<string, AccountItem[]>>();
+
+    filteredAccounts.forEach((acc) => {
+      const owner = acc.owner.trim();
+      let serverMap = userMap.get(owner);
+      if (!serverMap) {
+        serverMap = new Map<string, AccountItem[]>();
+        userMap.set(owner, serverMap);
+      }
+
+      const sKey = `${acc.serverHost}:${acc.serverPort}`;
+      let list = serverMap.get(sKey);
+      if (!list) {
+        list = [];
+        serverMap.set(sKey, list);
+      }
+      list.push(acc);
+    });
+
+    const groups: UserGroup[] = [];
+
+    userMap.forEach((serverMap, owner) => {
+      const userItem = users.find((u) => u.username.toLowerCase() === owner.toLowerCase());
+      const tunnel = tunnels.find((t) => t.username.toLowerCase() === owner.toLowerCase());
+      const tunnelUrl = userItem?.tunnelUrl || tunnel?.url;
+      const isTunnelActive = userItem?.isTunnelActive || (tunnel?.isRecent ?? false);
+
+      const servers: ServerGroup[] = [];
+      let userTotal = 0;
+      let userConnected = 0;
+
+      serverMap.forEach((accList, sKey) => {
+        const first = accList[0];
+        const connectedCount = accList.filter((a) => a.isConnected).length;
+        userTotal += accList.length;
+        userConnected += connectedCount;
+
+        const displayName = first?.serverName || (first?.serverHost ? `${first.serverHost}:${first.serverPort}` : 'Bedrock Server');
+
+        servers.push({
+          serverKey: sKey,
+          serverName: displayName,
+          serverHost: first?.serverHost || 'play.cubecraft.net',
+          serverPort: first?.serverPort || 19132,
+          accounts: accList,
+          connectedCount,
+        });
+      });
+
+      // Sort servers by name/host
+      servers.sort((a, b) => a.serverName.localeCompare(b.serverName));
+
+      groups.push({
+        owner,
+        totalAccounts: userTotal,
+        connectedCount: userConnected,
+        tunnelUrl,
+        isTunnelActive,
+        servers,
+      });
+    });
+
+    // Sort user groups according to accountSortBy
+    if (accountSortBy === 'username-desc') {
+      groups.sort((a, b) => b.owner.localeCompare(a.owner));
+    } else {
+      groups.sort((a, b) => a.owner.localeCompare(b.owner));
+    }
+
+    return groups;
+  }, [filteredAccounts, users, tunnels, accountSortBy]);
+
+    // Format seconds into uptime
   const formatUptime = (seconds: number): string => {
     if (!seconds || seconds <= 0) return '0s';
     const h = Math.floor(seconds / 3600);
@@ -625,7 +763,6 @@ export default function ChiefAdminPage() {
     return `${s}s`;
   };
 
-  // Host distribution for Total Stats
   const hostStats = useMemo(() => {
     const map = new Map<string, { total: number; online: number }>();
     accounts.forEach((acc) => {
@@ -1339,10 +1476,11 @@ export default function ChiefAdminPage() {
 
           {/* TAB 2: BEDROCK ACCOUNTS & LIVE CONNECTIONS */}
           {activeTab === 'accounts' && (
-            <div className="space-y-4">
-              {/* Filter Bar */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xs">
-                <div className="relative w-full sm:w-96">
+            <div className="space-y-6">
+              {/* Filter Bar with Sort, User Filter, and Status Filter */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-3 flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 shadow-2xs">
+                {/* Search Bar */}
+                <div className="relative flex-1 min-w-[240px]">
                   <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
@@ -1353,225 +1491,342 @@ export default function ChiefAdminPage() {
                   />
                 </div>
 
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <Filter className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="text-xs text-slate-500 font-medium">Filter:</span>
-                  <select
-                    value={accountStatusFilter}
-                    onChange={(e) => setAccountStatusFilter(e.target.value as any)}
-                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 focus:outline-none focus:border-emerald-500 cursor-pointer"
-                  >
-                    <option value="all">All Accounts ({accounts.length})</option>
-                    <option value="online">Online Bots Only ({liveConnectedBots.length})</option>
-                    <option value="legit">Verified Legit Only ({accounts.filter((a) => a.isConnected && a.legitimacy?.status === 'legit').length})</option>
-                    <option value="suspicious">Security Warnings / Leaks ({accounts.filter((a) => a.isConnected && a.legitimacy?.status !== 'legit').length})</option>
-                    <option value="offline">Offline Only ({accounts.filter((a) => !a.isConnected).length})</option>
-                  </select>
+                {/* Filters & Sort Controls */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Sort Filter (Circled by user) */}
+                  <div className="flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-xs text-slate-500 font-medium">Sort:</span>
+                    <select
+                      value={accountSortBy}
+                      onChange={(e) => setAccountSortBy(e.target.value as any)}
+                      className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                    >
+                      <option value="username-asc">Username (A → Z)</option>
+                      <option value="username-desc">Username (Z → A)</option>
+                      <option value="online-first">Status (Online First)</option>
+                      <option value="uptime">Uptime (Longest First)</option>
+                      <option value="recent">Recently Added</option>
+                    </select>
+                  </div>
+
+                  {/* User Filter */}
+                  <div className="flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-xs text-slate-500 font-medium">User:</span>
+                    <select
+                      value={accountUserFilter}
+                      onChange={(e) => setAccountUserFilter(e.target.value)}
+                      className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                    >
+                      <option value="all">All Users ({uniqueUsers.length})</option>
+                      {uniqueUsers.map((u) => (
+                        <option key={u} value={u}>@{u}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Status Filter */}
+                  <div className="flex items-center gap-1.5">
+                    <Filter className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-xs text-slate-500 font-medium">Filter:</span>
+                    <select
+                      value={accountStatusFilter}
+                      onChange={(e) => setAccountStatusFilter(e.target.value as any)}
+                      className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                    >
+                      <option value="all">All Accounts ({accounts.length})</option>
+                      <option value="online">Online Bots Only ({liveConnectedBots.length})</option>
+                      <option value="legit">Verified Legit Only ({accounts.filter((a) => a.isConnected && a.legitimacy?.status === 'legit').length})</option>
+                      <option value="suspicious">Security Warnings / Leaks ({accounts.filter((a) => a.isConnected && a.legitimacy?.status !== 'legit').length})</option>
+                      <option value="offline">Offline Only ({accounts.filter((a) => !a.isConnected).length})</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
-              {/* Accounts Cards Grid */}
+              {/* Accounts Categorized: First by User, Then by Server */}
               {loading ? (
                 <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center text-slate-400 shadow-xs">
                   <RefreshCw className="w-6 h-6 animate-spin mx-auto text-emerald-600 mb-2" />
                   <span className="text-xs font-medium">Loading Bedrock accounts and verifying security...</span>
                 </div>
-              ) : filteredAccounts.length === 0 ? (
+              ) : groupedAccounts.length === 0 ? (
                 <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center text-slate-400 shadow-xs text-xs">
                   No Bedrock accounts found matching your filter.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                  {filteredAccounts.map((a) => {
-                    const uptimeSec =
-                      a.isConnected && a.connectedAt
-                        ? Math.max(0, Math.floor((nowTick - a.connectedAt) / 1000))
-                        : 0;
-
-                    const displayTunnel = a.daemonUrl || a.registeredTunnel || '';
-                    const cleanIgn = a.ign.replace(/^@/, '').trim();
-                    const botChats =
-                      liveChats[a.ign.toLowerCase()] ||
-                      liveChats[cleanIgn.toLowerCase()] ||
-                      liveChats[(a.settings?.last_bot_id || '').toLowerCase()] ||
-                      [];
-
-                    return (
-                      <div
-                        key={a.id}
-                        className="bg-white border border-slate-200 rounded-3xl p-5 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-4"
-                      >
-                        {/* Top Header: Head Skin, IGN, Owner, Status & Actions */}
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-12 h-12 rounded-2xl overflow-hidden border-2 border-slate-200 bg-slate-100 shrink-0 shadow-xs flex items-center justify-center">
-                              <img
-                                src={`https://crafthead.net/helm/${encodeURIComponent(cleanIgn)}/64`}
-                                alt={a.ign}
-                                className="w-full h-full object-cover"
-                                onError={(e) => {
-                                  (e.target as HTMLElement).style.display = 'none';
-                                }}
-                              />
-                            </div>
-                            <div className="min-w-0">
-                              <h3 className="font-black text-sm text-slate-900 tracking-tight truncate" title={a.ign}>
-                                {a.ign}
-                              </h3>
-                              <div className="flex items-center gap-1.5 mt-0.5">
-                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold font-mono">
-                                  @{a.owner}
-                                </span>
-                                <span className="text-[10px] text-slate-400 font-mono">
-                                  #{a.id.substring(0, 6)}
-                                </span>
-                              </div>
-                            </div>
+                <div className="space-y-8">
+                  {groupedAccounts.map((userGroup) => (
+                    <div
+                      key={userGroup.owner}
+                      className="bg-white border border-slate-200/90 rounded-3xl p-5 sm:p-6 shadow-xs space-y-5"
+                    >
+                      {/* USER CATEGORY HEADER */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-700 font-bold shadow-2xs">
+                            <Users className="w-5 h-5" />
                           </div>
-
-                          {/* Status & Actions */}
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            {a.isConnected ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-2xs">
-                                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                                Connected
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h2 className="text-base font-black text-slate-900 tracking-tight">@{userGroup.owner}</h2>
+                              <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
+                                userGroup.connectedCount > 0
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-2xs'
+                                  : 'bg-slate-100 text-slate-500 border-slate-200'
+                              }`}>
+                                {userGroup.connectedCount} / {userGroup.totalAccounts} Online
                               </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
-                                <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                                Offline
-                              </span>
-                            )}
-
-                            {a.isConnected && (
-                              <button
-                                onClick={() => handleDisconnectAccount(a.id, a.ign)}
-                                className="p-1.5 rounded-xl border border-slate-200 hover:border-amber-300 hover:bg-amber-50 text-slate-500 hover:text-amber-700 transition cursor-pointer"
-                                title="Disconnect bot from server"
-                              >
-                                <Power className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-
-                            <button
-                              onClick={() => setDeleteTarget({ type: 'account', id: a.id, name: a.ign })}
-                              className="p-1.5 rounded-xl border border-slate-200 hover:border-rose-300 hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition cursor-pointer"
-                              title="Delete account"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            </div>
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              {userGroup.servers.length} configured server{userGroup.servers.length === 1 ? '' : 's'} &bull; {userGroup.totalAccounts} linked Bedrock account{userGroup.totalAccounts === 1 ? '' : 's'}
+                            </p>
                           </div>
                         </div>
 
-                        {/* Middle Details Box */}
-                        <div className="space-y-2.5 text-xs bg-slate-50/70 p-3.5 rounded-2xl border border-slate-200/80">
-                          {/* Server Destination */}
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-medium text-slate-500 flex items-center gap-1.5 shrink-0">
-                              <Server className="w-3.5 h-3.5 text-slate-400" />
-                              Server:
+                        {userGroup.tunnelUrl && (
+                          <div className="flex items-center gap-2 self-start sm:self-auto text-xs bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-slate-600 shadow-2xs">
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${userGroup.isTunnelActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                            <span className="font-mono text-[11px] truncate max-w-[240px]" title={userGroup.tunnelUrl}>
+                              {userGroup.tunnelUrl}
                             </span>
-                            <span className="font-mono font-bold text-slate-800 truncate text-[11px] bg-white px-2 py-0.5 rounded-md border border-slate-200">
-                              {a.serverHost}:{a.serverPort}
-                            </span>
-                          </div>
-
-                          {/* Tunnel Daemon */}
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-medium text-slate-500 flex items-center gap-1.5 shrink-0">
-                              <Globe className="w-3.5 h-3.5 text-slate-400" />
-                              Tunnel:
-                            </span>
-                            {displayTunnel ? (
-                              <div className="flex items-center gap-1 max-w-[200px] truncate bg-white px-2 py-0.5 rounded-md border border-slate-200 font-mono text-[10.5px] text-slate-700">
-                                <span className="truncate" title={displayTunnel}>
-                                  {displayTunnel}
-                                </span>
-                                <button
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(displayTunnel);
-                                    showToast('Copied tunnel URL', 'info');
-                                  }}
-                                  className="text-slate-400 hover:text-slate-700 p-0.5 shrink-0 cursor-pointer"
-                                  title="Copy tunnel URL"
-                                >
-                                  <Copy className="w-3 h-3" />
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="text-slate-400 italic text-[11px]">No tunnel registered</span>
-                            )}
-                          </div>
-
-                          {/* Security / Legitimacy & Uptime */}
-                          <div className="flex items-center justify-between pt-1 border-t border-slate-200/70">
-                            {a.legitimacy?.status === 'legit' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                                Verified Legit
-                              </span>
-                            ) : a.legitimacy?.status === 'leak' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300" title={a.legitimacy.description}>
-                                <ShieldAlert className="w-3 h-3 text-rose-600" />
-                                {a.legitimacy.badge}
-                              </span>
-                            ) : a.legitimacy?.status === 'unverified' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title={a.legitimacy.description}>
-                                <AlertTriangle className="w-3 h-3 text-amber-600" />
-                                {a.legitimacy.badge}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
-                                <Clock className="w-3 h-3 text-slate-400" />
-                                Standby
-                              </span>
-                            )}
-
-                            <div className="flex items-center gap-1 font-mono text-[11px] font-bold text-slate-600">
-                              <Clock className="w-3 h-3 text-slate-400" />
-                              {a.isConnected ? (
-                                <span className="text-emerald-700">{formatUptime(uptimeSec)}</span>
-                              ) : (
-                                <span className="text-slate-400">Offline</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Live Server Chat */}
-                        {a.isConnected && (
-                          <div className="p-3.5 rounded-2xl bg-white border border-slate-200 text-xs shadow-2xs space-y-2">
-                            <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
-                              <span className="flex items-center gap-1.5 text-[10px] font-black text-emerald-700 uppercase tracking-wider">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                Live Bedrock Chat
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-sans font-medium">
-                                last 5 msgs
-                              </span>
-                            </div>
-
-                            {botChats.length === 0 ? (
-                              <div className="text-slate-400 italic text-[11px] py-3 text-center bg-slate-50/50 rounded-xl border border-slate-200/60">
-                                Listening for server messages...
-                              </div>
-                            ) : (
-                              <div className="space-y-1 bg-slate-50/50 p-2 rounded-xl border border-slate-200/80 max-h-[170px] overflow-y-auto">
-                                {botChats.slice(-5).map((c, i) => (
-                                  <MinecraftChatMessage
-                                    key={c.id || i}
-                                    message={c}
-                                    compact={true}
-                                    showTimestamp={true}
-                                  />
-                                ))}
-                              </div>
-                            )}
                           </div>
                         )}
                       </div>
-                    );
-                  })}
+
+                      {/* SERVERS CATEGORY LIST */}
+                      <div className="space-y-6">
+                        {userGroup.servers.map((srv) => (
+                          <div key={srv.serverKey} className="space-y-3.5">
+                            {/* Server Sub-Header Banner */}
+                            <div className="flex items-center justify-between bg-slate-50/80 px-4 py-2.5 rounded-2xl border border-slate-200">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className="w-7 h-7 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-emerald-600 shadow-2xs shrink-0">
+                                  <Server className="w-4 h-4" />
+                                </div>
+                                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                  <span className="font-black text-xs text-slate-900 truncate">
+                                    {srv.serverName}
+                                  </span>
+                                  <span className="font-mono text-[11px] font-bold text-emerald-800 bg-white border border-slate-200 px-2 py-0.5 rounded-md shadow-2xs">
+                                    {srv.serverHost}:{srv.serverPort}
+                                  </span>
+                                </div>
+                              </div>
+                              <span className="text-[11px] font-bold text-slate-600 bg-white border border-slate-200 px-2.5 py-0.5 rounded-full shadow-2xs shrink-0">
+                                {srv.accounts.length} bot{srv.accounts.length === 1 ? '' : 's'} ({srv.connectedCount} online)
+                              </span>
+                            </div>
+
+                            {/* Account Cards Grid */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                              {srv.accounts.map((a) => {
+                                const uptimeSec =
+                                  a.isConnected && a.connectedAt
+                                    ? Math.max(0, Math.floor((nowTick - a.connectedAt) / 1000))
+                                    : 0;
+
+                                const displayTunnel = a.daemonUrl || a.registeredTunnel || '';
+                                const cleanIgn = a.ign.replace(/^@/, '').trim();
+                                const botChats =
+                                  liveChats[a.ign.toLowerCase()] ||
+                                  liveChats[cleanIgn.toLowerCase()] ||
+                                  liveChats[(a.settings?.last_bot_id || '').toLowerCase()] ||
+                                  [];
+
+                                return (
+                                  <div
+                                    key={a.id}
+                                    className="bg-white border border-slate-200 rounded-3xl p-5 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-4"
+                                  >
+                                    {/* Top Header: Head Skin, IGN, Owner, Status & Actions */}
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <div className="w-12 h-12 rounded-2xl overflow-hidden border-2 border-slate-200 bg-slate-100 shrink-0 shadow-xs flex items-center justify-center">
+                                          <img
+                                            src={`https://crafthead.net/helm/${encodeURIComponent(cleanIgn)}/64`}
+                                            alt={a.ign}
+                                            className="w-full h-full object-cover"
+                                            onError={(e) => {
+                                              (e.target as HTMLElement).style.display = 'none';
+                                            }}
+                                          />
+                                        </div>
+                                        <div className="min-w-0">
+                                          <h3 className="font-black text-sm text-slate-900 tracking-tight truncate" title={a.ign}>
+                                            {a.ign}
+                                          </h3>
+                                          <div className="flex items-center gap-1.5 mt-0.5">
+                                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold font-mono">
+                                              @{a.owner}
+                                            </span>
+                                            <span className="text-[10px] text-slate-400 font-mono">
+                                              #{a.id.substring(0, 6)}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Status & Actions */}
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        {a.isConnected ? (
+                                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-2xs">
+                                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                                            Connected
+                                          </span>
+                                        ) : (
+                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                                            Offline
+                                          </span>
+                                        )}
+
+                                        {a.isConnected && (
+                                          <button
+                                            onClick={() => handleDisconnectAccount(a.id, a.ign)}
+                                            className="p-1.5 rounded-xl border border-slate-200 hover:border-amber-300 hover:bg-amber-50 text-slate-500 hover:text-amber-700 transition cursor-pointer"
+                                            title="Disconnect bot from server"
+                                          >
+                                            <Power className="w-3.5 h-3.5" />
+                                          </button>
+                                        )}
+
+                                        <button
+                                          onClick={() => setDeleteTarget({ type: 'account', id: a.id, name: a.ign })}
+                                          className="p-1.5 rounded-xl border border-slate-200 hover:border-rose-300 hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition cursor-pointer"
+                                          title="Delete account"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {/* Middle Details Box */}
+                                    <div className="space-y-2.5 text-xs bg-slate-50/70 p-3.5 rounded-2xl border border-slate-200/80">
+                                      {/* Server Destination */}
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-[11px] font-medium text-slate-500 flex items-center gap-1.5 shrink-0">
+                                          <Server className="w-3.5 h-3.5 text-slate-400" />
+                                          Server:
+                                        </span>
+                                        <span
+                                          className="font-mono font-bold text-slate-800 truncate text-[11px] bg-white px-2 py-0.5 rounded-md border border-slate-200"
+                                          title={`${a.serverName ? `${a.serverName} - ` : ''}${a.serverHost}:${a.serverPort}`}
+                                        >
+                                          {a.serverName && a.serverName !== `${a.serverHost}:${a.serverPort}` ? (
+                                            <>
+                                              <span className="text-emerald-800 font-bold mr-1">{a.serverName}</span>
+                                              <span className="text-slate-500">({a.serverHost}:{a.serverPort})</span>
+                                            </>
+                                          ) : (
+                                            `${a.serverHost}:${a.serverPort}`
+                                          )}
+                                        </span>
+                                      </div>
+
+                                      {/* Tunnel Daemon */}
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-[11px] font-medium text-slate-500 flex items-center gap-1.5 shrink-0">
+                                          <Globe className="w-3.5 h-3.5 text-slate-400" />
+                                          Tunnel:
+                                        </span>
+                                        {displayTunnel ? (
+                                          <div className="flex items-center gap-1 max-w-[200px] truncate bg-white px-2 py-0.5 rounded-md border border-slate-200 font-mono text-[10.5px] text-slate-700">
+                                            <span className="truncate" title={displayTunnel}>
+                                              {displayTunnel}
+                                            </span>
+                                            <button
+                                              onClick={() => {
+                                                navigator.clipboard.writeText(displayTunnel);
+                                                showToast('Copied tunnel URL', 'info');
+                                              }}
+                                              className="text-slate-400 hover:text-slate-700 p-0.5 shrink-0 cursor-pointer"
+                                              title="Copy tunnel URL"
+                                            >
+                                              <Copy className="w-3 h-3" />
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <span className="text-slate-400 italic text-[11px]">No tunnel registered</span>
+                                        )}
+                                      </div>
+
+                                      {/* Security / Legitimacy & Uptime */}
+                                      <div className="flex items-center justify-between pt-1 border-t border-slate-200/70">
+                                        {a.legitimacy?.status === 'legit' ? (
+                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                            <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                                            Verified Legit
+                                          </span>
+                                        ) : a.legitimacy?.status === 'leak' ? (
+                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300" title={a.legitimacy.description}>
+                                            <ShieldAlert className="w-3 h-3 text-rose-600" />
+                                            {a.legitimacy.badge}
+                                          </span>
+                                        ) : a.legitimacy?.status === 'unverified' ? (
+                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title={a.legitimacy.description}>
+                                            <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                            {a.legitimacy.badge}
+                                          </span>
+                                        ) : (
+                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
+                                            <Clock className="w-3 h-3 text-slate-400" />
+                                            Standby
+                                          </span>
+                                        )}
+
+                                        <div className="flex items-center gap-1 font-mono text-[11px] font-bold text-slate-600">
+                                          <Clock className="w-3 h-3 text-slate-400" />
+                                          {a.isConnected ? (
+                                            <span className="text-emerald-700">{formatUptime(uptimeSec)}</span>
+                                          ) : (
+                                            <span className="text-slate-400">Offline</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {/* Live Server Chat */}
+                                    {a.isConnected && (
+                                      <div className="p-3.5 rounded-2xl bg-white border border-slate-200 text-xs shadow-2xs space-y-2">
+                                        <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
+                                          <span className="flex items-center gap-1.5 text-[10px] font-black text-emerald-700 uppercase tracking-wider">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                            Live Bedrock Chat
+                                          </span>
+                                          <span className="text-[10px] text-slate-400 font-sans font-medium">
+                                            last 5 msgs
+                                          </span>
+                                        </div>
+
+                                        {botChats.length === 0 ? (
+                                          <div className="text-slate-400 italic text-[11px] py-3 text-center bg-slate-50/50 rounded-xl border border-slate-200/60">
+                                            Listening for server messages...
+                                          </div>
+                                        ) : (
+                                          <div className="space-y-1 bg-slate-50/50 p-2 rounded-xl border border-slate-200/80 max-h-[170px] overflow-y-auto">
+                                            {botChats.slice(-5).map((c, i) => (
+                                              <MinecraftChatMessage
+                                                key={c.id || i}
+                                                message={c}
+                                                compact={true}
+                                                showTimestamp={true}
+                                              />
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

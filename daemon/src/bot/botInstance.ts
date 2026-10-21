@@ -1385,6 +1385,8 @@ export class PebbleBotInstance {
         reason,
         connectedAt: this.connectStartTime,
         uptime,
+        host: this.config.host,
+        port: this.config.port,
       },
     });
   }

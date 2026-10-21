@@ -867,6 +867,7 @@ export default function Home() {
       if (selectedChatAccountId) setSelectedChatAccountId('');
       return;
     }
+    if (selectedChatAccountId === '__ALL__') return;
     if (!chatAccounts.some((account) => account.id === selectedChatAccountId)) {
       setSelectedChatAccountId(chatAccounts[0].id);
     }

@@ -24,6 +24,7 @@ interface AccountItem {
   ign: string;
   serverHost: string;
   serverPort: number;
+  serverName?: string;
   isConnected: boolean;
   connectedAt?: number;
   updatedAt?: string;
@@ -48,9 +49,19 @@ interface AdminTunnelItem {
   activeBots: number;
 }
 
+interface LiveBotProbe {
+  username: string;
+  botId: string;
+  accountId?: string;
+  state: string;
+  host?: string;
+  port?: number;
+  serverId?: string;
+}
+
 // Proactively probes live phone daemons over WebSocket to detect running bots in real-time
-async function probeLiveDaemons(tunnels: Map<string, { url: string; token: string; updatedAt: number }>): Promise<Map<string, Set<string>>> {
-  const results = new Map<string, Set<string>>();
+async function probeLiveDaemons(tunnels: Map<string, { url: string; token: string; updatedAt: number }>): Promise<Map<string, Map<string, LiveBotProbe>>> {
+  const results = new Map<string, Map<string, LiveBotProbe>>();
   if (typeof WebSocket === 'undefined') return results;
 
   const probePromises: Promise<void>[] = [];
@@ -92,14 +103,23 @@ async function probeLiveDaemons(tunnels: Map<string, { url: string; token: strin
             } else if (msg.type === 'BOT_STATE') {
               const p = msg.payload;
               if (p?.state === 'SPAWNED' || p?.state === 'LOGGED_IN') {
-                let userSet = results.get(owner);
-                if (!userSet) {
-                  userSet = new Set<string>();
-                  results.set(owner, userSet);
+                let userMap = results.get(owner);
+                if (!userMap) {
+                  userMap = new Map<string, LiveBotProbe>();
+                  results.set(owner, userMap);
                 }
-                if (p.username) userSet.add(p.username.toLowerCase().trim());
-                if (p.botId) userSet.add(p.botId.toLowerCase().trim());
-                if (p.accountId) userSet.add(p.accountId.toLowerCase().trim());
+                const probeInfo: LiveBotProbe = {
+                  username: (p.username || '').toLowerCase().trim(),
+                  botId: (p.botId || '').toLowerCase().trim(),
+                  accountId: (p.accountId || '').toLowerCase().trim(),
+                  state: p.state,
+                  host: p.host,
+                  port: p.port ? Number(p.port) : undefined,
+                  serverId: p.serverId,
+                };
+                if (p.username) userMap.set(p.username.toLowerCase().trim(), probeInfo);
+                if (p.botId) userMap.set(p.botId.toLowerCase().trim(), probeInfo);
+                if (p.accountId) userMap.set(p.accountId.toLowerCase().trim(), probeInfo);
               }
             }
           } catch (_) {}
@@ -176,8 +196,19 @@ export async function GET(req: NextRequest) {
     // 4. Live probe all active daemons to detect active bots
     const liveOnlineBotsByOwner = await probeLiveDaemons(tunnelMap);
 
-    // 5. Separate metadata rows from real Bedrock accounts & determine connection state
+    // 5. Build user server profile map from __meta_servers__
+    const userServersMap = new Map<string, any[]>();
+    (allAccounts || []).forEach((row) => {
+      const lowerOwner = (row.username || '').toLowerCase().trim();
+      if (row.bot_name === '__meta_servers__' && Array.isArray(row.settings?.servers)) {
+        userServersMap.set(lowerOwner, row.settings.servers);
+      }
+    });
+
+    // 6. Separate metadata rows from real Bedrock accounts, deduplicate, and resolve accurate server
     const realAccounts: AccountItem[] = [];
+    const seenAccountKeys = new Map<string, AccountItem>();
+    const duplicateIdsToDelete: string[] = [];
 
     (allAccounts || []).forEach((row) => {
       const lowerOwner = (row.username || '').toLowerCase().trim();
@@ -188,26 +219,30 @@ export async function GET(req: NextRequest) {
         // Authoritative liveness: Phone daemon must have sent heartbeat within 300 seconds (5m)
         const isTunnelLive = Boolean(userTunnel?.url && Date.now() - userTunnel.updatedAt < 300000);
 
-        const onlineBotSet = liveOnlineBotsByOwner.get(lowerOwner);
+        const onlineBotMap = liveOnlineBotsByOwner.get(lowerOwner);
         const cleanBotName = botName.replace(/^@/, '').toLowerCase().trim();
         const rowIdStr = String(row.id).toLowerCase();
 
         // Check if detected as online by daemon probe or marked connected in DB
         let isLiveOnDaemon = false;
-        if (onlineBotSet && isTunnelLive) {
-          if (
-            onlineBotSet.has(cleanBotName) ||
-            onlineBotSet.has(botName.toLowerCase()) ||
-            onlineBotSet.has(rowIdStr) ||
-            onlineBotSet.has(`acc_${rowIdStr}`)
-          ) {
+        let matchedLiveProbe: LiveBotProbe | undefined;
+
+        if (onlineBotMap && isTunnelLive) {
+          matchedLiveProbe =
+            onlineBotMap.get(cleanBotName) ||
+            onlineBotMap.get(botName.toLowerCase()) ||
+            onlineBotMap.get(rowIdStr) ||
+            onlineBotMap.get(`acc_${rowIdStr}`);
+
+          if (matchedLiveProbe) {
             isLiveOnDaemon = true;
           } else {
             // If user has active daemon with online bots and only 1 registered account, match it
             const ownerAccounts = (allAccounts || []).filter(
               (a) => (a.username || '').toLowerCase().trim() === lowerOwner && !a.bot_name?.startsWith('__')
             );
-            if (ownerAccounts.length === 1 && onlineBotSet.size > 0) {
+            if (ownerAccounts.length === 1 && onlineBotMap.size > 0) {
+              matchedLiveProbe = Array.from(onlineBotMap.values())[0];
               isLiveOnDaemon = true;
             }
           }
@@ -217,6 +252,41 @@ export async function GET(req: NextRequest) {
         const isConnected = rawConnected && isTunnelLive;
 
         const activeDaemonUrl = (row.settings?.daemon_url || '').trim() || (isConnected ? userTunnel?.url || '' : '');
+
+        // Resolve exact server profile from __meta_servers__
+        const userServers = userServersMap.get(lowerOwner) || [];
+        let assignedServer = userServers.find((s) => {
+          const assigned = Array.isArray(s.assignedAccountIds) ? s.assignedAccountIds : [];
+          return assigned.some((id: string) => {
+            const lowerId = String(id).toLowerCase();
+            return (
+              lowerId === rowIdStr ||
+              lowerId === `acc_${rowIdStr}` ||
+              lowerId === cleanBotName ||
+              lowerId === botName.toLowerCase()
+            );
+          });
+        });
+
+        if (!assignedServer && userServers.length === 1) {
+          assignedServer = userServers[0];
+        }
+
+        const finalHost =
+          matchedLiveProbe?.host ||
+          assignedServer?.serverHost ||
+          row.server_host ||
+          'play.cubecraft.net';
+
+        const finalPort =
+          matchedLiveProbe?.port ||
+          assignedServer?.serverPort ||
+          row.server_port ||
+          19132;
+
+        const finalServerName =
+          assignedServer?.name ||
+          (matchedLiveProbe?.serverId ? matchedLiveProbe.serverId : '');
 
         let legitimacy: AccountItem['legitimacy'];
 
@@ -241,7 +311,6 @@ export async function GET(req: NextRequest) {
               isLegit: false,
             };
           } else {
-            // Check if activeDaemonUrl belongs to another user
             let foreignOwner: string | null = null;
             if (activeDaemonUrl) {
               tunnelMap.forEach((tData, tUser) => {
@@ -293,12 +362,13 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        realAccounts.push({
+        const accountItem: AccountItem = {
           id: row.id,
           owner: row.username,
           ign: botName,
-          serverHost: row.server_host || 'play.freshsmp.fun',
-          serverPort: row.server_port || 19132,
+          serverHost: finalHost,
+          serverPort: finalPort,
+          serverName: finalServerName,
           isConnected,
           connectedAt: isConnected ? (row.settings?.connected_at || Date.now()) : undefined,
           updatedAt: row.updated_at,
@@ -307,9 +377,39 @@ export async function GET(req: NextRequest) {
           daemonUrl: activeDaemonUrl,
           registeredTunnel: userTunnel?.url,
           legitimacy,
-        });
+        };
+
+        const dedupeKey = `${lowerOwner}::${cleanBotName}`;
+        const existing = seenAccountKeys.get(dedupeKey);
+        if (existing) {
+          // Keep connected or more recent account row, delete the duplicate
+          if (!existing.isConnected && accountItem.isConnected) {
+            duplicateIdsToDelete.push(existing.id);
+            seenAccountKeys.set(dedupeKey, accountItem);
+          } else {
+            duplicateIdsToDelete.push(accountItem.id);
+          }
+        } else {
+          seenAccountKeys.set(dedupeKey, accountItem);
+        }
       }
     });
+
+    realAccounts.push(...Array.from(seenAccountKeys.values()));
+
+    // Asynchronously delete duplicate account rows from Supabase
+    if (duplicateIdsToDelete.length > 0) {
+      supabase
+        .from('accounts')
+        .delete()
+        .in('id', duplicateIdsToDelete)
+        .then(
+          () => {
+            console.log("[ChiefAdmin] Cleaned up duplicate account rows from Supabase");
+          },
+          () => {}
+        );
+    }
 
     // 6. Build user summary list
     const userList: UserSummaryItem[] = (users || []).map((u) => {

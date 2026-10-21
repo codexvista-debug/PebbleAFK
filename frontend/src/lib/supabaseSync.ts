@@ -158,20 +158,36 @@ export async function syncAllToSupabase(
       const ign = (acc.ign || acc.username || '').trim();
       if (!ign || ign.includes('@') || ign.startsWith('bedrock_user_')) continue;
 
+      const assignedServer = servers.find((s) =>
+        Array.isArray(s.assignedAccountIds) &&
+        s.assignedAccountIds.some(
+          (id) => id === acc.id || id.toLowerCase() === ign.toLowerCase()
+        )
+      ) || servers[0];
+
       if (!existingBotNames.has(ign.toLowerCase())) {
-        const firstServer = servers[0];
         await supabase.from('accounts').insert([
           {
             username: cleanUser,
             bot_name: ign,
             auth_type: 'microsoft',
-            server_host: firstServer?.serverHost || 'play.cubecraft.net',
-            server_port: firstServer?.serverPort || 19132,
-            server_version: firstServer?.serverVersion || 'auto',
+            server_host: assignedServer?.serverHost || 'play.freshsmp.fun',
+            server_port: assignedServer?.serverPort || 19132,
+            server_version: assignedServer?.serverVersion || 'auto',
             settings: { ...(acc.settings || {}), avatarUrl: acc.avatarUrl },
           },
         ]);
         existingBotNames.add(ign.toLowerCase());
+      } else if (assignedServer?.serverHost) {
+        await supabase
+          .from('accounts')
+          .update({
+            server_host: assignedServer.serverHost,
+            server_port: assignedServer.serverPort,
+            server_version: assignedServer.serverVersion || 'auto',
+          })
+          .ilike('username', cleanUser)
+          .ilike('bot_name', ign);
       }
     }
   } catch (err) {
