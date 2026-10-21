@@ -154,8 +154,9 @@ else
   exit 1
 fi
 
-# 3. Start Cloudflare Tunnel (Forced HTTP/2 for rock-solid Termux/mobile stability)
+# 3. Start Cloudflare Tunnel (its origin is local to this phone; the public URL is network-independent)
 echo -e "\n${CYAN}[3/4]${NC} 🛡️  ${BOLD}Creating secure Cloudflare Tunnel (HTTP/2)...${NC}"
+echo -e "      ${GRAY}Phone-local origin: 127.0.0.1:8080 (not a Wi-Fi/mobile IP; public access uses the Cloudflare URL)${NC}"
 cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
 TUNNEL_PID=$!
 

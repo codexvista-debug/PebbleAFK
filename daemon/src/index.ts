@@ -289,14 +289,16 @@ server.on('error', (err: any) => {
   process.exit(1);
 });
 
-server.listen(PORT, '0.0.0.0', () => {
+// Cloudflare Tunnel runs locally on this phone, then exposes the secure public URL.
+// Bind the daemon only to loopback; no Wi-Fi/mobile interface address is involved.
+server.listen(PORT, '127.0.0.1', () => {
   console.log(chalk.cyan(`
   ╔═══════════════════════════════════════════════════╗
   ║                PebbleAFK Daemon                   ║
   ║         Pure Bedrock Protocol AFK Stack           ║
   ╚═══════════════════════════════════════════════════╝
   `));
-  console.log(chalk.green(`[Server] Listening on http://0.0.0.0:${PORT}`));
+  console.log(chalk.green(`[Server] Listening on phone-local http://127.0.0.1:${PORT} (Cloudflare Tunnel origin)`));
   console.log(chalk.yellow(`[Security] Auth token is ${AUTH_TOKEN ? 'ENABLED' : 'DISABLED (Open)'}`));
-  console.log(chalk.blue(`[Tunnel] Ready for Cloudflare Tunnel:\n         cloudflared tunnel --url http://localhost:${PORT}\n`));
+  console.log(chalk.blue(`[Tunnel] Ready for Cloudflare Tunnel:\n         cloudflared tunnel --url http://127.0.0.1:${PORT}\n`));
 });

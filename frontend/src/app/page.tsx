@@ -55,7 +55,7 @@ import { ServerLogo } from '@/components/ServerLogo';
 import { RelativeTime } from '@/components/RelativeTime';
 import { MinecraftText } from '@/components/MinecraftText';
 import { useDaemonSocket } from '@/lib/useDaemonSocket';
-import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType, MAX_BEDROCK_ACCOUNTS } from '@/types';
+import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType, MAX_BEDROCK_ACCOUNTS, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS } from '@/types';
 
 const getPlayerSkinHeadUrl = (name: string, size = 32) => {
   const clean = (name || 'Steve').replace(/^@/, '').trim();
@@ -690,24 +690,10 @@ export default function Home() {
   // Update specific setting (physics, resource packs, delays) on active server
   const handleUpdateServerSetting = (key: keyof BotSettings, value: any) => {
     if (!activeServer) return;
+    const isFreshSmp = /freshsmp/i.test(activeServer.name) || /(?:^|\.)freshsmp\.fun$/i.test(activeServer.serverHost);
     const updatedSettings: BotSettings = {
-      ...(activeServer.settings || {
-        physics: true,
-        acceptResourcePacks: true,
-        autoEat: false,
-        autoTotem: false,
-        antiAfk: true,
-        antiAfkInterval: 10,
-        mobFarm: false,
-        mobFarmRange: 3.5,
-        mobFarmIntervalMs: 650,
-        autoReconnect: true,
-        autoReconnectDelay: 5000,
-        joinDelay: 0,
-        joinCommandEnabled: false,
-        joinCommand: '',
-        joinCommandDelay: 3,
-      }),
+      ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
+      ...(activeServer.settings || {}),
       [key]: value,
     };
     handleUpdateActiveServer({ settings: updatedSettings });
@@ -1001,6 +987,9 @@ export default function Home() {
           if (typeStr === 'error' || (item.type === 'status' && item.message.toLowerCase().includes('error'))) {
             category = 'error';
             logType = 'error';
+          } else if (item.type === 'warning') {
+            category = 'warning';
+            logType = 'warning';
           } else if (typeStr === 'warning' || (item.type === 'status' && item.message.includes('⚠️'))) {
             category = 'warning';
             logType = 'info';

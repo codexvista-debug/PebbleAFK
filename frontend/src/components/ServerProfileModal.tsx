@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ServerProfile, BedrockAccount, BotSettings } from '../types';
+import { ServerProfile, BedrockAccount, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS } from '../types';
 import { X, Info, ChevronDown, Check } from 'lucide-react';
 import { ConfirmModal } from './ConfirmModal';
 
@@ -14,24 +14,6 @@ interface ServerProfileModalProps {
   onSaveProfile: (profile: ServerProfile) => Promise<void>;
   onDeleteProfile?: (profileId: string) => Promise<void>;
 }
-
-const DEFAULT_SETTINGS: BotSettings = {
-  physics: true,
-  acceptResourcePacks: true,
-  autoEat: false,
-  autoTotem: false,
-  antiAfk: true,
-  antiAfkInterval: 10,
-  mobFarm: false,
-  mobFarmRange: 3.5,
-  mobFarmIntervalMs: 650,
-  autoReconnect: true,
-  autoReconnectDelay: 5000,
-  joinDelay: 0,
-  joinCommandEnabled: false,
-  joinCommand: '',
-  joinCommandDelay: 3,
-};
 
 const BEDROCK_VERSIONS = [
   { label: 'Auto Detect (Recommended)', value: 'auto' },
@@ -114,6 +96,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
     if (!serverHost.trim()) return;
 
     const effectiveName = name.trim() || serverHost.trim();
+    const isFreshSmp = /freshsmp/i.test(effectiveName) || /(?:^|\.)freshsmp\.fun$/i.test(serverHost.trim());
     const effectiveAccountId = initialProfile ? (initialProfile.accountId || '') : '';
     const effectiveAssignedAccountIds = initialProfile
       ? (initialProfile.assignedAccountIds || (initialProfile.accountId ? [initialProfile.accountId] : []))
@@ -132,7 +115,9 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
         serverVersion: serverVersion || 'auto',
         authType: 'microsoft',
         autoReconnect: initialProfile?.autoReconnect ?? true,
-        settings: initialProfile?.settings || DEFAULT_SETTINGS,
+        settings: initialProfile?.settings || {
+          ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
+        },
       };
 
       await onSaveProfile(profile);

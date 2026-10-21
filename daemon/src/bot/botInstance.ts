@@ -1115,6 +1115,12 @@ export class PebbleBotInstance {
     }
 
     const isLifestealTimeout = /^lifesteal$/i.test(cleanSender) && /\btimed\s*out\b|\btimeout\b/i.test(cleanText);
+    if (isLifestealTimeout) {
+      this.logActivity(
+        'warning',
+        `Server-reported subserver timeout notice from ${cleanSender}: "${cleanText}". This arrived as in-game chat; it does not by itself confirm a Bedrock connection drop.`
+      );
+    }
     if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk') || isLifestealTimeout) {
       this.lastServerNotice = isLifestealTimeout ? `${cleanSender}: ${cleanText}` : cleanText;
       this.lastServerNoticeAt = Date.now();

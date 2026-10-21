@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabaseClient';
 import { hashPassword, generateSecretCode, USERNAME_REGEX } from '@/lib/authUtils';
+import { FRESHSMP_DEFAULT_BOT_SETTINGS } from '@/types';
 
 function createDefaultServerProfile(username: string) {
   return {
@@ -14,23 +15,7 @@ function createDefaultServerProfile(username: string) {
     serverVersion: 'auto',
     authType: 'microsoft',
     autoReconnect: true,
-    settings: {
-      physics: true,
-      acceptResourcePacks: true,
-      autoEat: false,
-      autoTotem: false,
-      antiAfk: true,
-      antiAfkInterval: 10,
-      mobFarm: false,
-      mobFarmRange: 3.5,
-      mobFarmIntervalMs: 650,
-      autoReconnect: true,
-      autoReconnectDelay: 5000,
-      joinDelay: 0,
-      joinCommandEnabled: false,
-      joinCommand: '',
-      joinCommandDelay: 3,
-    },
+    settings: { ...FRESHSMP_DEFAULT_BOT_SETTINGS },
   };
 }
 

@@ -92,7 +92,7 @@ export const AccountLogsModal: React.FC<AccountLogsModalProps> = ({
         message: act.message,
         details: undefined,
         serverHost: serverHost || '',
-        status: act.type === 'disconnect' ? 'error' : act.type === 'reconnect' ? 'warning' : 'success',
+        status: act.type === 'disconnect' ? 'error' : act.type === 'reconnect' || act.type === 'warning' ? 'warning' : 'success',
         isActivity: true,
       });
     });
@@ -103,7 +103,7 @@ export const AccountLogsModal: React.FC<AccountLogsModalProps> = ({
 
   const errorCount = useMemo(() => {
     return unifiedLogs.filter(
-      (l) => l.type === 'error' || l.type === 'kicked' || l.type === 'disconnect' || l.status === 'error'
+      (l) => l.type === 'error' || l.type === 'kicked' || l.type === 'disconnect' || l.type === 'warning' || l.status === 'error'
     ).length;
   }, [unifiedLogs]);
 
@@ -133,6 +133,7 @@ export const AccountLogsModal: React.FC<AccountLogsModalProps> = ({
             entry.type === 'error' ||
             entry.type === 'kicked' ||
             entry.type === 'disconnect' ||
+            entry.type === 'warning' ||
             entry.status === 'error'
           );
         }
@@ -236,6 +237,13 @@ export const AccountLogsModal: React.FC<AccountLogsModalProps> = ({
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
             <AlertTriangle className="w-3 h-3 text-rose-600" />
             ERROR
+          </span>
+        );
+      case 'warning':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+            <AlertTriangle className="w-3 h-3 text-amber-600" />
+            WARNING
           </span>
         );
       case 'disconnected':
@@ -440,7 +448,7 @@ export const AccountLogsModal: React.FC<AccountLogsModalProps> = ({
             filteredLogs.map((entry) => {
               const isError = entry.status === 'error' || entry.type === 'kicked' || entry.type === 'error';
               const isWarning =
-                entry.status === 'warning' || entry.type === 'reconnecting' || entry.type === 'disconnected';
+                entry.status === 'warning' || entry.type === 'warning' || entry.type === 'reconnecting' || entry.type === 'disconnected';
               const isSuccess = entry.type === 'spawned' || entry.type === 'connected';
 
               return (

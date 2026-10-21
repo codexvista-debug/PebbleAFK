@@ -120,7 +120,7 @@ export interface ActivityLog {
   id: string;
   botId: string;
   timestamp: number;
-  type: 'status' | 'connect' | 'spawn' | 'command' | 'survival' | 'anti_afk' | 'disconnect' | 'reconnect' | 'chat' | 'control';
+  type: 'status' | 'connect' | 'spawn' | 'command' | 'survival' | 'anti_afk' | 'disconnect' | 'reconnect' | 'chat' | 'control' | 'warning';
   message: string;
 }
 

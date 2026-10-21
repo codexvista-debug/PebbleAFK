@@ -16,6 +16,32 @@ export interface BotSettings {
   joinCommandDelay?: number;
 }
 
+/** Safe baseline for newly created server profiles. FreshSMP profiles enable the
+ * server-specific /lifesteal command via FRESHSMP_DEFAULT_BOT_SETTINGS below. */
+export const DEFAULT_BOT_SETTINGS: BotSettings = {
+  physics: false,
+  acceptResourcePacks: true,
+  autoEat: false,
+  autoTotem: false,
+  antiAfk: true,
+  antiAfkInterval: 10,
+  mobFarm: false,
+  mobFarmRange: 3.5,
+  mobFarmIntervalMs: 650,
+  autoReconnect: true,
+  autoReconnectDelay: 5000,
+  joinDelay: 0,
+  joinCommandEnabled: false,
+  joinCommand: '',
+  joinCommandDelay: 3,
+};
+
+export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
+  ...DEFAULT_BOT_SETTINGS,
+  joinCommandEnabled: true,
+  joinCommand: '/lifesteal',
+};
+
 export const MAX_BEDROCK_ACCOUNTS = 10;
 
 export interface BedrockAccount {
@@ -122,7 +148,7 @@ export interface ActivityLog {
   id: string;
   botId: string;
   timestamp: number;
-  type: 'status' | 'connect' | 'spawn' | 'command' | 'survival' | 'anti_afk' | 'disconnect' | 'reconnect' | 'chat' | 'control';
+  type: 'status' | 'connect' | 'spawn' | 'command' | 'survival' | 'anti_afk' | 'disconnect' | 'reconnect' | 'chat' | 'control' | 'warning';
   message: string;
 }
 
@@ -136,6 +162,7 @@ export type PlayerLogType =
   | 'disconnected'
   | 'reconnecting'
   | 'chat'
+  | 'warning'
   | 'info';
 
 export interface PlayerLogEntry {
