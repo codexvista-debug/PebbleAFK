@@ -462,6 +462,10 @@ export function useDaemonSocket(
     return send({ type: 'START_BOT', payload: config });
   }, [send]);
 
+  const updateBotSettings = useCallback((botId: string, settings: any) => {
+    return send({ type: 'UPDATE_SETTINGS', payload: { botId, settings } });
+  }, [send]);
+
   const stopBot = useCallback((botId: string) => {
     return send({ type: 'STOP_BOT', payload: { botId } });
   }, [send]);
@@ -493,6 +497,7 @@ export function useDaemonSocket(
     submitForm,
     closeForm,
     startBot,
+    updateBotSettings,
     stopBot,
   };
 }

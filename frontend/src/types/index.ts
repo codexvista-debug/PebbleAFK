@@ -11,6 +11,9 @@ export interface BotSettings {
   autoReconnect: boolean;
   autoReconnectDelay: number;
   joinDelay?: number;
+  joinCommandEnabled?: boolean;
+  joinCommand?: string;
+  joinCommandDelay?: number;
 }
 
 export const MAX_BEDROCK_ACCOUNTS = 10;

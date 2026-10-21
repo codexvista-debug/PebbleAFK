@@ -28,6 +28,9 @@ const DEFAULT_SETTINGS: BotSettings = {
   autoReconnect: true,
   autoReconnectDelay: 5000,
   joinDelay: 0,
+  joinCommandEnabled: false,
+  joinCommand: '',
+  joinCommandDelay: 3,
 };
 
 const BEDROCK_VERSIONS = [

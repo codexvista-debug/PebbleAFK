@@ -39,7 +39,6 @@ import {
   RotateCcw,
   RotateCw,
   CornerDownLeft,
-  Edit3,
   Terminal,
   ArrowUp
 } from 'lucide-react';
@@ -380,6 +379,7 @@ export default function Home() {
     fetchTerminalLogs,
     clearTerminalLogs,
     startBot,
+    updateBotSettings,
     stopBot,
   } = useDaemonSocket(currentUser, handleAccountVerified);
 
@@ -684,10 +684,19 @@ export default function Home() {
         autoReconnect: true,
         autoReconnectDelay: 5000,
         joinDelay: 0,
+        joinCommandEnabled: false,
+        joinCommand: '',
+        joinCommandDelay: 3,
       }),
       [key]: value,
     };
     handleUpdateActiveServer({ settings: updatedSettings });
+    const accountIds = Array.isArray(activeServer.assignedAccountIds)
+      ? activeServer.assignedAccountIds
+      : (activeServer.accountId ? [activeServer.accountId] : []);
+    accountIds.forEach((accountId) => {
+      updateBotSettings(`${activeServer.id}__${accountId}`, updatedSettings);
+    });
   };
 
   // Accounts assigned to current Server Profile (strictly filtered to existing accounts)
@@ -1051,13 +1060,6 @@ export default function Home() {
     if (!chatAccountId) return;
     clearChat(`${activeServer.id}__${chatAccountId}`);
     showToast('Chat history cleared', 'info');
-  };
-
-  const handleQuickCommand = (cmd: string) => {
-    if (!activeServer) return;
-    const chatAccountId = selectedChatAccountId || assignedAccounts[0]?.id || accounts[0]?.id;
-    if (!chatAccountId) return;
-    sendChat(`${activeServer.id}__${chatAccountId}`, cmd);
   };
 
   // Status dot style for daemon button
@@ -2292,18 +2294,6 @@ export default function Home() {
                         chatList = chatList.filter((m) => m.type === 'system' || m.sender === 'System' || m.sender === 'Server');
                       }
 
-                      const quickChips = [
-                        { label: '/afk', cmd: '/afk', cls: 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200' },
-                        { label: '/lifesteal', cmd: '/lifesteal', cls: 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200' },
-                        { label: '/home', cmd: '/home', cls: 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200' },
-                        { label: '/spawn', cmd: '/spawn', cls: 'bg-sky-50 hover:bg-sky-100 text-sky-800 border-sky-200' },
-                        { label: '/tpdeny', cmd: '/tpdeny', cls: 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200' },
-                        { label: '/help', cmd: '/help', cls: 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-200' },
-                        { label: '/resourcepack', cmd: '/resourcepack', cls: 'bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border-cyan-200' },
-                        { label: '/tpa/tpaccept', cmd: '/tpaccept', cls: 'bg-teal-50 hover:bg-teal-100 text-teal-800 border-teal-200' },
-                        { label: '/survival', cmd: '/survival', cls: 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-200' },
-                      ];
-
                       return (
                         <div className="w-full min-w-0 space-y-3.5">
                           {/* 2. Main Chat Box Container (Matching Image 3) */}
@@ -2351,34 +2341,6 @@ export default function Home() {
                                   <Trash2 className="w-4 h-4" />
                                 </button>
                               </div>
-                            </div>
-
-                            {/* Quick Command Chips Row */}
-                            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 px-3 sm:px-5 py-2.5 bg-slate-50/40 border-b border-slate-200/80 overflow-x-hidden text-xs">
-                              <div className="flex min-w-0 flex-1 items-center gap-1.5 flex-wrap">
-                                <span className="text-[10px] font-black text-slate-400 tracking-wider mr-1 uppercase select-none font-mono">
-                                  QUICK:
-                                </span>
-                                {quickChips.map((q) => (
-                                  <button
-                                    key={q.label}
-                                    type="button"
-                                    onClick={() => handleQuickCommand(q.cmd)}
-                                    disabled={!isSelectedOnline}
-                                    className={`px-2.5 py-1.5 rounded-lg border text-xs font-mono font-bold transition shadow-2xs active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${q.cls}`}
-                                  >
-                                    {q.label}
-                                  </button>
-                                ))}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => showToast('Tip: Click any quick command above or type your command below to send.', 'info')}
-                                className="self-end sm:self-auto p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition cursor-pointer shrink-0"
-                                title="Quick commands guide"
-                              >
-                                <Edit3 className="w-3.5 h-3.5" />
-                              </button>
                             </div>
 
                             {/* Chat Messages Stream Area (Spacious layout matching PocketAFK) */}
@@ -2450,8 +2412,6 @@ export default function Home() {
 
                                     return (
                                       <div key={m.id} className="flex items-start gap-2.5 py-1 text-[13px] hover:bg-slate-50/80 rounded-lg px-2 transition">
-                                        <RelativeTime timestamp={m.timestamp} className="text-[11px] text-slate-400 select-none pt-0.5 font-mono shrink-0" />
-
                                         {isPlayer ? (
                                           <div className="flex items-center gap-1.5 shrink-0">
                                             <div className="w-[18px] h-[18px] rounded-xs overflow-hidden border border-slate-300 bg-slate-100 shrink-0">
@@ -2479,9 +2439,12 @@ export default function Home() {
                                           </span>
                                         )}
 
-                                        <span className="text-slate-800 break-all font-mono leading-relaxed flex-1">
-                                          <MinecraftText text={effectiveMessage} />
-                                        </span>
+                                        <div className="min-w-0 flex-1 flex flex-col">
+                                          <span className="text-slate-800 break-all font-mono leading-relaxed">
+                                            <MinecraftText text={effectiveMessage} />
+                                          </span>
+                                          <RelativeTime timestamp={m.timestamp} className="mt-0.5 self-end text-[9px] leading-3 text-slate-400 select-none font-mono shrink-0" />
+                                        </div>
                                       </div>
                                     );
                                   })}
@@ -2737,6 +2700,58 @@ export default function Home() {
                                   <span
                                     className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
                                       (activeServer.settings?.joinDelay ?? 0) > 0 ? 'translate-x-5' : 'translate-x-0'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Optional command after each successful spawn */}
+                            <div className="flex flex-col gap-3 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="flex-1 pr-4">
+                                <label className="text-xs font-bold text-slate-800 block">Command on join</label>
+                                <span className="text-[11px] text-slate-400 block mt-0.5">
+                                  Optional command after spawn. Applies on the next join and repeats after reconnect; leave disabled to send nothing.
+                                </span>
+                              </div>
+                              <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
+                                <input
+                                  type="text"
+                                  value={activeServer.settings?.joinCommand ?? ''}
+                                  onChange={(e) => handleUpdateServerSetting('joinCommand', e.target.value)}
+                                  disabled={!(activeServer.settings?.joinCommandEnabled ?? false)}
+                                  placeholder="/lifesteal"
+                                  aria-label="Command to run after joining"
+                                  className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400"
+                                />
+                                <div className="flex shrink-0 items-center bg-slate-50 border border-slate-200 rounded-xl px-2 py-1" title="Delay after spawn">
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={300}
+                                    value={activeServer.settings?.joinCommandDelay ?? 3}
+                                    onChange={(e) => {
+                                      const seconds = Math.min(300, Math.max(0, parseInt(e.target.value, 10) || 0));
+                                      handleUpdateServerSetting('joinCommandDelay', seconds);
+                                    }}
+                                    className="w-8 bg-transparent text-xs font-mono font-bold text-slate-900 text-center focus:outline-none"
+                                    aria-label="Delay before running join command in seconds"
+                                  />
+                                  <span className="text-[11px] font-bold text-slate-400 select-none ml-1">sec</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  role="switch"
+                                  aria-checked={activeServer.settings?.joinCommandEnabled ?? false}
+                                  aria-label="Enable command on join"
+                                  onClick={() => handleUpdateServerSetting('joinCommandEnabled', !(activeServer.settings?.joinCommandEnabled ?? false))}
+                                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                    activeServer.settings?.joinCommandEnabled ? 'bg-emerald-600' : 'bg-slate-200'
+                                  }`}
+                                >
+                                  <span
+                                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                                      activeServer.settings?.joinCommandEnabled ? 'translate-x-5' : 'translate-x-0'
                                     }`}
                                   />
                                 </button>

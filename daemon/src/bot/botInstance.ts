@@ -211,13 +211,16 @@ export class PebbleBotInstance {
   private currentVersionCandidate: string | null = null;
   private lastAttemptedVersion: string | null = null;
   private connectionStable: boolean = false;
-  private stableConnectionTimer: NodeJS.Timeout | null = null;
+  private shouldProbeVersionOnReconnect: boolean = false;
+  private joinCommandTimer: NodeJS.Timeout | null = null;
+  private joinCommandClient: any = null;
   private lastAuthInputErrorAt: number = 0;
   private originalHost: string;
   private originalPort: number;
   private isTransferring: boolean = false;
   private hasSpawnedPosition: boolean = false;
   private lastServerNotice: string = '';
+  private lastServerNoticeAt: number = 0;
   private lastDisconnectReason: string = '';
 
   // Telemetry cache
@@ -243,6 +246,7 @@ export class PebbleBotInstance {
     this.isExplicitlyStopped = false;
     this.connectionStable = false;
     this.lastServerNotice = '';
+    this.lastServerNoticeAt = 0;
     this.lastDisconnectReason = '';
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -363,17 +367,13 @@ export class PebbleBotInstance {
         this.logActivity('spawn', '🌍 Spawned into Bedrock world!');
         this.handleSystemMessage(`🌍 Spawned into world as @${this.config.username}`);
 
-        // Mark this protocol as proven only after a stable session. Short-lived
-        // spawns should still allow auto-reconnect to try another Bedrock version.
-        this.connectionStable = false;
-        if (this.stableConnectionTimer) clearTimeout(this.stableConnectionTimer);
-        this.stableConnectionTimer = setTimeout(() => {
-          if (this.client !== client || this.state !== 'SPAWNED') return;
-          this.connectionStable = true;
-          this.reconnectAttemptCount = 0;
-          this.currentVersionCandidate = null;
-          SERVER_VERSION_CACHE.set(cleanHost, targetVersion);
-        }, 60_000);
+        // A successful spawn proves this protocol is accepted. Do not rotate
+        // versions later for ordinary queue timeouts, kicks, or network drops.
+        this.connectionStable = true;
+        this.reconnectAttemptCount = 0;
+        this.currentVersionCandidate = null;
+        SERVER_VERSION_CACHE.set(cleanHost, targetVersion);
+        this.scheduleJoinCommand(client);
 
         // Start Bedrock authoritative input keepalive loops
         this.clientTick = 0n;
@@ -521,6 +521,7 @@ export class PebbleBotInstance {
         if (titleText) {
           const clean = stripMinecraftFormatting(titleText);
           this.lastServerNotice = clean;
+          this.lastServerNoticeAt = Date.now();
           this.handleSystemMessage(`📢 ${clean}`);
         }
       });
@@ -551,11 +552,15 @@ export class PebbleBotInstance {
         if (this.isTransferring) return;
         if (this.state === 'DISCONNECTED') return;
 
+        const recentServerNotice = this.lastServerNotice && Date.now() - this.lastServerNoticeAt <= 30_000
+          ? this.lastServerNotice
+          : '';
         let reason = rawReason || '';
         if (this.lastDisconnectReason && this.lastDisconnectReason !== 'Server closed connection / session ended') {
           reason = this.lastDisconnectReason;
-        } else if (this.lastServerNotice) {
-          reason = reason ? `${reason} (Last server notice: "${this.lastServerNotice}")` : this.lastServerNotice;
+          if (recentServerNotice) reason = `${reason} (Last server notice: "${recentServerNotice}")`;
+        } else if (recentServerNotice) {
+          reason = reason ? `${reason} (Last server notice: "${recentServerNotice}")` : recentServerNotice;
         }
         if (!reason) {
           reason = 'Server closed connection / session ended';
@@ -573,6 +578,8 @@ export class PebbleBotInstance {
           console.log(chalk.yellow(`[PebbleAFK] Server requested Bedrock version ${reqVer}. Saved to verified cache.`));
           this.logActivity('status', `🔄 Server requested version ${reqVer}. Auto-adjusting target version...`);
         }
+
+        this.shouldProbeVersionOnReconnect = Boolean(versionMatch || /(?:outdated|unsupported|incompatible)\s+(?:bedrock\s+)?(?:client|server|protocol|version)|\bprotocol\s+version\b.*\b(?:mismatch|unsupported|invalid)\b|\bversion\s+mismatch\b/i.test(reason));
 
         console.log(chalk.red(`[PebbleAFK] ❌ Bot @${this.config.username} disconnected from ${cleanHost}:${cleanPort}: ${reason}`));
         this.logActivity('disconnect', `Disconnected from ${cleanHost}: ${reason}`);
@@ -753,6 +760,32 @@ export class PebbleBotInstance {
     } catch (_) {}
   }
 
+  private scheduleJoinCommand(client: any) {
+    if (this.joinCommandClient === client) return;
+    this.joinCommandClient = client;
+
+    const settings = this.config.settings;
+    const configuredCommand = settings?.joinCommand?.trim().slice(0, 256) || '';
+    if (!settings?.joinCommandEnabled || !configuredCommand) return;
+
+    const command = configuredCommand.startsWith('/') ? configuredCommand : `/${configuredCommand}`;
+    const delaySeconds = Math.min(300, Math.max(0, Number(settings.joinCommandDelay ?? 3) || 0));
+    this.logActivity('status', `Configured join command scheduled in ${delaySeconds}s.`);
+    this.joinCommandTimer = setTimeout(() => {
+      this.joinCommandTimer = null;
+      const currentCommand = this.config.settings?.joinCommand?.trim().slice(0, 256) || '';
+      if (
+        this.client !== client ||
+        this.state !== 'SPAWNED' ||
+        !this.config.settings?.joinCommandEnabled ||
+        currentCommand !== configuredCommand
+      ) return;
+
+      this.logActivity('command', `Running configured join command: ${command}`);
+      this.sendChat(command);
+    }, delaySeconds * 1000);
+  }
+
   private startTickSyncLoop(client: any) {
     if (this.tickSyncInterval) clearInterval(this.tickSyncInterval);
     // Modern Bedrock protocols (1.20.80+) do not use client tick_sync; bedrock-protocol manages this internally when needed.
@@ -893,6 +926,7 @@ export class PebbleBotInstance {
     const clean = stripMinecraftFormatting(text);
     if (clean.toLowerCase().includes('server') || clean.toLowerCase().includes('kick') || clean.toLowerCase().includes('afk')) {
       this.lastServerNotice = clean;
+      this.lastServerNoticeAt = Date.now();
     }
 
     this.pushChat({
@@ -996,8 +1030,10 @@ export class PebbleBotInstance {
       cleanSender = isSystem ? 'System' : 'Server';
     }
 
-    if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk')) {
-      this.lastServerNotice = cleanText;
+    const isLifestealTimeout = /^lifesteal$/i.test(cleanSender) && /\btimed\s*out\b|\btimeout\b/i.test(cleanText);
+    if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk') || isLifestealTimeout) {
+      this.lastServerNotice = isLifestealTimeout ? `${cleanSender}: ${cleanText}` : cleanText;
+      this.lastServerNoticeAt = Date.now();
     }
 
     this.pushChat({
@@ -1046,16 +1082,18 @@ export class PebbleBotInstance {
 
     this.reconnectTimer = setTimeout(() => {
       if (!this.isExplicitlyStopped) {
+        const shouldProbeVersion = this.shouldProbeVersionOnReconnect;
+        this.shouldProbeVersionOnReconnect = false;
         const rawUserVersion = this.config.version?.trim();
         const isAuto = !rawUserVersion || rawUserVersion.toLowerCase() === 'auto' || rawUserVersion.toLowerCase() === 'default';
 
         if (this.connectionStable) {
-          // Retry the version that was stable for at least a minute.
+          // The server already accepted this protocol by spawning the player.
           this.connectionStable = false;
           this.currentVersionCandidate = null;
           this.reconnectAttemptCount = 0;
-        } else if (isAuto && !this.autoVersionOverride) {
-          // A short-lived spawn is not enough to trust a protocol; try the next one.
+        } else if (isAuto && !this.autoVersionOverride && shouldProbeVersion) {
+          // Only explicit protocol/version failures justify trying another version.
           const previousIndex = this.lastAttemptedVersion
             ? BEDROCK_CYCLE_VERSIONS.indexOf(this.lastAttemptedVersion)
             : -1;
@@ -1069,6 +1107,7 @@ export class PebbleBotInstance {
           this.reconnectAttemptCount++;
         } else {
           this.currentVersionCandidate = null;
+          this.reconnectAttemptCount = 0;
         }
 
         console.log(chalk.cyan(`[PebbleAFK] Executing auto-reconnect for ${this.config.username}...`));
@@ -1157,9 +1196,10 @@ export class PebbleBotInstance {
       clearInterval(this.telemetryInterval);
       this.telemetryInterval = null;
     }
-    if (this.stableConnectionTimer) {
-      clearTimeout(this.stableConnectionTimer);
-      this.stableConnectionTimer = null;
+    if (this.joinCommandTimer) {
+      clearTimeout(this.joinCommandTimer);
+      this.joinCommandTimer = null;
     }
+    this.joinCommandClient = null;
   }
 }
