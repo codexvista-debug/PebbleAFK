@@ -233,6 +233,7 @@ export function formatDisconnectReason(raw: any): string {
 
 export class PebbleBotInstance {
   private static lastHandshakeTime: number = 0;
+  private static recentChatConsoleLines = new Map<string, number>();
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
   public chatHistory: any[] = [];
@@ -431,8 +432,9 @@ export class PebbleBotInstance {
       };
 
       // Stagger Bedrock RakNet connection handshakes so concurrent bots never send
-      // simultaneous Open Connection Request UDP packets from the same device/IP.
-      const minSpacingMs = 6500;
+      // near-simultaneous Open Connection Request UDP packets from the same device/IP.
+      // A wider gap also reduces login/transfer bursts on FreshSMP-style gateways.
+      const minSpacingMs = 12000;
       const now = Date.now();
       const waitMs = Math.max(0, (PebbleBotInstance.lastHandshakeTime + minSpacingMs) - now);
       if (waitMs > 0) {
@@ -1104,9 +1106,29 @@ export class PebbleBotInstance {
       this.chatHistory.shift();
     }
 
-    // Stream live chat to Termux terminal in real time
+    // Stream live chat to Termux terminal in real time. When several of this
+    // user's accounts share a server, the server broadcasts the same line to
+    // every session. Keep each account event for the dashboard, but avoid
+    // synchronously writing identical duplicate lines to Termux/stdout.
     const cleanContent = stripMinecraftFormatting(chatMsg.formattedText || chatMsg.raw || '');
-    console.log(chalk.magenta(`[Chat • @${this.config.username}] <${chatMsg.sender}> ${cleanContent}`));
+    const chatServerKey = this.config.serverId || `${this.config.host}:${this.config.port}`;
+    const chatLogKey = `${chatServerKey}\u0000${String(chatMsg.sender || '').toLowerCase()}\u0000${cleanContent.toLowerCase()}`;
+    const now = Date.now();
+    const lastLoggedAt = PebbleBotInstance.recentChatConsoleLines.get(chatLogKey) || 0;
+    if (now - lastLoggedAt > 1500) {
+      PebbleBotInstance.recentChatConsoleLines.set(chatLogKey, now);
+      if (PebbleBotInstance.recentChatConsoleLines.size > 1000) {
+        for (const [key, loggedAt] of PebbleBotInstance.recentChatConsoleLines) {
+          if (now - loggedAt > 5000) PebbleBotInstance.recentChatConsoleLines.delete(key);
+        }
+        while (PebbleBotInstance.recentChatConsoleLines.size > 1000) {
+          const oldestKey = PebbleBotInstance.recentChatConsoleLines.keys().next().value;
+          if (oldestKey === undefined) break;
+          PebbleBotInstance.recentChatConsoleLines.delete(oldestKey);
+        }
+      }
+      console.log(chalk.magenta(`[Chat • @${this.config.username}] <${chatMsg.sender}> ${cleanContent}`));
+    }
 
     this.broadcastFn({
       type: 'CHAT_MESSAGE',
@@ -1475,13 +1497,15 @@ export class PebbleBotInstance {
     const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit/i.test(reason);
     const isTransportTimeout = /no reply to RakNet UDP packets|Connect timed out|filtering UDP|network path did not answer/i.test(reason);
     const isEncryptedPacketFailure = /checksum mismatch|bad encrypted packet|badPacket/i.test(reason);
+    const isUnexplainedSessionEnd = /server closed connection\s*\/\s*session ended/i.test(reason);
     let delay: number;
     if (isLoginThrottled) {
       this.loginThrottleCount++;
       delay = Math.max(12_000, Math.min(15_000 * (2 ** Math.min(this.loginThrottleCount - 1, 3)), 120_000));
     } else {
       this.reconnectFailureCount++;
-      const exponentialDelay = Math.min(baseDelay * (2 ** Math.min(this.reconnectFailureCount - 1, 4)), 60_000);
+      const retryBaseDelay = isUnexplainedSessionEnd ? Math.max(baseDelay, 15_000) : baseDelay;
+      const exponentialDelay = Math.min(retryBaseDelay * (2 ** Math.min(this.reconnectFailureCount - 1, 4)), 60_000);
       // Bad encrypted packets often happen during a server-side subserver
       // transfer. Give the gateway time to settle instead of immediately
       // repeating a handshake that is likely to be rejected again.
@@ -1496,6 +1520,8 @@ export class PebbleBotInstance {
       ? `Server login throttle; backing off for ${Math.ceil(delay / 1000)}s`
       : isEncryptedPacketFailure
         ? `Encrypted packet rejected; backing off for ${Math.ceil(delay / 1000)}s before reconnect`
+        : isUnexplainedSessionEnd
+          ? `Server ended the session without a reason; cooling down for ${Math.ceil(delay / 1000)}s before reconnect`
       : isTransportTimeout
         ? `RakNet endpoint did not reply; retrying in ${Math.ceil(delay / 1000)}s`
         : `Reconnecting in ${Math.ceil(delay / 1000)}s`;
