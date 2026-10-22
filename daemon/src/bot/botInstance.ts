@@ -798,7 +798,7 @@ export class PebbleBotInstance {
         this.handleSystemMessage(`🔄 Server transferring to subserver ${targetHost}:${targetPort}...`);
 
         this.isTransferring = true;
-        this.hasTransferredToFreshSmpSubserver = true;
+        if (this.isFreshSmpProfile()) this.hasTransferredToFreshSmpSubserver = true;
         this.cleanup();
         this.client = null;
         try {
@@ -1112,7 +1112,7 @@ export class PebbleBotInstance {
 
     // A fresh client is created after a transfer. Do not issue /lifesteal
     // again on the destination server or reset the queue/session it just joined.
-    if (this.hasTransferredToFreshSmpSubserver) return;
+    if (this.isFreshSmpProfile() && this.hasTransferredToFreshSmpSubserver) return;
 
     const isFreshSmp = this.isFreshSmpProfile();
     const delaySeconds = isFreshSmp ? 10 : Math.min(300, Math.max(3, Number(this.config.settings?.joinCommandDelay ?? 3) || 3));
