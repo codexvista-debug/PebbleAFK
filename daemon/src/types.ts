@@ -126,7 +126,8 @@ export interface ActivityLog {
 
 // Client to Daemon Messages
 export type ClientMessage =
-  | { type: 'AUTH'; payload: { token: string; username?: string } }
+  | { type: 'AUTH'; payload: { token: string; username?: string; sessionId?: string; deviceLabel?: string } }
+  | { type: 'DISCONNECT_DEVICE_SESSION'; payload: { sessionId: string } }
   | { type: 'START_BOT'; payload: BotConfig }
   | { type: 'STOP_BOT'; payload: { botId: string; accountId?: string; username?: string } }
   | { type: 'RESTART_BOT'; payload: { botId: string } }
@@ -146,6 +147,8 @@ export type ClientMessage =
 // Daemon to Client Messages
 export type DaemonMessage =
   | { type: 'AUTH_RESULT'; payload: { success: boolean; message?: string } }
+  | { type: 'DEVICE_SESSIONS'; payload: { sessions: { sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number }[] } }
+  | { type: 'DEVICE_SESSION_REMOVED'; payload: { sessionId: string; message: string } }
   | { type: 'BOT_STATE'; payload: { botId: string; serverId?: string; username?: string; accountId?: string; version?: string; state: BotLifecycleState; reason?: string; connectedAt?: number; uptime?: number; host?: string; port?: number } }
   | { type: 'CHAT_MESSAGE'; payload: ChatMessagePayload }
   | { type: 'TELEMETRY'; payload: TelemetryPayload }

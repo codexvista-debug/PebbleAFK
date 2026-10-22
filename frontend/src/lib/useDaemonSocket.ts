@@ -53,6 +53,7 @@ export function useDaemonSocket(
   const [msAuthData, setMsAuthData] = useState<MsAuthData | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
+  const [deviceSessions, setDeviceSessions] = useState<{ sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number }[]>([]);
 
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -64,6 +65,7 @@ export function useDaemonSocket(
   const reconnectAttemptsRef = useRef<number>(0);
   const chatSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const shutdownRequestedRef = useRef(false);
+  const sessionRemovedRef = useRef(false);
   const shutdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const currentUserRef = useRef(currentUser);
@@ -128,6 +130,7 @@ export function useDaemonSocket(
     if (typeof window === 'undefined') return;
     const u = currentUser ? currentUser.trim().toLowerCase() : 'guest';
     shutdownRequestedRef.current = false;
+    sessionRemovedRef.current = false;
     if (shutdownTimeoutRef.current) {
       clearTimeout(shutdownTimeoutRef.current);
       shutdownTimeoutRef.current = null;
@@ -169,6 +172,7 @@ export function useDaemonSocket(
 
     // Flush all logs, bot states, and telemetry from previous user
     setTerminalLogs([]);
+    setDeviceSessions([]);
     setBotStates({});
     setBotReasons({});
     setTelemetries({});
@@ -180,7 +184,7 @@ export function useDaemonSocket(
   }, [currentUser]);
 
   const connect = useCallback((force = false) => {
-    if (shutdownRequestedRef.current) return;
+    if (shutdownRequestedRef.current || sessionRemovedRef.current) return;
     const user = currentUserRef.current;
     const url = (daemonUrlRef.current || '').trim();
 
@@ -269,9 +273,24 @@ export function useDaemonSocket(
             : '');
 
         try {
+          const userKey = user.trim().toLowerCase();
+          const sessionStorageKey = `pebbleafk_ws_session_${userKey}`;
+          let sessionId = '';
+          try {
+            sessionId = sessionStorage.getItem(sessionStorageKey) || '';
+            if (!sessionId) {
+              sessionId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+              sessionStorage.setItem(sessionStorageKey, sessionId);
+            }
+          } catch (_) {
+            sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          }
+          const deviceLabel = /android|iphone|ipad|mobile/i.test(navigator.userAgent) ? 'Mobile browser' : 'Desktop browser';
           ws.send(JSON.stringify({
             type: 'AUTH',
-            payload: { token: effectiveToken, username: user },
+            payload: { token: effectiveToken, username: user, sessionId, deviceLabel },
           }));
         } catch (_) {}
 
@@ -324,6 +343,17 @@ export function useDaemonSocket(
               safeClose(ws);
               if (socketRef.current === ws) socketRef.current = null;
             }
+          }
+
+          if (msg.type === 'DEVICE_SESSIONS' && Array.isArray(msg.payload?.sessions)) {
+            setDeviceSessions(msg.payload.sessions);
+          }
+
+          if (msg.type === 'DEVICE_SESSION_REMOVED') {
+            sessionRemovedRef.current = true;
+            setStatus('DISCONNECTED');
+            safeClose(ws);
+            if (socketRef.current === ws) socketRef.current = null;
           }
 
           if (msg.type === 'SHUTDOWN_RESULT' && msg.payload?.success) {
@@ -460,8 +490,6 @@ export function useDaemonSocket(
           connectionTimeoutRef.current = null;
         }
         setStatus('DISCONNECTED');
-        setBotStates({});
-        setBotReasons({});
         setMsAuthData(null);
         if (pingIntervalRef.current) {
           clearInterval(pingIntervalRef.current);
@@ -472,7 +500,7 @@ export function useDaemonSocket(
           reconnectAttemptsRef.current = 0;
         }
         authenticatedAtRef.current = 0;
-        if (shutdownRequestedRef.current) {
+        if (shutdownRequestedRef.current || sessionRemovedRef.current) {
           if (shutdownTimeoutRef.current) {
             clearTimeout(shutdownTimeoutRef.current);
             shutdownTimeoutRef.current = null;
@@ -588,6 +616,15 @@ export function useDaemonSocket(
     return false;
   }, []);
 
+  const disconnectDeviceSession = useCallback((sessionId: string) => {
+    return send({ type: 'DISCONNECT_DEVICE_SESSION', payload: { sessionId } });
+  }, [send]);
+
+  const reconnectNow = useCallback(() => {
+    sessionRemovedRef.current = false;
+    connect(true);
+  }, [connect]);
+
   const restartDaemon = useCallback((reason = 'Restart requested from dashboard') => {
     setBotStates({});
     return send({ type: 'RESTART_DAEMON', payload: { reason } });
@@ -690,11 +727,14 @@ export function useDaemonSocket(
     msAuthData,
     setMsAuthData,
     reconnect: connect,
+    reconnectNow,
     restartDaemon,
     updateDaemon,
     shutdownDaemon,
     clearChat,
     terminalLogs,
+    deviceSessions,
+    disconnectDeviceSession,
     fetchTerminalLogs,
     clearTerminalLogs,
     verifyAccount,

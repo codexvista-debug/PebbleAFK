@@ -365,7 +365,10 @@ export default function Home() {
     bossBarsByBot,
     messagesByBot,
     activityLogs,
+    deviceSessions,
+    disconnectDeviceSession,
     reconnect,
+    reconnectNow,
     restartDaemon,
     updateDaemon,
     shutdownDaemon,
@@ -1848,6 +1851,41 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
+
+                <section className="rounded-2xl bg-white border border-slate-200/90 shadow-xs overflow-hidden">
+                  <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-extrabold text-slate-900">Connected browser sessions</h2>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Each PC or mobile tab has its own dashboard socket; removing one does not stop Termux or the Bedrock bots.</p>
+                    </div>
+                    <span className={`shrink-0 px-2 py-1 rounded-lg text-[10px] font-bold ${daemonStatus === 'AUTHENTICATED' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                      {daemonStatus === 'AUTHENTICATED' ? `${deviceSessions.length} active` : 'Daemon reconnecting'}
+                    </span>
+                  </div>
+                  {daemonStatus !== 'AUTHENTICATED' ? (
+                    <div className="px-5 py-4 flex items-center justify-between gap-3">
+                      <p className="text-xs text-slate-500">The daemon is running separately; this tab will refresh the session list after its WebSocket reconnects.</p>
+                      <button type="button" onClick={reconnectNow} className="shrink-0 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50">Reconnect now</button>
+                    </div>
+                  ) : deviceSessions.length === 0 ? (
+                    <p className="px-5 py-4 text-xs text-slate-500">No browser sockets are currently connected.</p>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {deviceSessions.map((session) => (
+                        <div key={session.sessionId} className="px-5 py-3 flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex items-center gap-3">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-slate-800">{session.label}</p>
+                              <p className="text-[10px] text-slate-500 truncate" title={session.userAgent}>{session.ip} · connected {new Date(session.connectedAt).toLocaleString()}</p>
+                            </div>
+                          </div>
+                          <button type="button" onClick={() => disconnectDeviceSession(session.sessionId)} className="shrink-0 px-3 py-1.5 rounded-lg border border-rose-200 text-[11px] font-bold text-rose-700 hover:bg-rose-50">Remove</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
 
                 {/* Server Profiles Placeholder */}
                 <div className="p-6 rounded-3xl bg-white border border-slate-200/80 shadow-2xs text-center space-y-3">

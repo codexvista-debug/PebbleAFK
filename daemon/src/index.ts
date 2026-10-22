@@ -55,7 +55,39 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 const authenticatedClients = new Set<WebSocket>();
+type DeviceSession = { sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number };
+const deviceSessions = new Map<string, DeviceSession>();
+const sessionSockets = new Map<string, Set<WebSocket>>();
+const socketSessions = new Map<WebSocket, string>();
 let shutdownRequested = false;
+
+function publishDeviceSessions() {
+  const sessions = [...deviceSessions.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  const json = JSON.stringify({ type: 'DEVICE_SESSIONS', payload: { sessions } });
+  for (const client of authenticatedClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try { client.send(json); } catch (_) {}
+    }
+  }
+}
+
+function registerDeviceSession(ws: WebSocket, sessionId: string, label: string, userAgent: string, ip: string) {
+  const now = Date.now();
+  const previous = deviceSessions.get(sessionId);
+  deviceSessions.set(sessionId, {
+    sessionId,
+    label: label.slice(0, 80) || 'Browser session',
+    userAgent: userAgent.slice(0, 240),
+    ip,
+    connectedAt: previous?.connectedAt || now,
+    lastSeenAt: now,
+  });
+  const sockets = sessionSockets.get(sessionId) || new Set<WebSocket>();
+  sockets.add(ws);
+  sessionSockets.set(sessionId, sockets);
+  socketSessions.set(ws, sessionId);
+  publishDeviceSessions();
+}
 
 const terminalLogs: string[] = [];
 const MAX_LOGS = 500;
@@ -181,6 +213,16 @@ wss.on('connection', (ws: WebSocket, req) => {
         }
 
         authenticatedClients.add(ws);
+        const sessionId = typeof parsed.payload.sessionId === 'string' && /^[\w-]{8,100}$/.test(parsed.payload.sessionId)
+          ? parsed.payload.sessionId
+          : crypto.randomUUID();
+        registerDeviceSession(
+          ws,
+          sessionId,
+          typeof parsed.payload.deviceLabel === 'string' ? parsed.payload.deviceLabel : 'Browser session',
+          String(req.headers['user-agent'] || ''),
+          String(ip || 'unknown'),
+        );
         ws.send(JSON.stringify({
           type: 'AUTH_RESULT',
           payload: { success: true, message: 'Authenticated successfully' },
@@ -202,7 +244,36 @@ wss.on('connection', (ws: WebSocket, req) => {
 
       // Keepalive PING / PONG
       if (parsed.type === 'PING') {
+        const sessionId = socketSessions.get(ws);
+        const session = sessionId ? deviceSessions.get(sessionId) : undefined;
+        if (session) {
+          session.lastSeenAt = Date.now();
+          publishDeviceSessions();
+        }
         ws.send(JSON.stringify({ type: 'PONG', payload: { timestamp: Date.now() } }));
+        return;
+      }
+
+      if (parsed.type === 'DISCONNECT_DEVICE_SESSION') {
+        const sessionId = parsed.payload?.sessionId;
+        if (!sessionId || !deviceSessions.has(sessionId)) return;
+        for (const target of sessionSockets.get(sessionId) || []) {
+          if (target.readyState === WebSocket.OPEN) {
+            try {
+              target.send(JSON.stringify({
+                type: 'DEVICE_SESSION_REMOVED',
+                payload: { sessionId, message: 'This browser session was disconnected from the dashboard.' },
+              }));
+              target.close(4003, 'Disconnected from dashboard');
+            } catch (_) {}
+          }
+          authenticatedClients.delete(target);
+          socketSessions.delete(target);
+        }
+        sessionSockets.delete(sessionId);
+        deviceSessions.delete(sessionId);
+        publishDeviceSessions();
+        console.log(chalk.yellow(`[Connection] Browser session ${sessionId} disconnected from dashboard`));
         return;
       }
 
@@ -278,6 +349,17 @@ wss.on('connection', (ws: WebSocket, req) => {
   ws.on('close', (code: number, reason: Buffer) => {
     clearInterval(pingInterval);
     authenticatedClients.delete(ws);
+    const sessionId = socketSessions.get(ws);
+    socketSessions.delete(ws);
+    if (sessionId) {
+      const sockets = sessionSockets.get(sessionId);
+      sockets?.delete(ws);
+      if (!sockets?.size) {
+        sessionSockets.delete(sessionId);
+        deviceSessions.delete(sessionId);
+      }
+      publishDeviceSessions();
+    }
     const reasonStr = reason && reason.length ? reason.toString('utf8') : '';
     console.log(chalk.gray(`[Connection] WebSocket disconnected (${ip}) [code=${code}${reasonStr ? `, reason=${reasonStr}` : ''}]`));
   });
