@@ -1361,14 +1361,49 @@ export default function Home() {
             <Menu className="w-5 h-5" />
           </button>
 
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center font-black text-xs shadow-xs ring-2 ring-emerald-500/20">
-              ⛏
+          {activeTab === 'servers' && activeServer ? (
+            <div className="flex items-center gap-1.5 min-w-0">
+              <ServerLogo host={activeServer.serverHost} name={activeServer.name} size="w-6 h-6" />
+              <span className="font-extrabold text-sm text-slate-900 tracking-tight truncate max-w-[120px] xs:max-w-[160px]">
+                {activeServer.name}
+              </span>
+              <span className="text-slate-300 font-normal">/</span>
+              <span
+                className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider border shadow-2xs ${
+                  activeSubTab === 'connect'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                    : activeSubTab === 'chat'
+                    ? 'bg-sky-50 text-sky-800 border-sky-300'
+                    : 'bg-slate-100 text-slate-800 border-slate-300'
+                }`}
+              >
+                {activeSubTab === 'connect' ? 'Connect' : activeSubTab === 'chat' ? 'Chat' : 'Settings'}
+              </span>
             </div>
-            <div>
-              <span className="font-black text-sm text-slate-900 tracking-tight">PebbleAFK</span>
+          ) : activeTab === 'accounts' ? (
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-emerald-500 text-white flex items-center justify-center font-black text-xs shadow-xs">
+                <Users className="w-4 h-4" />
+              </div>
+              <span className="font-black text-sm text-slate-900 tracking-tight">Accounts</span>
             </div>
-          </div>
+          ) : activeTab === 'termux_stream' ? (
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-slate-900 text-emerald-400 flex items-center justify-center font-mono font-black text-xs shadow-xs">
+                &gt;_
+              </div>
+              <span className="font-black text-sm text-slate-900 tracking-tight">Termux Stream</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center font-black text-xs shadow-xs ring-2 ring-emerald-500/20">
+                ⛏
+              </div>
+              <div>
+                <span className="font-black text-sm text-slate-900 tracking-tight">Dashboard</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right Daemon status circle on mobile */}
@@ -2997,18 +3032,113 @@ export default function Home() {
                         <div className="w-full min-w-0 flex-1 min-h-0 flex flex-col">
                           {/* 2. Main Chat Box Container (Matching Image 3) */}
                           <div className="w-full min-w-0 flex-1 min-h-0 bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
-                            {/* Card Header */}
+                            {/* Card Header: Shows account skin head and username (or head stack for All Accounts) */}
                             <div className="shrink-0 px-3 sm:px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-3 bg-slate-50/60">
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 font-mono font-bold text-xs shrink-0 shadow-2xs">
-                                  &gt;_
-                                </div>
-                                <div>
-                                  <h3 className="font-black text-sm text-slate-900 leading-none">{activeServer.name}</h3>
-                                  <p className="text-[11px] font-mono text-slate-400 mt-0.5">
-                                    {activeServer.serverHost}:{activeServer.serverPort || 19132}
-                                  </p>
-                                </div>
+                              <div className="flex items-center gap-3 min-w-0">
+                                {isAllSelected ? (
+                                  <>
+                                    <div className="flex items-center -space-x-2 shrink-0">
+                                      {targetAccounts.slice(0, 3).map((acc) => {
+                                        const ign = acc.ign || acc.username;
+                                        return (
+                                          <div key={acc.id} className="w-8 h-8 rounded-xl overflow-hidden border-2 border-white bg-slate-100 shadow-2xs">
+                                            <img
+                                              src={getPlayerSkinHeadUrl(ign, 32)}
+                                              alt={ign}
+                                              className="w-full h-full object-cover [image-rendering:pixelated]"
+                                              onError={(e) => {
+                                                const img = e.currentTarget as HTMLImageElement;
+                                                img.src = 'https://minotar.net/helm/MHF_Steve/32.png';
+                                              }}
+                                            />
+                                          </div>
+                                        );
+                                      })}
+                                      {targetAccounts.length > 3 && (
+                                        <div className="w-8 h-8 rounded-xl bg-slate-200 border-2 border-white flex items-center justify-center text-[10px] font-black text-slate-700 shadow-2xs">
+                                          +{targetAccounts.length - 3}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <h3 className="font-black text-sm text-slate-900 leading-none truncate">
+                                        All Accounts ({targetAccounts.length})
+                                      </h3>
+                                      <p className="text-[11px] text-slate-500 font-medium mt-1 flex items-center gap-1.5 truncate">
+                                        {isSelectedOnline ? (
+                                          <span className="inline-flex items-center gap-1 text-emerald-600 font-bold">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                            {targetAccounts.filter((acc) => {
+                                              const bId = `${activeServer.id}__${acc.id}`;
+                                              const st = botStates[bId] || botStates[acc.id];
+                                              return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
+                                            }).length} Online
+                                          </span>
+                                        ) : (
+                                          <span className="text-slate-400">Offline</span>
+                                        )}
+                                        <span className="text-slate-300">•</span>
+                                        <span className="text-slate-400 truncate">Multi-account broadcast</span>
+                                      </p>
+                                    </div>
+                                  </>
+                                ) : selectedAccount ? (
+                                  <>
+                                    <div className="w-8 h-8 rounded-xl overflow-hidden border border-slate-300 bg-slate-100 shrink-0 shadow-2xs">
+                                      <img
+                                        src={getPlayerSkinHeadUrl(selectedAccount.ign || selectedAccount.username, 32)}
+                                        alt={selectedAccount.ign || selectedAccount.username}
+                                        className="w-full h-full object-cover [image-rendering:pixelated]"
+                                        onError={(e) => {
+                                          const img = e.currentTarget as HTMLImageElement;
+                                          if (!img.src.includes('mc-heads')) {
+                                            img.src = `https://mc-heads.net/avatar/${encodeURIComponent(selectedAccount.ign || selectedAccount.username)}/32`;
+                                          } else if (!img.src.includes('minotar')) {
+                                            img.src = `https://minotar.net/helm/${encodeURIComponent(selectedAccount.ign || selectedAccount.username)}/32`;
+                                          } else {
+                                            img.src = 'https://minotar.net/helm/MHF_Steve/32.png';
+                                          }
+                                        }}
+                                      />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <h3 className="font-black text-sm text-slate-900 leading-none truncate flex items-center gap-1.5">
+                                        <span>{selectedAccount.ign || selectedAccount.username}</span>
+                                        {selectedAccount.authError ? (
+                                          <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-rose-100 text-rose-700">
+                                            Mismatch
+                                          </span>
+                                        ) : (
+                                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                        )}
+                                      </h3>
+                                      <p className="text-[11px] text-slate-500 font-medium mt-1 flex items-center gap-1.5 truncate">
+                                        {isSelectedOnline ? (
+                                          <span className="inline-flex items-center gap-1 text-emerald-600 font-bold">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                            In-Game
+                                          </span>
+                                        ) : (
+                                          <span className="text-slate-400">Offline</span>
+                                        )}
+                                        <span className="text-slate-300">•</span>
+                                        <span className="text-slate-400">Bedrock Edition</span>
+                                      </p>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 font-mono font-bold text-xs shrink-0 shadow-2xs">
+                                      &gt;_
+                                    </div>
+                                    <div>
+                                      <h3 className="font-black text-sm text-slate-900 leading-none">{activeServer.name}</h3>
+                                      <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                                        {activeServer.serverHost}:{activeServer.serverPort || 19132}
+                                      </p>
+                                    </div>
+                                  </>
+                                )}
                               </div>
 
                               <button
