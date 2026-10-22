@@ -976,6 +976,11 @@ export default function Home() {
     const st = botStates[botId];
     return st === 'SPAWNED' || st === 'LOGGED_IN' || st === 'CONNECTING';
   });
+  const connectedAccountCount = daemonStatus === 'AUTHENTICATED' ? accounts.filter((acc) => profileAccountIds.includes(acc.id)).filter((acc) => {
+    const botId = `${activeServer?.id}__${acc.id}`;
+    const st = botStates[botId] || botStates[acc.id];
+    return st === 'SPAWNED' || st === 'LOGGED_IN';
+  }).length : 0;
 
   // Connect / Disconnect individual account to server
   const handleConnectAccount = (acc: BedrockAccount, srv: ServerProfile) => {
@@ -2180,11 +2185,13 @@ export default function Home() {
                             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                             <div className="space-y-0.5">
                               <div className="flex items-center gap-2">
-                                <span className="font-bold">Bedrock UDP Gateway Offline: {activeServer.serverHost}:{activeServer.serverPort || 19132}</span>
-                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200">Server Unreachable</span>
+                                <span className="font-bold">Bedrock status probe got no reply: {activeServer.serverHost}:{activeServer.serverPort || 19132}</span>
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200">Unverified</span>
                               </div>
                               <p className="text-[11px] text-amber-800 leading-relaxed">
-                                {activeServer.serverHost}&apos;s Bedrock UDP port ({activeServer.serverPort || 19132}) is currently down or not sending replies globally. Any Bedrock bot will time out until the server host restores its Bedrock gateway.
+                                {connectedAccountCount > 0
+                                  ? `${connectedAccountCount} account${connectedAccountCount === 1 ? ' is' : 's are'} currently connected, so this public ping result does not indicate a global outage. A Lifesteal timeout is an account-specific subserver transfer/queue failure; check that account's logs.`
+                                  : 'A third-party public status check did not receive a Bedrock ping response. Some servers filter status probes, so this alone cannot confirm an outage; verify with an account connection and its daemon logs.'}
                               </p>
                             </div>
                           </div>

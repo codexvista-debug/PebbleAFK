@@ -261,6 +261,11 @@ export class PebbleBotInstance {
   private joinCommandTimer: NodeJS.Timeout | null = null;
   private joinCommandClient: any = null;
   private isInSubserver: boolean = false;
+  private isSubserverQueueActive: boolean = false;
+  private lastQueueStatusLogAt: number = 0;
+  private lastSubserverTimeoutAt: number = 0;
+  private lastLifestealCommandAt: number = 0;
+  private lastAlreadyConnectedAt: number = 0;
   private subserverQueueTimeoutCount: number = 0;
   private static nextSubserverCommandAt: number = 0;
   private lastAuthInputErrorAt: number = 0;
@@ -304,6 +309,10 @@ export class PebbleBotInstance {
     const startGeneration = ++this.startGeneration;
     this.startInProgress = true;
     this.clearBossBars();
+    this.isInSubserver = false;
+    this.isSubserverQueueActive = false;
+    this.lastLifestealCommandAt = 0;
+    this.lastAlreadyConnectedAt = 0;
     this.connectionStable = false;
     this.lastServerNotice = '';
     this.lastServerNoticeAt = 0;
@@ -728,6 +737,10 @@ export class PebbleBotInstance {
 
         console.log(chalk.red(`[PebbleAFK] ❌ Bot @${this.config.username} disconnected from ${cleanHost}:${cleanPort}: ${reason}`));
         this.logActivity('disconnect', `Disconnected from ${cleanHost}: ${reason}`);
+        this.isInSubserver = false;
+        this.isSubserverQueueActive = false;
+        this.lastLifestealCommandAt = 0;
+        this.lastAlreadyConnectedAt = 0;
         this.cleanup();
         if (this.client === client) this.client = null;
         try { client.close(); } catch (_) {}
@@ -853,6 +866,9 @@ export class PebbleBotInstance {
     try {
       this.hookConnectionDiagnostics(this.client);
       if (message.startsWith('/')) {
+        if (/^\/?lifesteal(?:\s|$)/i.test(message.trim())) {
+          this.lastLifestealCommandAt = Date.now();
+        }
         // Send as Bedrock command
         const uuid = randomUUID();
         try {
@@ -916,8 +932,9 @@ export class PebbleBotInstance {
       this.joinCommandTimer = null;
     }
 
-    // If already in Lifesteal / AFK zone, do not trigger transfer command
-    if (this.isInSubserver) return;
+    // Do not send another transfer request while FreshSMP still has this
+    // account in its Lifesteal queue (or after it reached the AFK area).
+    if (this.isInSubserver || this.isSubserverQueueActive) return;
 
     const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
     const configuredCommand = this.config.settings?.joinCommand?.trim().slice(0, 256) || (isFreshSmp ? '/lifesteal' : '');
@@ -943,7 +960,7 @@ export class PebbleBotInstance {
 
     this.joinCommandTimer = setTimeout(() => {
       this.joinCommandTimer = null;
-      if (this.isInSubserver) return;
+      if (this.isInSubserver || this.isSubserverQueueActive) return;
       if (this.state === 'SPAWNED' || this.state === 'LOGGED_IN') {
         console.log(chalk.cyan(`[PebbleAFK] Running join/transfer command for @${this.config.username}: ${command}`));
         this.logActivity('command', `Running join command: ${command}`);
@@ -1135,7 +1152,12 @@ export class PebbleBotInstance {
       .sort((a, b) => b.updatedAt - a.updatedAt)[0];
     if (afkBar) {
       this.isInSubserver = true;
+      this.isSubserverQueueActive = false;
       this.subserverQueueTimeoutCount = 0;
+      if (this.joinCommandTimer) {
+        clearTimeout(this.joinCommandTimer);
+        this.joinCommandTimer = null;
+      }
     }
     const next: BossBarPayload | null = afkBar
       ? {
@@ -1311,24 +1333,94 @@ export class PebbleBotInstance {
       /\b<lifesteal>\s*timed\s*out\b/i.test(cleanText) ||
       (/\blifesteal\b/i.test(cleanText) && /\btimed\s*out\b|\btimeout\b/i.test(cleanText));
 
+    const hasRecentLifestealRequest = Date.now() - this.lastLifestealCommandAt <= 180_000;
+    const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
+    const alreadyConnectedMatch = isFreshSmp && hasRecentLifestealRequest &&
+      /you are already connected to this server/i.test(cleanText);
+    if (alreadyConnectedMatch) {
+      this.lastAlreadyConnectedAt = Date.now();
+      this.isInSubserver = true;
+      this.isSubserverQueueActive = false;
+      this.subserverQueueTimeoutCount = 0;
+      if (this.joinCommandTimer) {
+        clearTimeout(this.joinCommandTimer);
+        this.joinCommandTimer = null;
+      }
+      this.logActivity('status', 'FreshSMP confirmed this account is already connected to the requested server; suppressing redundant /lifesteal retries.');
+    }
+
+    const queuePosition = cleanText.match(/\bposition\s*:?\s*(\d+)\s*\/\s*(\d+).*?\beta\s*:?\s*(\d+)\s*(?:s|sec|secs|seconds?)\b/i);
+    const isLifestealQueueStatus = hasRecentLifestealRequest && !this.isInSubserver && /\blifesteal\b/i.test(cleanText) && (
+      /\bqueued\b/i.test(cleanText) || Boolean(queuePosition)
+    );
+
+    if (isLifestealQueueStatus && !isLifestealTimeout) {
+      const wasQueueActive = this.isSubserverQueueActive;
+      this.isSubserverQueueActive = true;
+      const queueStatus = queuePosition
+        ? `position ${queuePosition[1]}/${queuePosition[2]}, ETA ${queuePosition[3]}s`
+        : 'waiting for a queue position';
+      const now = Date.now();
+
+      // Queue position messages can arrive frequently. Keep useful state in
+      // the account log without mirroring every server countdown update.
+      if (!wasQueueActive || now - this.lastQueueStatusLogAt >= 30_000) {
+        this.lastQueueStatusLogAt = now;
+        this.logActivity('status', `FreshSMP Lifesteal queue active (${queueStatus}); holding retries until the server completes or cancels the transfer.`);
+      }
+      if (this.joinCommandTimer) {
+        clearTimeout(this.joinCommandTimer);
+        this.joinCommandTimer = null;
+      }
+    }
+
     if (isLifestealTimeout) {
-      this.isInSubserver = false;
-      this.subserverQueueTimeoutCount += 1;
-      const retryDelay = Math.min(60000, 12000 * (2 ** Math.min(this.subserverQueueTimeoutCount - 1, 3)));
-      console.log(chalk.yellow(`[PebbleAFK] FreshSMP queue notice for @${this.config.username}: "${cleanText}". (Subserver queue timed out; retrying /lifesteal in ${Math.ceil(retryDelay / 1000)}s, attempt ${this.subserverQueueTimeoutCount})...`));
-      this.logActivity(
-        'warning',
-        `FreshSMP queue notice from ${cleanSender}: "${cleanText}". (Subserver transfer queue timed out; retrying /lifesteal in ${Math.ceil(retryDelay / 1000)}s, attempt ${this.subserverQueueTimeoutCount}).`
-      );
-      this.triggerJoinCommandRetry(retryDelay);
+      const now = Date.now();
+      // Some proxies deliver the same queue cancellation as both a system
+      // message and a chat line. Do not count or schedule that twice.
+      const alreadyConnectedRecently = now - this.lastAlreadyConnectedAt <= 15_000;
+      if (alreadyConnectedRecently || this.isInSubserver) {
+        this.logActivity('warning', 'Ignored a Lifesteal timeout notice because FreshSMP recently confirmed this account is already connected; waiting for session state instead of reissuing /lifesteal.');
+      } else if (hasRecentLifestealRequest && now - this.lastSubserverTimeoutAt >= 5000) {
+        this.lastSubserverTimeoutAt = now;
+        this.isInSubserver = false;
+        this.isSubserverQueueActive = false;
+        this.subserverQueueTimeoutCount += 1;
+
+        // A short retry loop just re-enters the same overloaded queue. Apply
+        // bounded exponential backoff with jitter so multiple accounts spread
+        // out and the server has time to clear its transfer slot.
+        const baseRetryDelay = Math.min(120_000, 20_000 * (2 ** Math.min(this.subserverQueueTimeoutCount - 1, 3)));
+        const retryDelay = Math.min(120_000, baseRetryDelay + Math.floor(Math.random() * 5000));
+        const retrySeconds = Math.ceil(retryDelay / 1000);
+        console.log(chalk.yellow(`[PebbleAFK] FreshSMP queue notice for @${this.config.username}: "${cleanText}". (Queue attempt ended; retrying /lifesteal in ${retrySeconds}s, attempt ${this.subserverQueueTimeoutCount})...`));
+        this.logActivity(
+          'warning',
+          `FreshSMP queue notice from ${cleanSender}: "${cleanText}". The server ended the Lifesteal queue attempt; retrying /lifesteal in ${retrySeconds}s (attempt ${this.subserverQueueTimeoutCount}).`
+        );
+        this.triggerJoinCommandRetry(retryDelay);
+      }
     }
 
     if (/entered the AFK zone/i.test(cleanText)) {
       this.isInSubserver = true;
+      this.isSubserverQueueActive = false;
       this.subserverQueueTimeoutCount = 0;
+      if (this.joinCommandTimer) {
+        clearTimeout(this.joinCommandTimer);
+        this.joinCommandTimer = null;
+      }
     }
-    if (/welcome\s+_\S+\s+to\s+play\.freshsmp\.fun/i.test(cleanText)) {
+    const ownWelcome = cleanText.match(/\bwelcome\s+_?([a-zA-Z0-9_]{3,16})\s+to\s+play\.freshsmp\.fun\b/i);
+    if (ownWelcome && ownWelcome[1].toLowerCase() === this.config.username.replace(/^_/, '').toLowerCase()) {
       this.isInSubserver = false;
+      this.isSubserverQueueActive = false;
+      const alreadyConnectedThenReturnedToLobby = Date.now() - this.lastAlreadyConnectedAt <= 30_000;
+      this.lastAlreadyConnectedAt = 0;
+      if (alreadyConnectedThenReturnedToLobby && hasRecentLifestealRequest) {
+        this.logActivity('warning', 'FreshSMP welcomed this account back to the lobby after an already-connected response; retrying /lifesteal after a cooldown.');
+        this.triggerJoinCommandRetry(20_000);
+      }
     }
     if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk') || isLifestealTimeout) {
       this.lastServerNotice = isLifestealTimeout ? `${cleanSender}: ${cleanText}` : cleanText;
@@ -1534,6 +1626,7 @@ export class PebbleBotInstance {
       this.joinCommandTimer = null;
     }
     this.joinCommandClient = null;
+    this.isSubserverQueueActive = false;
     this.runtimeEntityId = null;
     this.hasSpawnedPosition = false;
   }
