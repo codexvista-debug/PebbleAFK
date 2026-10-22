@@ -235,6 +235,10 @@ export function formatDisconnectReason(raw: any): string {
   return stripMinecraftFormatting(str);
 }
 
+function isPermanentBedrockAuthRejection(reason: string): boolean {
+  return /multiplayer\/bedrock\/authentication/i.test(reason) && /\b401\b|\bUNAUTHORIZED\b/i.test(reason);
+}
+
 export class PebbleBotInstance {
   private static lastHandshakeTime: number = 0;
   private static recentChatConsoleLines = new Map<string, number>();
@@ -1719,6 +1723,11 @@ export class PebbleBotInstance {
 
   private handleAutoReconnect(reason = '') {
     if (this.isExplicitlyStopped) return;
+    if (isPermanentBedrockAuthRejection(reason)) {
+      this.setFreshSmpPhase('offline');
+      this.logActivity('error', 'Automatic reconnect paused: Microsoft rejected this account at Bedrock multiplayer authentication (401). Check Minecraft access and Xbox multiplayer privacy/family settings, then manually reconnect.');
+      return;
+    }
     if (!this.config.settings?.autoReconnect) return;
     if (this.reconnectTimer) return;
 

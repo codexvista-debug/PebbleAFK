@@ -100,7 +100,6 @@ export default function Home() {
   const [nowTick, setNowTick] = useState<number>(Date.now());
   const [copiedIgnId, setCopiedIgnId] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<BedrockAccount | null>(null);
-  const [msAuthError, setMsAuthError] = useState<string | null>(null);
   const microsoftSignInWindowRef = useRef<Window | null>(null);
   const pendingMicrosoftSignInUrlRef = useRef<string | null>(null);
   const microsoftSignOutReadyRef = useRef(false);
@@ -382,6 +381,8 @@ export default function Home() {
     verifyAccount,
     msAuthData,
     setMsAuthData,
+    msAuthError,
+    setMsAuthError,
     sendChat,
     terminalLogs,
     fetchTerminalLogs,

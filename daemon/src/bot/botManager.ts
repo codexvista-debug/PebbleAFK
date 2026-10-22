@@ -8,6 +8,18 @@ import { BotConfig, ClientMessage, DaemonMessage } from '../types';
 import { PebbleBotInstance } from './botInstance';
 import { getAndSyncTokenFolder, ensureTokenAliases, backupTokens } from './tokenManager';
 
+function describeBedrockVerificationError(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error ?? 'Unknown verification error');
+  const isBedrockUnauthorized = /401\s+Unauthorized/i.test(detail) &&
+    (/multiplayer\/bedrock\/authentication/i.test(detail) || /UNAUTHORIZED/i.test(detail));
+
+  if (isBedrockUnauthorized) {
+    return `Microsoft's Minecraft Bedrock multiplayer-authentication service rejected this account (HTTP 401 / UNAUTHORIZED). This happens before FreshSMP or RakNet is reached. Confirm this exact Microsoft account can sign in to the official Minecraft Bedrock game and join an online multiplayer server; check that it has Minecraft access and that Xbox privacy/family settings allow multiplayer. Signing out of the browser cannot grant game entitlement or multiplayer permission. Provider detail: ${detail}`;
+  }
+
+  return `Microsoft account verification failed: ${detail}`;
+}
+
 export class BotManager {
   private bots: Map<string, PebbleBotInstance> = new Map();
   private desiredBots: Map<string, BotConfig> = new Map();
@@ -314,25 +326,36 @@ export class BotManager {
       let xboxAvatarUrl = '';
 
       // 1. Primary: Generate EC key pair and retrieve Minecraft Bedrock authentication chain
+      console.log(chalk.cyan(`[Auth] Requesting Bedrock token chain...`));
+      const keyPair = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+      const clientX509 = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+      let chain: string[];
       try {
-        console.log(chalk.cyan(`[Auth] Requesting Bedrock token chain...`));
-        const keyPair = crypto.generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
-        const clientX509 = keyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
-        const chain = await (flow as any).getMinecraftBedrockChain(clientX509);
-        if (Array.isArray(chain) && chain.length >= 2) {
-          const jwt = chain[1];
-          const payloadStr = Buffer.from(jwt.split('.')[1], 'base64').toString('utf8');
-          const bedrockPayload = JSON.parse(payloadStr);
-          if (bedrockPayload?.extraData?.displayName) {
-            realGamertag = bedrockPayload.extraData.displayName;
-            console.log(chalk.green(`[Auth] Retrieved Bedrock Gamertag: ${realGamertag}`));
-          }
-          if (bedrockPayload?.extraData?.XUID) {
-            xuid = String(bedrockPayload.extraData.XUID);
-          }
-        }
+        chain = await (flow as any).getMinecraftBedrockChain(clientX509);
       } catch (errBedrock: any) {
-        console.warn(chalk.yellow(`[Auth] Bedrock chain note: ${errBedrock.message}`));
+        // An Xbox profile alone is not proof that the account can authenticate
+        // with Minecraft Bedrock. Fail closed instead of creating a bot that
+        // will repeatedly fail its Bedrock login later.
+        throw new Error(describeBedrockVerificationError(errBedrock));
+      }
+
+      if (!Array.isArray(chain) || chain.length < 2 || typeof chain[1] !== 'string') {
+        throw new Error('Microsoft sign-in completed, but did not return a valid Minecraft Bedrock authentication chain. Confirm this account can sign in to Minecraft Bedrock and try again.');
+      }
+
+      try {
+        const jwt = chain[1];
+        const payloadStr = Buffer.from(jwt.split('.')[1], 'base64').toString('utf8');
+        const bedrockPayload = JSON.parse(payloadStr);
+        if (bedrockPayload?.extraData?.displayName) {
+          realGamertag = bedrockPayload.extraData.displayName;
+          console.log(chalk.green(`[Auth] Retrieved Bedrock Gamertag: ${realGamertag}`));
+        }
+        if (bedrockPayload?.extraData?.XUID) {
+          xuid = String(bedrockPayload.extraData.XUID);
+        }
+      } catch (errPayload: any) {
+        throw new Error(`Microsoft returned a Bedrock token chain that PebbleAFK could not read: ${errPayload?.message || String(errPayload)}`);
       }
 
       // 2. Secondary: Query official Xbox Live profile REST endpoint for Gamertag and Gamerpic
@@ -408,8 +431,8 @@ export class BotManager {
       if (verificationId !== this.currentVerificationId) return;
       console.error(chalk.red(`[Auth] Device verification error:`), err.message);
       this.broadcastFn({
-        type: 'AUTH_RESULT',
-        payload: { success: false, message: err.message || 'Xbox authentication failed' },
+        type: 'ACCOUNT_VERIFY_RESULT',
+        payload: { accountId, success: false, message: err.message || 'Microsoft account verification failed' },
       });
     }
   }

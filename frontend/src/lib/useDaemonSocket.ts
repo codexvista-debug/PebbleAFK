@@ -52,6 +52,7 @@ export function useDaemonSocket(
   const [freshSmpDiagnostics, setFreshSmpDiagnostics] = useState<Record<string, FreshSmpDiagnosticState>>({});
   const [bedrockForms, setBedrockForms] = useState<Record<string, BedrockForm | null>>({});
   const [msAuthData, setMsAuthData] = useState<MsAuthData | null>(null);
+  const [msAuthError, setMsAuthError] = useState<string | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
   const [deviceSessions, setDeviceSessions] = useState<{ sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number; connected: boolean }[]>([]);
@@ -460,10 +461,16 @@ export function useDaemonSocket(
           }
 
           if (msg.type === 'MS_AUTH_CODE') {
+            setMsAuthError(null);
             setMsAuthData(msg.payload);
           }
 
+          if (msg.type === 'ACCOUNT_VERIFY_RESULT' && msg.payload?.success === false) {
+            setMsAuthError(msg.payload.message || 'Microsoft account verification failed.');
+          }
+
           if (msg.type === 'ACCOUNT_VERIFIED') {
+            setMsAuthError(null);
             setMsAuthData(null);
             if (onAccountVerifiedRef.current) {
               onAccountVerifiedRef.current(msg.payload);
@@ -759,6 +766,8 @@ export function useDaemonSocket(
     bedrockForms,
     msAuthData,
     setMsAuthData,
+    msAuthError,
+    setMsAuthError,
     reconnect: connect,
     reconnectNow,
     restartDaemon,
