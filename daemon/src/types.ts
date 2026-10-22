@@ -124,6 +124,27 @@ export interface ActivityLog {
   message: string;
 }
 
+export type FreshSmpDiagnosticPhase = 'offline' | 'connecting' | 'lobby' | 'queue' | 'lifesteal' | 'reconnecting';
+export interface FreshSmpDiagnosticEvent {
+  id: string;
+  timestamp: number;
+  category: 'connection' | 'resource_pack' | 'queue' | 'subserver' | 'protocol';
+  severity: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  durationMs?: number;
+}
+export interface FreshSmpDiagnosticState {
+  botId: string;
+  serverId?: string;
+  accountId?: string;
+  username: string;
+  phase: FreshSmpDiagnosticPhase;
+  phaseSince: number;
+  lifestealAttemptStartedAt?: number;
+  lifestealSessionStartedAt?: number;
+  events: FreshSmpDiagnosticEvent[];
+}
+
 // Client to Daemon Messages
 export type ClientMessage =
   | { type: 'AUTH'; payload: { token: string; username?: string; sessionId?: string; deviceLabel?: string } }
@@ -159,6 +180,7 @@ export type DaemonMessage =
   | { type: 'MS_AUTH_CODE'; payload: { botId: string; userCode: string; url: string; message: string; targetEmail?: string } }
   | { type: 'ACCOUNT_VERIFIED'; payload: { botId: string; email: string; ign: string; uuid?: string; avatarUrl?: string } }
   | { type: 'ACTIVITY_LOG'; payload: ActivityLog }
+  | { type: 'FRESHSMP_DIAGNOSTICS'; payload: FreshSmpDiagnosticState }
   | { type: 'PONG'; payload: { timestamp: number } }
   | { type: 'SERVER_INFO'; payload: { version: string; activeBots: string[] } }
   | { type: 'TERMINAL_LOGS'; payload: { logs: string[]; timestamp: number } }

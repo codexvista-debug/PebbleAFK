@@ -86,6 +86,27 @@ export type BotLifecycleState =
   | 'KICKED'
   | 'ERROR';
 
+export type FreshSmpDiagnosticPhase = 'offline' | 'connecting' | 'lobby' | 'queue' | 'lifesteal' | 'reconnecting';
+export interface FreshSmpDiagnosticEvent {
+  id: string;
+  timestamp: number;
+  category: 'connection' | 'resource_pack' | 'queue' | 'subserver' | 'protocol';
+  severity: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  durationMs?: number;
+}
+export interface FreshSmpDiagnosticState {
+  botId: string;
+  serverId?: string;
+  accountId?: string;
+  username: string;
+  phase: FreshSmpDiagnosticPhase;
+  phaseSince: number;
+  lifestealAttemptStartedAt?: number;
+  lifestealSessionStartedAt?: number;
+  events: FreshSmpDiagnosticEvent[];
+}
+
 export interface ChatMessage {
   botId: string;
   serverId?: string;

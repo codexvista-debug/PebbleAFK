@@ -3,7 +3,7 @@ import dns from 'dns';
 import fs from 'fs';
 import { randomUUID } from 'crypto';
 const bedrock = require('bedrock-protocol');
-import { BotConfig, BotLifecycleState, BossBarPayload, DaemonMessage, TelemetryPayload } from '../types';
+import { BotConfig, BotLifecycleState, BossBarPayload, DaemonMessage, FreshSmpDiagnosticEvent, FreshSmpDiagnosticPhase, FreshSmpDiagnosticState, TelemetryPayload } from '../types';
 import { getAndSyncTokenFolder } from './tokenManager';
 
 function pingBedrockJsp(host: string, port: number, timeoutMs = 2000): Promise<{ version?: string; motd?: string; protocol?: string } | null> {
@@ -277,6 +277,7 @@ export class PebbleBotInstance {
   private originalHost: string;
   private originalPort: number;
   private isTransferring: boolean = false;
+  private hasTransferredToFreshSmpSubserver: boolean = false;
   private hasSpawnedPosition: boolean = false;
   private runtimeEntityId: bigint | null = null;
   private lastServerNotice: string = '';
@@ -284,6 +285,13 @@ export class PebbleBotInstance {
   private lastDisconnectReason: string = '';
   private bossBars = new Map<string, { title: string; progress?: number; updatedAt: number }>();
   private currentAfkBossBar: BossBarPayload | null = null;
+  private freshSmpPhase: FreshSmpDiagnosticPhase = 'offline';
+  private freshSmpPhaseSince = Date.now();
+  private freshSmpEvents: FreshSmpDiagnosticEvent[] = [];
+  private lifestealAttemptStartedAt = 0;
+  private lifestealSessionStartedAt = 0;
+  private lifestealThresholdReported = false;
+  private lifestealThresholdTimer: NodeJS.Timeout | null = null;
 
   // Telemetry cache
   private position = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -304,6 +312,80 @@ export class PebbleBotInstance {
     return Math.floor((Date.now() - this.connectStartTime) / 1000);
   }
 
+  private isFreshSmpProfile(): boolean {
+    return `${this.originalHost} ${this.config.host}`.toLowerCase().includes('freshsmp');
+  }
+
+  public getFreshSmpDiagnostics(): FreshSmpDiagnosticState | null {
+    if (!this.isFreshSmpProfile()) return null;
+    return {
+      botId: this.config.id,
+      serverId: this.config.serverId,
+      accountId: this.config.accountId,
+      username: this.config.username,
+      phase: this.freshSmpPhase,
+      phaseSince: this.freshSmpPhaseSince,
+      lifestealAttemptStartedAt: this.lifestealAttemptStartedAt || undefined,
+      lifestealSessionStartedAt: this.lifestealSessionStartedAt || undefined,
+      events: [...this.freshSmpEvents],
+    };
+  }
+
+  private publishFreshSmpDiagnostics() {
+    const payload = this.getFreshSmpDiagnostics();
+    if (payload) this.broadcastFn({ type: 'FRESHSMP_DIAGNOSTICS', payload });
+  }
+
+  private setFreshSmpPhase(phase: FreshSmpDiagnosticPhase) {
+    if (!this.isFreshSmpProfile() || this.freshSmpPhase === phase) return;
+    this.freshSmpPhase = phase;
+    this.freshSmpPhaseSince = Date.now();
+    this.publishFreshSmpDiagnostics();
+  }
+
+  private recordFreshSmpEvent(category: FreshSmpDiagnosticEvent['category'], severity: FreshSmpDiagnosticEvent['severity'], message: string, durationMs?: number) {
+    if (!this.isFreshSmpProfile()) return;
+    this.freshSmpEvents = [...this.freshSmpEvents.slice(-99), {
+      id: randomUUID(), timestamp: Date.now(), category, severity, message, durationMs,
+    }];
+    this.publishFreshSmpDiagnostics();
+  }
+
+  private armLifestealThreshold(origin: 'attempt' | 'queue') {
+    if (!this.isFreshSmpProfile() || !this.lifestealAttemptStartedAt || this.lifestealThresholdReported) return;
+    if (this.lifestealThresholdTimer) clearTimeout(this.lifestealThresholdTimer);
+    const dueAt = this.lifestealAttemptStartedAt + 60_000;
+    this.lifestealThresholdTimer = setTimeout(() => {
+      this.lifestealThresholdTimer = null;
+      if (this.isInSubserver || !this.lifestealAttemptStartedAt) return;
+      const elapsed = Date.now() - this.lifestealAttemptStartedAt;
+      if (elapsed < 60_000) return;
+      this.lifestealThresholdReported = true;
+      const detail = origin === 'queue'
+        ? 'FreshSMP has kept this account in the /lifesteal queue for at least 60 seconds.'
+        : 'No confirmed /lifesteal queue or subserver entry arrived within 60 seconds.';
+      this.recordFreshSmpEvent('queue', 'error', detail, elapsed);
+      this.logActivity('warning', detail);
+    }, Math.max(0, dueAt - Date.now()));
+  }
+
+  private finishLifestealAttempt(reason: string, severity: FreshSmpDiagnosticEvent['severity']) {
+    if (this.lifestealThresholdTimer) clearTimeout(this.lifestealThresholdTimer);
+    this.lifestealThresholdTimer = null;
+    const duration = this.lifestealSessionStartedAt ? Date.now() - this.lifestealSessionStartedAt : 0;
+    if (this.lifestealSessionStartedAt) {
+      const underMinute = duration < 60_000;
+      this.recordFreshSmpEvent('subserver', underMinute ? 'error' : severity,
+        `${reason}; confirmed Lifesteal session lasted ${(duration / 1000).toFixed(1)}s${underMinute ? ' (under the 60-second stability threshold)' : ''}.`, duration);
+    } else if (this.lifestealAttemptStartedAt) {
+      const durationMs = Date.now() - this.lifestealAttemptStartedAt;
+      this.recordFreshSmpEvent('queue', severity, `${reason}; /lifesteal attempt lasted ${(durationMs / 1000).toFixed(1)}s.`, durationMs);
+    }
+    this.lifestealAttemptStartedAt = 0;
+    this.lifestealSessionStartedAt = 0;
+    this.lifestealThresholdReported = false;
+  }
+
   public async start() {
     if (this.startInProgress || (this.client && !this.isTransferring)) {
       console.log(chalk.gray(`[PebbleAFK] Ignoring duplicate connect request for ${this.config.username}; a connection attempt is already active.`));
@@ -316,7 +398,9 @@ export class PebbleBotInstance {
     this.clearBossBars();
     this.isInSubserver = false;
     this.isSubserverQueueActive = false;
-    this.lastLifestealCommandAt = 0;
+    // Preserve the command timestamp across a FreshSMP transfer: queue/entry
+    // notices may arrive only after the destination client has spawned.
+    if (!this.hasTransferredToFreshSmpSubserver) this.lastLifestealCommandAt = 0;
     this.lastAlreadyConnectedAt = 0;
     this.connectionStable = false;
     this.lastServerNotice = '';
@@ -328,6 +412,8 @@ export class PebbleBotInstance {
     }
 
     this.updateState('CONNECTING');
+    this.setFreshSmpPhase('connecting');
+    this.recordFreshSmpEvent('connection', 'info', `Connecting to ${this.config.host}:${this.config.port}; Bedrock version ${this.config.version || 'auto'}.`);
     this.logActivity('connect', `Connecting to Bedrock server ${this.config.host}:${this.config.port}...`);
 
     try {
@@ -458,6 +544,16 @@ export class PebbleBotInstance {
       const client = bedrock.createClient(clientOptions);
       this.client = client;
 
+      // Observe, but leave the automatic resource-pack response to bedrock-protocol.
+      client.on('resource_packs_info', (packet: any) => {
+        const count = (packet?.texture_packs?.length || 0) + (packet?.behaviour_packs?.length || packet?.behavior_packs?.length || 0);
+        this.recordFreshSmpEvent('resource_pack', 'info', `Server sent resource-pack info (${count} pack(s); must_accept=${Boolean(packet?.must_accept)}). bedrock-protocol will auto-acknowledge.`);
+      });
+      client.on('resource_pack_stack', (packet: any) => {
+        const count = (packet?.resource_packs?.length || 0) + (packet?.behavior_packs?.length || packet?.behaviour_packs?.length || 0);
+        this.recordFreshSmpEvent('resource_pack', 'success', `Server sent resource-pack stack (${count} pack(s)); waiting for spawn to confirm login completed.`);
+      });
+
       this.hookConnectionDiagnostics(client);
       client.once('connect_allowed', () => this.hookConnectionDiagnostics(client));
 
@@ -466,6 +562,7 @@ export class PebbleBotInstance {
         this.hookConnectionDiagnostics(client);
         console.log(chalk.green(`[PebbleAFK] Microsoft/Xbox authentication session established for ${this.config.username}; awaiting Bedrock RakNet handshake.`));
         this.logActivity('connect', 'Microsoft/Xbox authentication verified; awaiting the Bedrock RakNet handshake...');
+        this.recordFreshSmpEvent('connection', 'success', 'Microsoft/Xbox authentication completed; awaiting Bedrock login and resource-pack negotiation.');
       });
 
       // Join event: Server accepted player connection
@@ -473,6 +570,7 @@ export class PebbleBotInstance {
         this.hookConnectionDiagnostics(client);
         this.connectStartTime = Date.now();
         this.updateState('LOGGED_IN');
+        this.recordFreshSmpEvent('connection', 'success', 'FreshSMP accepted the Bedrock login.');
         this.logActivity('connect', `Successfully joined Bedrock server ${this.config.host}:${this.config.port}`);
         this.handleSystemMessage(`Connected to ${this.config.host}:${this.config.port}`);
         this.pushChat({
@@ -494,6 +592,13 @@ export class PebbleBotInstance {
         this.hookConnectionDiagnostics(client);
         if (!this.connectStartTime) this.connectStartTime = Date.now();
         this.updateState('SPAWNED');
+        if (this.hasTransferredToFreshSmpSubserver) {
+          this.setFreshSmpPhase('queue');
+          this.recordFreshSmpEvent('subserver', 'info', 'Spawned on the FreshSMP transfer target; waiting for explicit Lifesteal/AFK-zone confirmation.');
+        } else {
+          this.setFreshSmpPhase('lobby');
+        }
+        this.recordFreshSmpEvent('connection', 'success', 'World spawn completed; Bedrock login/resource-pack handshake reached spawn.');
         this.logActivity('spawn', '🌍 Spawned into Bedrock world!');
         this.handleSystemMessage(`🌍 Spawned into world as @${this.config.username}`);
 
@@ -687,11 +792,13 @@ export class PebbleBotInstance {
         if (this.client !== client || this.isTransferring) return;
         const targetHost = packet.server_address || this.config.host;
         const targetPort = packet.port || 19132;
+        this.recordFreshSmpEvent('subserver', 'info', `Server requested a Bedrock transfer to ${targetHost}:${targetPort}.`);
         console.log(chalk.cyan(`[PebbleAFK] 🔄 Subserver transfer requested for @${this.config.username} -> ${targetHost}:${targetPort}`));
         this.logActivity('status', `🔄 Transferring to subserver (${targetHost}:${targetPort})...`);
         this.handleSystemMessage(`🔄 Server transferring to subserver ${targetHost}:${targetPort}...`);
 
         this.isTransferring = true;
+        this.hasTransferredToFreshSmpSubserver = true;
         this.cleanup();
         this.client = null;
         try {
@@ -728,6 +835,9 @@ export class PebbleBotInstance {
         }
         reason = formatDisconnectReason(reason);
         this.lastDisconnectReason = reason;
+        this.finishLifestealAttempt(`Connection ended: ${reason}`, 'error');
+        this.recordFreshSmpEvent('connection', 'error', `Bedrock connection ended: ${reason}`);
+        this.setFreshSmpPhase('reconnecting');
 
         if (ipv4Addresses.length > 1 && /connect timed out|no reply to RakNet UDP packets|filtering UDP/i.test(reason)) {
           const hostKey = cleanHost.toLowerCase();
@@ -839,6 +949,8 @@ export class PebbleBotInstance {
       this.reconnectTimer = null;
     }
     this.cleanup();
+    this.finishLifestealAttempt('Bot was stopped manually', 'warning');
+    this.setFreshSmpPhase('offline');
     if (this.client) {
       try { this.client.close(); } catch (_) {}
       this.client = null;
@@ -887,6 +999,12 @@ export class PebbleBotInstance {
       if (message.startsWith('/')) {
         if (/^\/?lifesteal(?:\s|$)/i.test(message.trim())) {
           this.lastLifestealCommandAt = Date.now();
+          this.lifestealAttemptStartedAt = this.lastLifestealCommandAt;
+          this.lifestealSessionStartedAt = 0;
+          this.lifestealThresholdReported = false;
+          this.setFreshSmpPhase('queue');
+          this.recordFreshSmpEvent('queue', 'info', 'Sent /lifesteal; waiting for FreshSMP queue or subserver confirmation.');
+          this.armLifestealThreshold('attempt');
         }
         // Send as Bedrock command
         const uuid = randomUUID();
@@ -955,7 +1073,7 @@ export class PebbleBotInstance {
     // account in its Lifesteal queue (or after it reached the AFK area).
     if (this.isInSubserver || this.isSubserverQueueActive) return;
 
-    const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
+    const isFreshSmp = this.isFreshSmpProfile();
     const configuredCommand = this.config.settings?.joinCommand?.trim().slice(0, 256) || (isFreshSmp ? '/lifesteal' : '');
     if (!configuredCommand) return;
 
@@ -992,7 +1110,11 @@ export class PebbleBotInstance {
     if (this.joinCommandClient === client) return;
     this.joinCommandClient = client;
 
-    const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
+    // A fresh client is created after a transfer. Do not issue /lifesteal
+    // again on the destination server or reset the queue/session it just joined.
+    if (this.hasTransferredToFreshSmpSubserver) return;
+
+    const isFreshSmp = this.isFreshSmpProfile();
     const delaySeconds = isFreshSmp ? 10 : Math.min(300, Math.max(3, Number(this.config.settings?.joinCommandDelay ?? 3) || 3));
     this.triggerJoinCommandRetry(delaySeconds * 1000);
   }
@@ -1338,6 +1460,10 @@ export class PebbleBotInstance {
 
     if (!cleanText) return;
 
+    if (/declined the resource pack|resource pack.*declined/i.test(cleanText)) {
+      this.recordFreshSmpEvent('resource_pack', 'warning', `Server reported a resource-pack decline: ${cleanText}`);
+    }
+
     // Pattern recognition: extract player sender if embedded in message
     // Handles formats like:
     // "<Player> message"
@@ -1373,7 +1499,7 @@ export class PebbleBotInstance {
       (/\blifesteal\b/i.test(cleanText) && /\btimed\s*out\b|\btimeout\b/i.test(cleanText));
 
     const hasRecentLifestealRequest = Date.now() - this.lastLifestealCommandAt <= 180_000;
-    const isFreshSmp = this.config.host.toLowerCase().includes('freshsmp');
+    const isFreshSmp = this.isFreshSmpProfile();
     const alreadyConnectedMatch = isFreshSmp && hasRecentLifestealRequest &&
       /you are already connected to this server/i.test(cleanText);
     if (alreadyConnectedMatch) {
@@ -1381,6 +1507,11 @@ export class PebbleBotInstance {
       this.isInSubserver = true;
       this.isSubserverQueueActive = false;
       this.subserverQueueTimeoutCount = 0;
+      if (!this.lifestealSessionStartedAt) this.lifestealSessionStartedAt = Date.now();
+      this.setFreshSmpPhase('lifesteal');
+      this.recordFreshSmpEvent('subserver', 'success', 'FreshSMP confirmed this account is already connected to Lifesteal.');
+      if (this.lifestealThresholdTimer) clearTimeout(this.lifestealThresholdTimer);
+      this.lifestealThresholdTimer = null;
       if (this.joinCommandTimer) {
         clearTimeout(this.joinCommandTimer);
         this.joinCommandTimer = null;
@@ -1396,6 +1527,8 @@ export class PebbleBotInstance {
     if (isLifestealQueueStatus && !isLifestealTimeout) {
       const wasQueueActive = this.isSubserverQueueActive;
       this.isSubserverQueueActive = true;
+      this.setFreshSmpPhase('queue');
+      this.armLifestealThreshold('queue');
       const queueStatus = queuePosition
         ? `position ${queuePosition[1]}/${queuePosition[2]}, ETA ${queuePosition[3]}s`
         : 'waiting for a queue position';
@@ -1422,8 +1555,10 @@ export class PebbleBotInstance {
         this.logActivity('warning', 'Ignored a Lifesteal timeout notice because FreshSMP recently confirmed this account is already connected; waiting for session state instead of reissuing /lifesteal.');
       } else if (hasRecentLifestealRequest && now - this.lastSubserverTimeoutAt >= 5000) {
         this.lastSubserverTimeoutAt = now;
+        this.finishLifestealAttempt(`FreshSMP ended the /lifesteal queue: ${cleanText}`, 'error');
         this.isInSubserver = false;
         this.isSubserverQueueActive = false;
+        this.setFreshSmpPhase('lobby');
         this.subserverQueueTimeoutCount += 1;
 
         // A short retry loop just re-enters the same overloaded queue. Apply
@@ -1442,8 +1577,16 @@ export class PebbleBotInstance {
     }
 
     if (/entered the AFK zone/i.test(cleanText)) {
+      const firstEntry = !this.isInSubserver;
       this.isInSubserver = true;
       this.isSubserverQueueActive = false;
+      if (firstEntry) {
+        this.lifestealSessionStartedAt = Date.now();
+        this.setFreshSmpPhase('lifesteal');
+        this.recordFreshSmpEvent('subserver', 'success', 'FreshSMP confirmed entry into the AFK zone / Lifesteal subserver.');
+      }
+      if (this.lifestealThresholdTimer) clearTimeout(this.lifestealThresholdTimer);
+      this.lifestealThresholdTimer = null;
       this.subserverQueueTimeoutCount = 0;
       if (this.joinCommandTimer) {
         clearTimeout(this.joinCommandTimer);
@@ -1452,8 +1595,10 @@ export class PebbleBotInstance {
     }
     const ownWelcome = cleanText.match(/\bwelcome\s+_?([a-zA-Z0-9_]{3,16})\s+to\s+play\.freshsmp\.fun\b/i);
     if (ownWelcome && ownWelcome[1].toLowerCase() === this.config.username.replace(/^_/, '').toLowerCase()) {
+      if (this.lifestealSessionStartedAt) this.finishLifestealAttempt('FreshSMP returned this account to its lobby', 'warning');
       this.isInSubserver = false;
       this.isSubserverQueueActive = false;
+      this.setFreshSmpPhase('lobby');
       const alreadyConnectedThenReturnedToLobby = Date.now() - this.lastAlreadyConnectedAt <= 30_000;
       this.lastAlreadyConnectedAt = 0;
       if (alreadyConnectedThenReturnedToLobby && hasRecentLifestealRequest) {

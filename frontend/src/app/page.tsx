@@ -42,12 +42,14 @@ import {
   RotateCw,
   CornerDownLeft,
   Terminal,
-  ArrowUp
+  ArrowUp,
+  Activity
 } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
 import { TermuxConsoleModal } from '@/components/TermuxConsoleModal';
 import { TermuxStreamPage } from '@/components/TermuxStreamPage';
+import { FreshSmpDiagnosticsPage } from '@/components/FreshSmpDiagnosticsPage';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { MicrosoftAuthModal } from '@/components/MicrosoftAuthModal';
 import { ServerProfileModal } from '@/components/ServerProfileModal';
@@ -80,7 +82,7 @@ export default function Home() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'termux_stream' | 'servers' | 'accounts'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'termux_stream' | 'diagnostics' | 'servers' | 'accounts'>('dashboard');
 
   // Accounts state & unlink confirmation
   const [accounts, setAccounts] = useState<BedrockAccount[]>([]);
@@ -365,6 +367,7 @@ export default function Home() {
     bossBarsByBot,
     messagesByBot,
     activityLogs,
+    freshSmpDiagnostics,
     deviceSessions,
     disconnectDeviceSession,
     reconnect,
@@ -1394,6 +1397,11 @@ export default function Home() {
               </div>
               <span className="font-black text-sm text-slate-900 tracking-tight">Termux Stream</span>
             </div>
+          ) : activeTab === 'diagnostics' ? (
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center"><Activity className="w-4 h-4" /></div>
+              <span className="font-black text-sm text-slate-900 tracking-tight">Diagnostics</span>
+            </div>
           ) : (
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center font-black text-xs shadow-xs ring-2 ring-emerald-500/20">
@@ -1511,6 +1519,23 @@ export default function Home() {
                   <span>Termux Stream</span>
                 </div>
                 <span className={`w-2 h-2 rounded-full ${daemonStatus === 'AUTHENTICATED' ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('diagnostics');
+                  setIsMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                  activeTab === 'diagnostics'
+                    ? 'bg-amber-50 text-amber-900 border border-amber-200/90 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
+                }`}
+              >
+                <div className={`p-1 rounded-lg ${activeTab === 'diagnostics' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  <Activity className="w-4 h-4" />
+                </div>
+                <span>Diagnostics</span>
               </button>
 
               <button
@@ -2251,6 +2276,17 @@ export default function Home() {
                 onUpdateDaemon={updateDaemon}
                 onShutdownDaemon={shutdownDaemon}
                 termuxCommand={termux1ClickCmd}
+              />
+            )}
+
+            {activeTab === 'diagnostics' && (
+              <FreshSmpDiagnosticsPage
+                servers={servers}
+                accounts={accounts}
+                diagnostics={freshSmpDiagnostics}
+                botStates={botStates}
+                botReasons={botReasons}
+                now={nowTick}
               />
             )}
 

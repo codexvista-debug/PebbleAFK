@@ -232,6 +232,11 @@ export class BotManager {
             },
           });
 
+          const freshSmpDiagnostics = instance.getFreshSmpDiagnostics();
+          if (freshSmpDiagnostics) {
+            this.broadcastFn({ type: 'FRESHSMP_DIAGNOSTICS', payload: freshSmpDiagnostics });
+          }
+
           const bossBar = instance.getBossBar();
           this.broadcastFn({
             type: 'BOSS_BAR',

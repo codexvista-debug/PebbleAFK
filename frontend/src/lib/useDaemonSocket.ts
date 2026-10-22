@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { BotLifecycleState, BossBar, ChatMessage, Telemetry, ActivityLog, BedrockForm, SocketStatus, MsAuthData } from '../types';
+import { BotLifecycleState, BossBar, ChatMessage, Telemetry, ActivityLog, BedrockForm, SocketStatus, MsAuthData, FreshSmpDiagnosticState } from '../types';
 
 export function useDaemonSocket(
   currentUser: string | null,
@@ -49,6 +49,7 @@ export function useDaemonSocket(
     return {};
   });
   const [activityLogs, setActivityLogs] = useState<Record<string, ActivityLog[]>>({});
+  const [freshSmpDiagnostics, setFreshSmpDiagnostics] = useState<Record<string, FreshSmpDiagnosticState>>({});
   const [bedrockForms, setBedrockForms] = useState<Record<string, BedrockForm | null>>({});
   const [msAuthData, setMsAuthData] = useState<MsAuthData | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
@@ -182,6 +183,7 @@ export function useDaemonSocket(
     setBotReasons({});
     setTelemetries({});
     setActivityLogs({});
+    setFreshSmpDiagnostics({});
     setBedrockForms({});
     setMsAuthData(null);
     setLatency(null);
@@ -444,6 +446,10 @@ export function useDaemonSocket(
               ...prev,
               [msg.payload.botId]: [...(prev[msg.payload.botId] || []).slice(-100), msg.payload],
             }));
+          }
+
+          if (msg.type === 'FRESHSMP_DIAGNOSTICS' && msg.payload?.botId) {
+            setFreshSmpDiagnostics((prev) => ({ ...prev, [msg.payload.botId]: msg.payload }));
           }
 
           if (msg.type === 'BEDROCK_FORM') {
@@ -749,6 +755,7 @@ export function useDaemonSocket(
     bossBarsByBot,
     messagesByBot,
     activityLogs,
+    freshSmpDiagnostics,
     bedrockForms,
     msAuthData,
     setMsAuthData,
