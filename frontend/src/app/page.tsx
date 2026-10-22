@@ -2605,46 +2605,6 @@ export default function Home() {
 
                                       {/* Quick Action Buttons */}
                                       <div className="flex items-center gap-1.5">
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            if (!activeServer) return;
-                                            if (daemonStatus !== 'AUTHENTICATED') {
-                                              showToast('Cannot toggle: Termux daemon is offline.', 'error');
-                                              return;
-                                            }
-                                            if (isConnected || isConnecting) {
-                                              handleDisconnectAccount(acc, activeServer);
-                                            } else {
-                                              handleConnectAccount(acc, activeServer);
-                                            }
-                                          }}
-                                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs active:scale-95 cursor-pointer ${
-                                            isConnected
-                                              ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
-                                              : isConnecting
-                                              ? 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200'
-                                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                          }`}
-                                        >
-                                          {isConnected ? (
-                                            <>
-                                              <Square className="w-3 h-3" />
-                                              <span>Disconnect</span>
-                                            </>
-                                          ) : isConnecting ? (
-                                            <>
-                                              <RefreshCw className="w-3 h-3 animate-spin" />
-                                              <span>Connecting</span>
-                                            </>
-                                          ) : (
-                                            <>
-                                              <Play className="w-3 h-3 fill-current" />
-                                              <span>Connect</span>
-                                            </>
-                                          )}
-                                        </button>
-
                                         {/* Remove from server profile button */}
                                         <button
                                           type="button"
