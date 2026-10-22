@@ -45,7 +45,7 @@ export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
   joinCommandDelay: 10,
 };
 
-export const MAX_BEDROCK_ACCOUNTS = 20;
+export const MAX_BEDROCK_ACCOUNTS = 50;
 
 export interface BedrockAccount {
   id: string;
