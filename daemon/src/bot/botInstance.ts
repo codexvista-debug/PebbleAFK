@@ -1373,9 +1373,27 @@ export class PebbleBotInstance {
       .filter((bar) => /\b(?:afk|reward)\b/i.test(stripMinecraftFormatting(bar.title)))
       .sort((a, b) => b.updatedAt - a.updatedAt)[0];
     if (afkBar) {
+      const firstConfirmedSessionSignal = !this.lifestealSessionStartedAt;
       this.isInSubserver = true;
       this.isSubserverQueueActive = false;
       this.subserverQueueTimeoutCount = 0;
+      if (firstConfirmedSessionSignal && this.isFreshSmpProfile()) {
+        this.lifestealSessionStartedAt = Date.now();
+        this.setFreshSmpPhase('lifesteal');
+        const attemptDuration = this.lifestealAttemptStartedAt
+          ? Date.now() - this.lifestealAttemptStartedAt
+          : undefined;
+        this.recordFreshSmpEvent(
+          'subserver',
+          'success',
+          `FreshSMP AFK/reward boss bar confirmed this account is in the AFK zone / Lifesteal subserver${attemptDuration !== undefined ? ` after ${(attemptDuration / 1000).toFixed(1)}s` : ''}.`,
+          attemptDuration,
+        );
+      }
+      if (this.lifestealThresholdTimer) {
+        clearTimeout(this.lifestealThresholdTimer);
+        this.lifestealThresholdTimer = null;
+      }
       if (this.joinCommandTimer) {
         clearTimeout(this.joinCommandTimer);
         this.joinCommandTimer = null;
