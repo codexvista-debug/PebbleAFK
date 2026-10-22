@@ -516,7 +516,7 @@ export class PebbleBotInstance {
         onMsaCode: (data: any) => {
           console.log(chalk.yellow(`[MS Auth] Code for ${this.config.username}: ${data.user_code}`));
           const directUri = data.user_code
-            ? `https://www.microsoft.com/link?otc=${encodeURIComponent(data.user_code)}&prompt=select_account`
+            ? `https://www.microsoft.com/link?otc=${encodeURIComponent(data.user_code)}&prompt=login`
             : (data.verification_uri || 'https://www.microsoft.com/link');
 
           this.broadcastFn({

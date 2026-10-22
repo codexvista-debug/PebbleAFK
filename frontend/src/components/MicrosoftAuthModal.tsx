@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, ExternalLink, Copy, CheckCircle2, KeyRound, AlertTriangle, Loader2, ShieldAlert } from 'lucide-react';
+import { X, ExternalLink, Copy, CheckCircle2, KeyRound, AlertTriangle, Loader2, ShieldAlert, LogOut } from 'lucide-react';
 
 interface MicrosoftAuthModalProps {
   authData: {
@@ -32,7 +32,7 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
   const effectiveEmail = accountEmail || authData.targetEmail;
 
   // Prefer the daemon's device-specific URL so the automatic tab and manual fallback match.
-  let directRemoteUrl = authData.url || `https://login.live.com/oauth20_remoteconnect.srf?otc=${encodeURIComponent(authData.userCode)}&prompt=select_account`;
+  let directRemoteUrl = authData.url || `https://login.live.com/oauth20_remoteconnect.srf?otc=${encodeURIComponent(authData.userCode)}&prompt=login`;
   if (effectiveEmail && !directRemoteUrl.includes('login_hint=')) {
     directRemoteUrl += `${directRemoteUrl.includes('?') ? '&' : '?'}login_hint=${encodeURIComponent(effectiveEmail)}`;
   }
@@ -134,14 +134,14 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
             </button>
           </div>
 
-          {/* Account selection stays in the user's control; no browser session is signed out. */}
-          <div className="p-3.5 rounded-xl bg-sky-50/80 border border-sky-200/90 text-left space-y-1.5">
-            <div className="flex items-center gap-1.5 text-sky-900 font-bold text-xs">
-              <ShieldAlert className="w-4 h-4 text-sky-600 shrink-0" />
-              <span>Choose the Microsoft account for this Bedrock link</span>
+          {/* Sign-out is initiated by Add Account; passkeys can still be offered by the device. */}
+          <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200/90 text-left space-y-1.5">
+            <div className="flex items-center gap-1.5 text-amber-900 font-bold text-xs">
+              <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>Microsoft browser session is signed out first</span>
             </div>
-            <p className="text-[11px] text-sky-800 leading-relaxed">
-              Microsoft will show its account chooser. Select <b>Use another account</b> if needed; PebbleAFK won&apos;t sign out your browser.
+            <p className="text-[11px] text-amber-800 leading-relaxed">
+              Add Account signs Microsoft out in this browser before continuing, which can sign you out of other Microsoft pages too. A saved passkey or Windows Hello prompt may still appear; choose <b>Sign-in options</b> / <b>Use another way</b> to enter an email.
             </p>
           </div>
 
@@ -157,7 +157,7 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
               <span>Open Microsoft Sign-In</span>
             </a>
 
-            <div className="grid grid-cols-1 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 onClick={handleCopyLink}
                 className={`py-2 px-3 rounded-lg text-xs font-bold transition border cursor-pointer flex items-center justify-center gap-1.5 ${
@@ -165,11 +165,22 @@ export const MicrosoftAuthModal: React.FC<MicrosoftAuthModalProps> = ({
                     ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                     : 'bg-slate-900 hover:bg-slate-800 text-white border-slate-900 shadow-2xs'
                 }`}
-                title="Copy the Microsoft account-selection link"
+                title="Copy the Microsoft sign-in link"
               >
                 {copiedLink ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedLink ? 'Link Copied!' : 'Copy Microsoft Sign-In Link'}</span>
+                <span>{copiedLink ? 'Link Copied!' : 'Copy Sign-In Link'}</span>
               </button>
+
+              <a
+                href="https://login.live.com/logout.srf"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition border border-slate-200 cursor-pointer flex items-center justify-center gap-1.5"
+                title="Manually sign out of Microsoft in this browser"
+              >
+                <LogOut className="w-3.5 h-3.5 text-slate-500" />
+                <span>Sign Out of Microsoft</span>
+              </a>
             </div>
           </div>
         </div>

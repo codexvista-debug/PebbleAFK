@@ -102,6 +102,9 @@ export default function Home() {
   const [deletingAccount, setDeletingAccount] = useState<BedrockAccount | null>(null);
   const [msAuthError, setMsAuthError] = useState<string | null>(null);
   const microsoftSignInWindowRef = useRef<Window | null>(null);
+  const pendingMicrosoftSignInUrlRef = useRef<string | null>(null);
+  const microsoftSignOutReadyRef = useRef(false);
+  const microsoftSignOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
 
   // Live 1-second ticker for precise uptime formatting
@@ -726,25 +729,41 @@ export default function Home() {
     const targetId = typeof target === 'object' && target ? target.id : `acc_${Math.random().toString(36).substring(2, 9)}`;
     const targetEmail = typeof target === 'string' ? target : (target?.username || '');
 
-    // Open a user-visible tab during the click gesture so popup blockers allow it.
-    // Once the daemon returns Microsoft's device code, the tab is navigated to the
-    // account chooser. We never clear or alter the browser's Microsoft session.
-    try {
-      microsoftSignInWindowRef.current?.close();
-      const signInWindow = window.open('about:blank', '_blank');
-      microsoftSignInWindowRef.current = signInWindow;
-      if (signInWindow) {
-        signInWindow.document.title = 'Microsoft sign-in';
-        signInWindow.document.body.innerHTML = '<main style="font:16px system-ui;padding:2rem;color:#334155"><h2>Preparing Microsoft sign-in…</h2><p>This tab will open the account chooser when the verification code is ready.</p></main>';
+    const shouldSignOutFirst = !target;
+
+    // Only new-account creation signs out first. Open the tab synchronously in the
+    // click gesture so popup blockers allow the Microsoft logout/sign-in sequence.
+    if (shouldSignOutFirst) {
+      try {
+        microsoftSignInWindowRef.current?.close();
+        if (microsoftSignOutTimerRef.current) clearTimeout(microsoftSignOutTimerRef.current);
+        pendingMicrosoftSignInUrlRef.current = null;
+        microsoftSignOutReadyRef.current = false;
+        const authWindow = window.open('about:blank', '_blank');
+        microsoftSignInWindowRef.current = authWindow;
+        if (authWindow) {
+          authWindow.document.title = 'Signing out of Microsoft';
+          authWindow.document.body.innerHTML = '<main style="font:16px system-ui;padding:2rem;color:#334155"><h2>Signing out of Microsoft…</h2><p>This signs out Microsoft web pages in this browser before the new account sign-in opens.</p></main>';
+          authWindow.location.href = 'https://login.live.com/logout.srf';
+          microsoftSignOutTimerRef.current = setTimeout(() => {
+            microsoftSignOutReadyRef.current = true;
+            const signInUrl = pendingMicrosoftSignInUrlRef.current;
+            if (signInUrl && !authWindow.closed) {
+              authWindow.location.href = signInUrl;
+              authWindow.focus();
+              pendingMicrosoftSignInUrlRef.current = null;
+            }
+          }, 3000);
+        }
+      } catch {
+        microsoftSignInWindowRef.current = null;
       }
-    } catch {
-      microsoftSignInWindowRef.current = null;
     }
 
     showToast(
-      microsoftSignInWindowRef.current
+      !shouldSignOutFirst || microsoftSignInWindowRef.current
         ? 'Requesting Microsoft sign-in via Termux daemon...'
-        : 'Sign-in popup was blocked. Use Open Microsoft Sign-In in the verification dialog.',
+        : 'Microsoft sign-out tab was blocked. Use Sign Out of Microsoft, then Open Microsoft Sign-In in the verification dialog.',
       'info'
     );
     verifyAccount(targetId, targetEmail);
@@ -753,13 +772,21 @@ export default function Home() {
   useEffect(() => {
     const signInWindow = microsoftSignInWindowRef.current;
     if (msAuthData?.url && signInWindow && !signInWindow.closed) {
-      signInWindow.location.replace(msAuthData.url);
-      signInWindow.focus();
-      microsoftSignInWindowRef.current = null;
+      pendingMicrosoftSignInUrlRef.current = msAuthData.url;
+      if (microsoftSignOutReadyRef.current) {
+        signInWindow.location.href = msAuthData.url;
+        signInWindow.focus();
+        pendingMicrosoftSignInUrlRef.current = null;
+      }
     } else if (!msAuthData && signInWindow && !signInWindow.closed) {
-      // The user cancelled or verification completed; don't leave a stale blank tab.
+      // The user cancelled or verification completed; don't leave the auth tab open.
       signInWindow.close();
       microsoftSignInWindowRef.current = null;
+      pendingMicrosoftSignInUrlRef.current = null;
+      if (microsoftSignOutTimerRef.current) {
+        clearTimeout(microsoftSignOutTimerRef.current);
+        microsoftSignOutTimerRef.current = null;
+      }
     }
   }, [msAuthData]);
 
@@ -3818,6 +3845,11 @@ export default function Home() {
             setMsAuthData(null);
             microsoftSignInWindowRef.current?.close();
             microsoftSignInWindowRef.current = null;
+            pendingMicrosoftSignInUrlRef.current = null;
+            if (microsoftSignOutTimerRef.current) {
+              clearTimeout(microsoftSignOutTimerRef.current);
+              microsoftSignOutTimerRef.current = null;
+            }
           }}
           errorMessage={msAuthError}
         />
