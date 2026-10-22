@@ -53,7 +53,7 @@ export function useDaemonSocket(
   const [msAuthData, setMsAuthData] = useState<MsAuthData | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
-  const [deviceSessions, setDeviceSessions] = useState<{ sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number }[]>([]);
+  const [deviceSessions, setDeviceSessions] = useState<{ sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number; connected: boolean }[]>([]);
 
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -277,12 +277,12 @@ export function useDaemonSocket(
           const sessionStorageKey = `pebbleafk_ws_session_${userKey}`;
           let sessionId = '';
           try {
-            sessionId = sessionStorage.getItem(sessionStorageKey) || '';
+            sessionId = localStorage.getItem(sessionStorageKey) || '';
             if (!sessionId) {
               sessionId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
                 ? crypto.randomUUID()
                 : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-              sessionStorage.setItem(sessionStorageKey, sessionId);
+              localStorage.setItem(sessionStorageKey, sessionId);
             }
           } catch (_) {
             sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;

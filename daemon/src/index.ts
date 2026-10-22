@@ -55,11 +55,37 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 const authenticatedClients = new Set<WebSocket>();
-type DeviceSession = { sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number };
+type DeviceSession = { sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number; connected: boolean };
+const sessionStorePath = path.join(repoDir, '.pebbleafk-websocket-sessions.json');
 const deviceSessions = new Map<string, DeviceSession>();
 const sessionSockets = new Map<string, Set<WebSocket>>();
 const socketSessions = new Map<WebSocket, string>();
 let shutdownRequested = false;
+
+try {
+  const saved = JSON.parse(require('fs').readFileSync(sessionStorePath, 'utf8'));
+  if (Array.isArray(saved)) {
+    for (const entry of saved) {
+      if (entry && typeof entry.sessionId === 'string' && /^[\w-]{8,100}$/.test(entry.sessionId)) {
+        deviceSessions.set(entry.sessionId, { ...entry, connected: false });
+      }
+    }
+  }
+} catch (_) {}
+
+function persistDeviceSessions() {
+  const fs = require('fs');
+  const temporaryPath = `${sessionStorePath}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify([...deviceSessions.values()]), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temporaryPath, sessionStorePath);
+  } catch (error: any) {
+    try { if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath); } catch (_) {}
+    console.warn(`[Connection] Could not save browser session registry: ${error?.message || error}`);
+  }
+}
+
+setInterval(persistDeviceSessions, 60000).unref();
 
 function publishDeviceSessions() {
   const sessions = [...deviceSessions.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt);
@@ -81,11 +107,13 @@ function registerDeviceSession(ws: WebSocket, sessionId: string, label: string, 
     ip,
     connectedAt: previous?.connectedAt || now,
     lastSeenAt: now,
+    connected: true,
   });
   const sockets = sessionSockets.get(sessionId) || new Set<WebSocket>();
   sockets.add(ws);
   sessionSockets.set(sessionId, sockets);
   socketSessions.set(ws, sessionId);
+  persistDeviceSessions();
   publishDeviceSessions();
 }
 
@@ -272,6 +300,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         }
         sessionSockets.delete(sessionId);
         deviceSessions.delete(sessionId);
+        persistDeviceSessions();
         publishDeviceSessions();
         console.log(chalk.yellow(`[Connection] Browser session ${sessionId} disconnected from dashboard`));
         return;
@@ -356,7 +385,12 @@ wss.on('connection', (ws: WebSocket, req) => {
       sockets?.delete(ws);
       if (!sockets?.size) {
         sessionSockets.delete(sessionId);
-        deviceSessions.delete(sessionId);
+        const session = deviceSessions.get(sessionId);
+        if (session) {
+          session.connected = false;
+          session.lastSeenAt = Date.now();
+        }
+        persistDeviceSessions();
       }
       publishDeviceSessions();
     }

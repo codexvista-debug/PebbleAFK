@@ -147,7 +147,7 @@ export type ClientMessage =
 // Daemon to Client Messages
 export type DaemonMessage =
   | { type: 'AUTH_RESULT'; payload: { success: boolean; message?: string } }
-  | { type: 'DEVICE_SESSIONS'; payload: { sessions: { sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number }[] } }
+  | { type: 'DEVICE_SESSIONS'; payload: { sessions: { sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number; connected: boolean }[] } }
   | { type: 'DEVICE_SESSION_REMOVED'; payload: { sessionId: string; message: string } }
   | { type: 'BOT_STATE'; payload: { botId: string; serverId?: string; username?: string; accountId?: string; version?: string; state: BotLifecycleState; reason?: string; connectedAt?: number; uptime?: number; host?: string; port?: number } }
   | { type: 'CHAT_MESSAGE'; payload: ChatMessagePayload }

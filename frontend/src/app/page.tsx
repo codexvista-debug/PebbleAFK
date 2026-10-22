@@ -1855,32 +1855,33 @@ export default function Home() {
                 <section className="rounded-2xl bg-white border border-slate-200/90 shadow-xs overflow-hidden">
                   <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
                     <div>
-                      <h2 className="text-sm font-extrabold text-slate-900">Connected browser sessions</h2>
-                      <p className="text-[11px] text-slate-500 mt-0.5">Each PC or mobile tab has its own dashboard socket; removing one does not stop Termux or the Bedrock bots.</p>
+                      <h2 className="text-sm font-extrabold text-slate-900">Browser devices</h2>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Known PC/mobile sessions stay listed while their browsers sleep; remove one to forget that device. Termux bots keep running.</p>
                     </div>
                     <span className={`shrink-0 px-2 py-1 rounded-lg text-[10px] font-bold ${daemonStatus === 'AUTHENTICATED' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                      {daemonStatus === 'AUTHENTICATED' ? `${deviceSessions.length} active` : 'Daemon reconnecting'}
+                      {daemonStatus === 'AUTHENTICATED' ? `${deviceSessions.filter((session) => session.connected).length} online · ${deviceSessions.length} known` : 'Daemon reconnecting'}
                     </span>
                   </div>
-                  {daemonStatus !== 'AUTHENTICATED' ? (
-                    <div className="px-5 py-4 flex items-center justify-between gap-3">
-                      <p className="text-xs text-slate-500">The daemon is running separately; this tab will refresh the session list after its WebSocket reconnects.</p>
+                  {daemonStatus !== 'AUTHENTICATED' && (
+                    <div className="px-5 py-3 flex items-center justify-between gap-3 border-b border-slate-100">
+                      <p className="text-xs text-slate-500">Session controls are unavailable until the daemon socket reconnects.</p>
                       <button type="button" onClick={reconnectNow} className="shrink-0 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50">Reconnect now</button>
                     </div>
-                  ) : deviceSessions.length === 0 ? (
+                  )}
+                  {deviceSessions.length === 0 ? (
                     <p className="px-5 py-4 text-xs text-slate-500">No browser sockets are currently connected.</p>
                   ) : (
                     <div className="divide-y divide-slate-100">
                       {deviceSessions.map((session) => (
                         <div key={session.sessionId} className="px-5 py-3 flex items-center justify-between gap-3">
                           <div className="min-w-0 flex items-center gap-3">
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${session.connected ? 'bg-emerald-500' : 'bg-slate-300'}`} />
                             <div className="min-w-0">
                               <p className="text-xs font-bold text-slate-800">{session.label}</p>
-                              <p className="text-[10px] text-slate-500 truncate" title={session.userAgent}>{session.ip} · connected {new Date(session.connectedAt).toLocaleString()}</p>
+                              <p className="text-[10px] text-slate-500 truncate" title={session.userAgent}>{session.connected ? `Online · ${session.ip}` : `Offline · last seen ${new Date(session.lastSeenAt).toLocaleString()}`}</p>
                             </div>
                           </div>
-                          <button type="button" onClick={() => disconnectDeviceSession(session.sessionId)} className="shrink-0 px-3 py-1.5 rounded-lg border border-rose-200 text-[11px] font-bold text-rose-700 hover:bg-rose-50">Remove</button>
+                          <button type="button" disabled={daemonStatus !== 'AUTHENTICATED'} onClick={() => disconnectDeviceSession(session.sessionId)} className="shrink-0 px-3 py-1.5 rounded-lg border border-rose-200 text-[11px] font-bold text-rose-700 hover:bg-rose-50 disabled:opacity-40">Remove</button>
                         </div>
                       ))}
                     </div>

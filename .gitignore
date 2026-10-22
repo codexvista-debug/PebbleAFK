@@ -43,3 +43,5 @@ daemon/nconf.json
 daemon/.pebbleafk-bots.json
 daemon/.pebbleafk-bots.json.tmp
 daemon/.pebbleafk-deps.sha256
+daemon/.pebbleafk-websocket-sessions.json
+daemon/.pebbleafk-websocket-sessions.json.tmp
