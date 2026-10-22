@@ -88,7 +88,13 @@ function persistDeviceSessions() {
 setInterval(persistDeviceSessions, 60000).unref();
 
 function publishDeviceSessions() {
-  const sessions = [...deviceSessions.values()].sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  const now = Date.now();
+  const sessions = [...deviceSessions.values()]
+    .map((session) => ({
+      ...session,
+      connected: Boolean(sessionSockets.get(session.sessionId)?.size) && now - session.lastSeenAt < 35000,
+    }))
+    .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
   const json = JSON.stringify({ type: 'DEVICE_SESSIONS', payload: { sessions } });
   for (const client of authenticatedClients) {
     if (client.readyState === WebSocket.OPEN) {

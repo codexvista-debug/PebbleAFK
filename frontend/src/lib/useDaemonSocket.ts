@@ -59,6 +59,7 @@ export function useDaemonSocket(
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const foregroundProbeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingStartTimeRef = useRef<number>(0);
   const lastPongAtRef = useRef<number>(0);
   const authenticatedAtRef = useRef<number>(0);
@@ -155,6 +156,10 @@ export function useDaemonSocket(
     if (connectionTimeoutRef.current) {
       clearTimeout(connectionTimeoutRef.current);
       connectionTimeoutRef.current = null;
+    }
+    if (foregroundProbeTimeoutRef.current) {
+      clearTimeout(foregroundProbeTimeoutRef.current);
+      foregroundProbeTimeoutRef.current = null;
     }
 
     setDaemonUrlState(cleanSaved);
@@ -258,7 +263,7 @@ export function useDaemonSocket(
         if (socketRef.current === ws && ws.readyState === WebSocket.CONNECTING) {
           try { ws.close(); } catch (_) {}
         }
-      }, 6000);
+      }, 12000);
 
       ws.onopen = () => {
         if (socketRef.current !== ws) return;
@@ -368,6 +373,10 @@ export function useDaemonSocket(
 
           if (msg.type === 'PONG') {
             lastPongAtRef.current = Date.now();
+            if (foregroundProbeTimeoutRef.current) {
+              clearTimeout(foregroundProbeTimeoutRef.current);
+              foregroundProbeTimeoutRef.current = null;
+            }
             if (pingStartTimeRef.current) {
               setLatency(Date.now() - pingStartTimeRef.current);
             }
@@ -489,6 +498,10 @@ export function useDaemonSocket(
           clearTimeout(connectionTimeoutRef.current);
           connectionTimeoutRef.current = null;
         }
+        if (foregroundProbeTimeoutRef.current) {
+          clearTimeout(foregroundProbeTimeoutRef.current);
+          foregroundProbeTimeoutRef.current = null;
+        }
         setStatus('DISCONNECTED');
         setMsAuthData(null);
         if (pingIntervalRef.current) {
@@ -546,19 +559,32 @@ export function useDaemonSocket(
     const reconnectIfNeeded = () => {
       if (!currentUserRef.current || !daemonUrlRef.current) return;
       const ws = socketRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
         connect(true);
-      } else if (lastPongAtRef.current && Date.now() - lastPongAtRef.current > 15000) {
-        // Socket may have been frozen by mobile OS background throttling; reconnect
-        connect(true);
-      } else {
-        // Socket is alive; trigger quick ping to ensure active link
+      } else if (ws.readyState === WebSocket.OPEN) {
+        // A stale timestamp is expected after background tabs are throttled. Probe
+        // the existing socket first instead of tearing down a healthy session.
+        const probeStartedAt = Date.now();
         try {
-          pingStartTimeRef.current = Date.now();
+          pingStartTimeRef.current = probeStartedAt;
           ws.send(JSON.stringify({ type: 'PING' }));
         } catch (_) {
           connect(true);
+          return;
         }
+        if (foregroundProbeTimeoutRef.current) clearTimeout(foregroundProbeTimeoutRef.current);
+        foregroundProbeTimeoutRef.current = setTimeout(() => {
+          foregroundProbeTimeoutRef.current = null;
+          if (
+            socketRef.current === ws &&
+            ws.readyState === WebSocket.OPEN &&
+            lastPongAtRef.current <= probeStartedAt
+          ) {
+            ws.close(4000, 'No response to foreground reconnect probe');
+          }
+        }, 12000);
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        // Let an in-progress tunnel handshake finish; its own timeout/retry handles failure.
       }
     };
     const onVisibilityChange = () => {
