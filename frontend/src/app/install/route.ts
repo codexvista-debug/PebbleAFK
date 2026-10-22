@@ -39,8 +39,31 @@ echo -e "\\n\\033[1;34m[2/3]\\033[0m 📥 Syncing PebbleAFK engine..."
 cd "$HOME"
 if [ -d "PebbleAFK/.git" ]; then
   cd PebbleAFK
-  if timeout 12s git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=8 pull --ff-only origin main >/dev/null 2>&1; then
-    echo -e "      \\033[1;32m✓ Updated to latest version.\\033[0m"
+  if timeout 12s git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=8 fetch --prune origin main >/dev/null 2>&1; then
+    LOCAL_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
+    REMOTE_HEAD=$(git rev-parse FETCH_HEAD 2>/dev/null || true)
+    if [ -n "$LOCAL_HEAD" ] && [ -n "$REMOTE_HEAD" ] && [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
+      if git merge-base --is-ancestor "$LOCAL_HEAD" "$REMOTE_HEAD"; then
+        TRACKED_EDITS=$(git status --porcelain --untracked-files=no 2>/dev/null || true)
+        if [ -n "$TRACKED_EDITS" ]; then
+          if git stash push -m "PebbleAFK pre-installer update tracked edits $(date +%s)" >/dev/null 2>&1 && [ -z "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+            echo -e "      \\033[1;33m✓ Preserved tracked device edits in a recoverable Git stash.\\033[0m"
+          else
+            echo -e "      \\033[1;33m⚠ Could not safely preserve local edits; leaving this checkout unchanged.\\033[0m"
+            LOCAL_HEAD="$REMOTE_HEAD"
+          fi
+        fi
+        if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ] && git merge --ff-only "$REMOTE_HEAD" >/dev/null 2>&1; then
+          echo -e "      \\033[1;32m✓ Updated to latest version.\\033[0m"
+        elif [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
+          echo -e "      \\033[1;33m⚠ Fast-forward sync failed safely; continuing with the installed version.\\033[0m"
+        fi
+      else
+        echo -e "      \\033[1;33m⚠ Local commits are not on GitHub main; leaving this checkout unchanged.\\033[0m"
+      fi
+    else
+      echo -e "      \\033[1;32m✓ Already at the latest version.\\033[0m"
+    fi
   else
     echo -e "      \\033[1;33m⚠ Quick sync was unavailable; continuing with the installed version (use Update Engine after startup).\\033[0m"
   fi
