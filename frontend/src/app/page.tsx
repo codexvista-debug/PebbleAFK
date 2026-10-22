@@ -1698,23 +1698,19 @@ export default function Home() {
 
           {/* User Profile + Logout at Bottom */}
           <div className="p-3 border-t border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
-            <div className="flex items-center gap-2 overflow-hidden">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-              <span className="text-xs font-bold text-slate-900 truncate">
-                @{currentUser}
-              </span>
-              {currentUser?.toLowerCase() === 'chief' ? (
+            <div className="flex items-center gap-1.5 overflow-hidden">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white border border-slate-200/90 text-slate-800 text-xs font-extrabold shadow-2xs truncate max-w-[170px]">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                <span className="truncate">@{currentUser}</span>
+              </div>
+              {currentUser?.toLowerCase() === 'chief' && (
                 <Link
                   href="/chief"
-                  className="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300 shadow-2xs transition"
+                  className="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300 shadow-2xs transition shrink-0"
                   title="Chief Admin Panel"
                 >
                   ADMIN
                 </Link>
-              ) : (
-                <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded bg-sky-50 text-sky-700 border border-sky-200">
-                  BEDROCK
-                </span>
               )}
             </div>
 
@@ -1795,58 +1791,6 @@ export default function Home() {
             {/* VIEW 1: DASHBOARD TAB */}
             {activeTab === 'dashboard' && (
               <div className="max-w-4xl mx-auto space-y-6">
-                {/* Hero Banner */}
-                <div className="relative overflow-hidden rounded-3xl bg-white p-6 sm:p-8 border border-slate-200/90 shadow-xs">
-                  <div className="space-y-3">
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold tracking-wide">
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>PebbleAFK v1.0 Bedrock Core • 24/7 Mobile AFK Engine</span>
-                    </div>
-
-                    <h1 className="text-xl sm:text-2xl lg:text-3xl font-black tracking-tight text-slate-900">
-                      Bedrock AFK Operations Hub
-                    </h1>
-
-                    <p className="text-xs sm:text-sm text-slate-600 leading-relaxed max-w-2xl">
-                      Run headless Minecraft Bedrock bots directly on Android via Termux or remote background daemons.
-                      Automate farming, keep chunks loaded, and manage multiple accounts around the clock.
-                    </p>
-
-                    <div className="flex items-center gap-3 pt-2 flex-wrap">
-                      <button
-                        onClick={() => setActiveTab('accounts')}
-                        className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
-                      >
-                        <UserPlus className="w-4 h-4" />
-                        <span>Manage Bedrock Accounts ({verifiedAccountsCount}/{MAX_BEDROCK_ACCOUNTS})</span>
-                      </button>
-
-                      <button
-                        onClick={() => setIsSettingsOpen(true)}
-                        className="px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
-                      >
-                        <Radio className="w-4 h-4 text-emerald-600" />
-                        <span>Termux Daemon Bridge</span>
-                      </button>
-
-                      {daemonStatus === 'AUTHENTICATED' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            updateDaemon();
-                            showToast('🔄 Updating Bedrock daemon from GitHub...', 'info');
-                          }}
-                          className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
-                          title="Fetch latest updates from GitHub and restart daemon"
-                        >
-                          <ArrowUp className="w-4 h-4 stroke-[2.5]" />
-                          <span>Update Engine</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
                 {/* Quick Metrics Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
@@ -2399,6 +2343,32 @@ export default function Home() {
 
                         {/* Accounts List for this Server Profile (Responsive Mobile Cards + Desktop Table) */}
                         <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+                          {/* Mobile Select All Header */}
+                          {assignedAccounts.length > 0 && (
+                            <div className="md:hidden px-3.5 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs font-bold text-slate-700">
+                              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={assignedAccounts.length > 0 && selectedAccountIds.length === assignedAccounts.length}
+                                  onChange={handleToggleSelectAll}
+                                  className="rounded bg-white border-slate-300 text-emerald-600 focus:ring-0 cursor-pointer"
+                                />
+                                <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600">
+                                  Select All ({selectedAccountIds.length}/{assignedAccounts.length})
+                                </span>
+                              </label>
+                              {selectedAccountIds.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedAccountIds([])}
+                                  className="text-[11px] font-bold text-slate-400 hover:text-slate-700 transition"
+                                >
+                                  Deselect
+                                </button>
+                              )}
+                            </div>
+                          )}
+
                           {/* 1. Mobile Cards View: 100% visible in one go with zero horizontal scrolling */}
                           <div className="block md:hidden divide-y divide-slate-100">
                             {assignedAccounts.length === 0 ? (
