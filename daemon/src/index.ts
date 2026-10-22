@@ -321,9 +321,6 @@ async function updateDaemonFromDashboard(ws: WebSocket) {
   try {
     if (!fs.existsSync(path.join(repoDir, '.git'))) throw new Error(`Git repository not found at ${repoDir}`);
     status('📥 Checking GitHub for the latest engine changes...');
-    const dirtyFiles = await runCommand('git', ['status', '--porcelain', '--untracked-files=no'], repoDir);
-    if (dirtyFiles) throw new Error('Update paused because tracked local files have edits. They were left untouched. Commit or revert those edits on the device, then retry.');
-
     await runCommand('git', ['fetch', '--prune', 'origin', 'main'], repoDir);
     const localHead = (await runCommand('git', ['rev-parse', 'HEAD'], repoDir)).trim();
     const remoteHead = (await runCommand('git', ['rev-parse', 'FETCH_HEAD'], repoDir)).trim();
@@ -335,6 +332,26 @@ async function updateDaemonFromDashboard(ws: WebSocket) {
       } catch (_) {
         throw new Error('Local main has commits that are not on GitHub main; refusing to overwrite or merge device changes automatically.');
       }
+
+      // Device-local tracked edits used to stop remote updates entirely. Preserve
+      // them in Git's recoverable stash, then apply the upstream files cleanly;
+      // never discard edits or reapply potentially conflicting overrides on top
+      // of the new version. Ignored runtime data (.env, tokens, node_modules)
+      // is not included by this tracked-only stash.
+      const dirtyFiles = await runCommand('git', ['status', '--porcelain', '--untracked-files=no'], repoDir);
+      if (dirtyFiles) {
+        const previousStash = await runCommand('git', ['rev-parse', '-q', '--verify', 'refs/stash'], repoDir).catch(() => '');
+        const stashMessage = `PebbleAFK pre-update tracked edits ${new Date().toISOString()}`;
+        status('🛟 Saving tracked device-local edits to a recoverable Git stash before updating...');
+        await runCommand('git', ['stash', 'push', '--message', stashMessage], repoDir);
+        const currentStash = (await runCommand('git', ['rev-parse', '-q', '--verify', 'refs/stash'], repoDir)).trim();
+        const remainingEdits = await runCommand('git', ['status', '--porcelain', '--untracked-files=no'], repoDir);
+        if (!currentStash || currentStash === previousStash || remainingEdits) {
+          throw new Error('Could not safely preserve all tracked device edits in a Git stash; upstream files were not changed.');
+        }
+        status(`✓ Device-local tracked edits preserved in stash ${currentStash.slice(0, 7)} (review with git stash list); applying the upstream version now.`);
+      }
+
       status(`⬇️ Fast-forwarding engine from ${localHead.slice(0, 7)} to ${remoteHead.slice(0, 7)}...`);
       await runCommand('git', ['merge', '--ff-only', remoteHead], repoDir);
     }
