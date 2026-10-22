@@ -294,7 +294,7 @@ export class BotManager {
         if (verificationId !== this.currentVerificationId) return;
         console.log(chalk.yellow(`[Auth Code] Xbox Code for ${authKey}: ${data.user_code}`));
         const directUri = data.user_code
-          ? `https://login.live.com/oauth20_remoteconnect.srf?otc=${encodeURIComponent(data.user_code)}${!isNew ? `&login_hint=${encodeURIComponent(authKey)}` : ''}&prompt=login`
+          ? `https://login.live.com/oauth20_remoteconnect.srf?otc=${encodeURIComponent(data.user_code)}${!isNew ? `&login_hint=${encodeURIComponent(authKey)}` : ''}&prompt=select_account`
           : (data.verification_uri || 'https://login.live.com/oauth20_remoteconnect.srf');
 
         this.broadcastFn({

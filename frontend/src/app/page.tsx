@@ -101,6 +101,7 @@ export default function Home() {
   const [copiedIgnId, setCopiedIgnId] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState<BedrockAccount | null>(null);
   const [msAuthError, setMsAuthError] = useState<string | null>(null);
+  const microsoftSignInWindowRef = useRef<Window | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
 
   // Live 1-second ticker for precise uptime formatting
@@ -725,9 +726,42 @@ export default function Home() {
     const targetId = typeof target === 'object' && target ? target.id : `acc_${Math.random().toString(36).substring(2, 9)}`;
     const targetEmail = typeof target === 'string' ? target : (target?.username || '');
 
-    showToast('Requesting Microsoft sign-in via Termux daemon...', 'info');
+    // Open a user-visible tab during the click gesture so popup blockers allow it.
+    // Once the daemon returns Microsoft's device code, the tab is navigated to the
+    // account chooser. We never clear or alter the browser's Microsoft session.
+    try {
+      microsoftSignInWindowRef.current?.close();
+      const signInWindow = window.open('about:blank', '_blank');
+      microsoftSignInWindowRef.current = signInWindow;
+      if (signInWindow) {
+        signInWindow.document.title = 'Microsoft sign-in';
+        signInWindow.document.body.innerHTML = '<main style="font:16px system-ui;padding:2rem;color:#334155"><h2>Preparing Microsoft sign-in…</h2><p>This tab will open the account chooser when the verification code is ready.</p></main>';
+      }
+    } catch {
+      microsoftSignInWindowRef.current = null;
+    }
+
+    showToast(
+      microsoftSignInWindowRef.current
+        ? 'Requesting Microsoft sign-in via Termux daemon...'
+        : 'Sign-in popup was blocked. Use Open Microsoft Sign-In in the verification dialog.',
+      'info'
+    );
     verifyAccount(targetId, targetEmail);
   };
+
+  useEffect(() => {
+    const signInWindow = microsoftSignInWindowRef.current;
+    if (msAuthData?.url && signInWindow && !signInWindow.closed) {
+      signInWindow.location.replace(msAuthData.url);
+      signInWindow.focus();
+      microsoftSignInWindowRef.current = null;
+    } else if (!msAuthData && signInWindow && !signInWindow.closed) {
+      // The user cancelled or verification completed; don't leave a stale blank tab.
+      signInWindow.close();
+      microsoftSignInWindowRef.current = null;
+    }
+  }, [msAuthData]);
 
   // Delete / Unlink Account
   const handleDeleteAccount = async (id: string) => {
@@ -3780,7 +3814,11 @@ export default function Home() {
         <MicrosoftAuthModal
           authData={msAuthData}
           accountEmail={msAuthData.targetEmail}
-          onClose={() => setMsAuthData(null)}
+          onClose={() => {
+            setMsAuthData(null);
+            microsoftSignInWindowRef.current?.close();
+            microsoftSignInWindowRef.current = null;
+          }}
           errorMessage={msAuthError}
         />
       )}
