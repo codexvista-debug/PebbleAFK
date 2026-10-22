@@ -2945,6 +2945,14 @@ export default function Home() {
                     {/* SUBTAB 2: CHAT (Matching PocketAFK Image 3 Pixel-Perfect!) */}
                     {activeSubTab === 'chat' && (() => {
                       const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
+                      const isFreshSmpProfile = `${activeServer.name} ${activeServer.serverHost}`.toLowerCase().includes('freshsmp');
+                      const isAccountStable = (account: BedrockAccount) => {
+                        if (!isFreshSmpProfile) return false;
+                        const diagnostic = freshSmpDiagnostics[`${activeServer.id}__${account.id}`];
+                        const sessionStartedAt = diagnostic?.lifestealSessionStartedAt;
+                        return diagnostic?.phase === 'lifesteal' && typeof sessionStartedAt === 'number' &&
+                          nowTick - sessionStartedAt >= 60_000;
+                      };
                       const isAllSelected = selectedChatAccountId === '__ALL__';
                       const selectedAccountId = isAllSelected
                         ? '__ALL__'
@@ -3150,7 +3158,22 @@ export default function Home() {
                                           <span className="text-slate-400">Offline</span>
                                         )}
                                         <span className="text-slate-300">•</span>
-                                        <span className="text-slate-400">Bedrock Edition</span>
+                                        {isFreshSmpProfile ? (
+                                          <span
+                                            title={isAccountStable(selectedAccount)
+                                              ? 'Connected in FreshSMP Lifesteal for at least one minute'
+                                              : 'Not yet confirmed in FreshSMP Lifesteal for one continuous minute'}
+                                            className={`inline-flex items-center px-1.5 py-0.5 rounded-full border text-[9px] font-extrabold tracking-wide ${
+                                              isAccountStable(selectedAccount)
+                                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                : 'bg-rose-50 text-rose-700 border-rose-200'
+                                            }`}
+                                          >
+                                            {isAccountStable(selectedAccount) ? 'STABLE' : 'UNSTABLE'}
+                                          </span>
+                                        ) : (
+                                          <span className="text-slate-400">Bedrock Edition</span>
+                                        )}
                                       </p>
                                     </div>
                                   </>
@@ -3459,6 +3482,7 @@ export default function Home() {
                                       const st = botStates[bId];
                                       const isLive = daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
                                       const isSel = selectedAccountId === acc.id;
+                                      const isStable = isAccountStable(acc);
 
                                       return (
                                         <button
@@ -3471,7 +3495,9 @@ export default function Home() {
                                             setIsChatAccountDropdownOpen(false);
                                           }}
                                           className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-bold transition cursor-pointer ${
-                                            isSel ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50'
+                                            isFreshSmpProfile && !isStable
+                                              ? (isSel ? 'bg-rose-100 text-rose-800' : 'bg-rose-50/70 text-rose-800 hover:bg-rose-100')
+                                              : (isSel ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50')
                                           }`}
                                         >
                                           <div className="flex items-center gap-2.5 min-w-0">
@@ -3493,7 +3519,17 @@ export default function Home() {
                                             </div>
                                             <span className="font-mono truncate">@{acc.ign || acc.username}</span>
                                           </div>
-                                          <span className={`w-2 h-2 rounded-full shrink-0 ${isLive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                          {isFreshSmpProfile ? (
+                                            <span className={`shrink-0 px-1.5 py-0.5 rounded-full border text-[9px] font-extrabold tracking-wide ${
+                                              isStable
+                                                ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                                : 'bg-rose-100 text-rose-700 border-rose-200'
+                                            }`}>
+                                              {isStable ? 'STABLE' : 'UNSTABLE'}
+                                            </span>
+                                          ) : (
+                                            <span className={`w-2 h-2 rounded-full shrink-0 ${isLive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                                          )}
                                         </button>
                                       );
                                     })}
