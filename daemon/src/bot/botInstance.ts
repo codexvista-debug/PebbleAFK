@@ -236,7 +236,7 @@ export function formatDisconnectReason(raw: any): string {
 }
 
 export class PebbleBotInstance {
-  private static lastHandshakeTime: number = 0;
+  private static nextHandshakeAt: number = 0;
   private static recentChatConsoleLines = new Map<string, number>();
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
@@ -246,6 +246,14 @@ export class PebbleBotInstance {
   private startInProgress: boolean = false;
   private startGeneration: number = 0;
   private connectStartTime: number = 0;
+  private attemptStartedAt: number = 0;
+  private connectionPhase: string = 'Not started';
+  private lastInboundPacketName: string = '';
+  private lastInboundPacketAt: number = 0;
+  private inboundProtocolPacketCount: number = 0;
+  private inboundTextPacketCount: number = 0;
+  private resourcePackInfo: string = 'not received';
+  private resourcePackStack: string = 'not received';
   private reconnectTimer: NodeJS.Timeout | null = null;
   private tickSyncInterval: NodeJS.Timeout | null = null;
   private playerAuthInterval: NodeJS.Timeout | null = null;
@@ -282,6 +290,8 @@ export class PebbleBotInstance {
   private lastServerNotice: string = '';
   private lastServerNoticeAt: number = 0;
   private lastDisconnectReason: string = '';
+  private freshSmpResourcePackNotice: string = '';
+  private resourcePackNoticeLogged: boolean = false;
   private bossBars = new Map<string, { title: string; progress?: number; updatedAt: number }>();
   private currentAfkBossBar: BossBarPayload | null = null;
 
@@ -313,6 +323,17 @@ export class PebbleBotInstance {
     this.isExplicitlyStopped = false;
     const startGeneration = ++this.startGeneration;
     this.startInProgress = true;
+    this.attemptStartedAt = Date.now();
+    this.connectStartTime = 0;
+    this.connectionPhase = 'Resolving server endpoint';
+    this.lastInboundPacketName = '';
+    this.lastInboundPacketAt = 0;
+    this.inboundProtocolPacketCount = 0;
+    this.inboundTextPacketCount = 0;
+    this.resourcePackInfo = 'not received';
+    this.resourcePackStack = 'not received';
+    this.freshSmpResourcePackNotice = '';
+    this.resourcePackNoticeLogged = false;
     this.clearBossBars();
     this.isInSubserver = false;
     this.isSubserverQueueActive = false;
@@ -362,6 +383,7 @@ export class PebbleBotInstance {
       // weaker JS transport while that build is still in progress.
       await waitForNativeRaknetPreparation();
       if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
+      this.connectionPhase = 'Preparing RakNet transport';
 
       let hasNativeRaknet = false;
       try {
@@ -382,6 +404,7 @@ export class PebbleBotInstance {
       const isAutoVersion = !rawUserVersion || rawUserVersion.toLowerCase() === 'auto' || rawUserVersion.toLowerCase() === 'default';
 
       if (isAutoVersion) {
+        this.connectionPhase = 'Bedrock UDP discovery/ping';
         this.logActivity('status', `🔍 Pinging Bedrock UDP port ${cleanHost}:${cleanPort}...`);
         try {
           if (ipv4Addresses.length || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(connectHost)) {
@@ -407,6 +430,7 @@ export class PebbleBotInstance {
       this.lastAttemptedVersion = targetVersion;
 
       this.logActivity('connect', `🚀 Initiating RakNet handshake with ${cleanHost} (${connectHost}):${cleanPort} (Minecraft Bedrock ${targetVersion}, Transport: ${rakBackend})...`);
+      this.connectionPhase = 'RakNet transport / Xbox authentication';
 
       const clientOptions: any = {
         host: connectHost,
@@ -445,18 +469,70 @@ export class PebbleBotInstance {
       // A wider gap also reduces login/transfer bursts on FreshSMP-style gateways.
       const minSpacingMs = 12000;
       const now = Date.now();
-      const waitMs = Math.max(0, (PebbleBotInstance.lastHandshakeTime + minSpacingMs) - now);
+      // Reserve a unique slot synchronously before awaiting. Calculating a delay
+      // from the last *completed* handshake lets concurrent starts all wake at
+      // the same deadline and recreate the burst this pacing is meant to avoid.
+      const handshakeAt = Math.max(now, PebbleBotInstance.nextHandshakeAt);
+      const waitMs = handshakeAt - now;
+      PebbleBotInstance.nextHandshakeAt = handshakeAt + minSpacingMs;
       if (waitMs > 0) {
-        this.logActivity('connect', `⏳ Staggering RakNet connection by ${(waitMs / 1000).toFixed(1)}s to avoid server gateway rate-limiting...`);
-        console.log(chalk.cyan(`[PebbleAFK] Staggering connection for ${this.config.username} by ${waitMs}ms`));
+        this.logActivity('connect', `⏳ Reserved a RakNet handshake slot in ${(waitMs / 1000).toFixed(1)}s to avoid simultaneous account connection bursts...`);
+        console.log(chalk.cyan(`[PebbleAFK] Reserved handshake slot for ${this.config.username} in ${waitMs}ms`));
         await new Promise((r) => setTimeout(r, waitMs));
         if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
       }
-      PebbleBotInstance.lastHandshakeTime = Date.now();
+      this.connectionPhase = 'RakNet handshake / Xbox authentication';
 
       console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (version: ${targetVersion}, backend: ${rakBackend})`));
       const client = bedrock.createClient(clientOptions);
       this.client = client;
+
+      // bedrock-protocol emits the decoded packet object before its higher-level
+      // events. Keep only useful lifecycle packets, not high-volume movement/chunk
+      // traffic, so a player's disconnect log can identify the last completed stage.
+      client.on('packet', (decoded: any) => {
+        const packetName = decoded?.data?.name;
+        const params = decoded?.data?.params || {};
+        if (typeof packetName !== 'string') return;
+        this.inboundProtocolPacketCount += 1;
+        if (packetName === 'text') this.inboundTextPacketCount += 1;
+        if ([
+          'server_to_client_handshake', 'play_status', 'resource_packs_info',
+          'resource_pack_stack', 'resource_pack_data_info', 'resource_pack_chunk_data',
+          'start_game', 'text', 'disconnect', 'transfer',
+        ].includes(packetName)) {
+          this.lastInboundPacketName = packetName;
+          this.lastInboundPacketAt = Date.now();
+        }
+        if (packetName === 'resource_packs_info') {
+          const textureCount = Array.isArray(params.texture_packs) ? params.texture_packs.length : 0;
+          const behaviorCount = Array.isArray(params.behaviour_packs)
+            ? params.behaviour_packs.length
+            : (Array.isArray(params.behavior_packs) ? params.behavior_packs.length : 0);
+          this.resourcePackInfo = `${params.must_accept ? 'required' : 'optional'}; ${textureCount} texture, ${behaviorCount} behavior pack(s)`;
+          this.connectionPhase = 'Bedrock resource-pack offer';
+          this.logActivity('status', `Bedrock resource-pack offer received (${this.resourcePackInfo}); bedrock-protocol is handling the pack handshake.`);
+        } else if (packetName === 'resource_pack_stack') {
+          const packCount = Array.isArray(params.resource_packs) ? params.resource_packs.length : 0;
+          const behaviorCount = Array.isArray(params.behavior_packs)
+            ? params.behavior_packs.length
+            : (Array.isArray(params.behaviour_packs) ? params.behaviour_packs.length : 0);
+          this.resourcePackStack = `${params.must_accept ? 'required' : 'optional'}; ${packCount} resource, ${behaviorCount} behavior pack(s)`;
+          this.connectionPhase = 'Bedrock resource-pack stack';
+          this.logActivity('status', `Bedrock resource-pack stack received (${this.resourcePackStack}).`);
+        }
+      });
+
+      client.on('status', (status: number) => {
+        const phases: Record<number, string> = {
+          0: 'Transport disconnected',
+          1: 'RakNet transport connecting',
+          2: 'Minecraft/Xbox authentication handshake',
+          3: 'Minecraft login / world initialization',
+          4: 'Spawn initialized',
+        };
+        this.connectionPhase = phases[status] || `Protocol status ${status}`;
+      });
 
       this.hookConnectionDiagnostics(client);
       client.once('connect_allowed', () => this.hookConnectionDiagnostics(client));
@@ -464,6 +540,7 @@ export class PebbleBotInstance {
       // Session event: Microsoft/Xbox authentication finished
       client.once('session', () => {
         this.hookConnectionDiagnostics(client);
+        this.connectionPhase = 'Xbox authentication complete; awaiting Bedrock handshake';
         console.log(chalk.green(`[PebbleAFK] Microsoft/Xbox authentication session established for ${this.config.username}; awaiting Bedrock RakNet handshake.`));
         this.logActivity('connect', 'Microsoft/Xbox authentication verified; awaiting the Bedrock RakNet handshake...');
       });
@@ -472,6 +549,7 @@ export class PebbleBotInstance {
       client.on('join', () => {
         this.hookConnectionDiagnostics(client);
         this.connectStartTime = Date.now();
+        this.connectionPhase = 'Joined server; awaiting world spawn';
         this.updateState('LOGGED_IN');
         this.logActivity('connect', `Successfully joined Bedrock server ${this.config.host}:${this.config.port}`);
         this.handleSystemMessage(`Connected to ${this.config.host}:${this.config.port}`);
@@ -494,6 +572,7 @@ export class PebbleBotInstance {
         this.hookConnectionDiagnostics(client);
         if (!this.connectStartTime) this.connectStartTime = Date.now();
         this.updateState('SPAWNED');
+        this.connectionPhase = 'Spawned in world';
         this.logActivity('spawn', '🌍 Spawned into Bedrock world!');
         this.handleSystemMessage(`🌍 Spawned into world as @${this.config.username}`);
 
@@ -727,6 +806,33 @@ export class PebbleBotInstance {
           reason = 'Server closed connection / session ended';
         }
         reason = formatDisconnectReason(reason);
+        const attemptAgeSeconds = Math.max(0, Math.floor((Date.now() - this.attemptStartedAt) / 1000));
+        const sessionUptimeSeconds = this.connectStartTime
+          ? Math.max(0, Math.floor((Date.now() - this.connectStartTime) / 1000))
+          : 0;
+        const lastPacket = this.lastInboundPacketName
+          ? `${this.lastInboundPacketName} ${Math.max(0, Math.floor((Date.now() - this.lastInboundPacketAt) / 1000))}s ago`
+          : 'none received';
+        const contextParts = [
+          `Stage: ${this.connectionPhase}`,
+          `attempt: ${attemptAgeSeconds}s`,
+          `session: ${sessionUptimeSeconds ? `${sessionUptimeSeconds}s` : 'not joined'}`,
+          `endpoint: ${connectHost}:${cleanPort}`,
+          `transport: ${rakBackend}`,
+          `Bedrock: ${targetVersion}`,
+          `last protocol packet: ${lastPacket}`,
+          `received packets: ${this.inboundProtocolPacketCount} total, ${this.inboundTextPacketCount} chat/text`,
+        ];
+        if (this.resourcePackInfo !== 'not received' || this.resourcePackStack !== 'not received') {
+          contextParts.push(`pack offer: ${this.resourcePackInfo}`, `pack stack: ${this.resourcePackStack}`);
+        }
+        if (this.freshSmpResourcePackNotice) {
+          contextParts.push(`FreshSMP resource-pack notice: "${this.freshSmpResourcePackNotice}"`);
+        }
+        if (this.isSubserverQueueActive || this.subserverQueueTimeoutCount > 0) {
+          contextParts.push(`FreshSMP queue timeouts: ${this.subserverQueueTimeoutCount}`);
+        }
+        reason = `${reason} [${contextParts.join('; ')}]`;
         this.lastDisconnectReason = reason;
 
         if (ipv4Addresses.length > 1 && /connect timed out|no reply to RakNet UDP packets|filtering UDP/i.test(reason)) {
@@ -803,6 +909,10 @@ export class PebbleBotInstance {
         if (errMsg.includes('Connect timed out') || errMsg.includes('timed out')) {
           descriptiveReason = `Connect timed out: ${cleanHost}:${cleanPort} sent no reply to RakNet UDP packets. The selected server edge or network path did not answer.`;
         }
+        const stackLine = typeof err?.stack === 'string'
+          ? err.stack.split('\n').slice(1, 3).map((line: string) => line.trim()).join(' <- ')
+          : '';
+        if (stackLine) descriptiveReason = `${descriptiveReason} (protocol trace: ${stackLine})`;
         handleDisconnect(descriptiveReason, true);
       });
 
@@ -817,7 +927,12 @@ export class PebbleBotInstance {
     } catch (err: any) {
       if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
       console.error(chalk.red(`[PebbleAFK] Failed to create Bedrock bot instance:`), err);
-      const reason = err?.message || 'Initialization error';
+      const baseReason = err?.message || 'Initialization error';
+      const attemptAgeSeconds = Math.max(0, Math.floor((Date.now() - this.attemptStartedAt) / 1000));
+      const lastPacket = this.lastInboundPacketName
+        ? `${this.lastInboundPacketName} ${Math.max(0, Math.floor((Date.now() - this.lastInboundPacketAt) / 1000))}s ago`
+        : 'none received';
+      const reason = `${baseReason} [Stage: ${this.connectionPhase}; attempt: ${attemptAgeSeconds}s; endpoint: ${this.config.host}:${this.config.port || 19132}; last protocol packet: ${lastPacket}; received packets: ${this.inboundProtocolPacketCount} total, ${this.inboundTextPacketCount} chat/text]`;
       this.cleanup();
       if (this.client) {
         try { this.client.close(); } catch (_) {}
@@ -887,6 +1002,7 @@ export class PebbleBotInstance {
       if (message.startsWith('/')) {
         if (/^\/?lifesteal(?:\s|$)/i.test(message.trim())) {
           this.lastLifestealCommandAt = Date.now();
+          this.connectionPhase = 'FreshSMP Lifesteal transfer requested';
         }
         // Send as Bedrock command
         const uuid = randomUUID();
@@ -962,6 +1078,9 @@ export class PebbleBotInstance {
     const command = configuredCommand.startsWith('/') ? configuredCommand : `/${configuredCommand}`;
     const minDelay = command.toLowerCase().includes('lifesteal') ? 10000 : 3000;
     let finalDelay = Math.max(delayMs, minDelay);
+    if (command.toLowerCase().includes('lifesteal')) {
+      this.connectionPhase = 'Waiting to enter FreshSMP Lifesteal';
+    }
 
     // Stagger subserver transfer commands across bots so multiple bots never collide in FreshSMP queue
     if (command.toLowerCase().includes('lifesteal')) {
@@ -1338,6 +1457,15 @@ export class PebbleBotInstance {
 
     if (!cleanText) return;
 
+    if (/declined the resource pack/i.test(cleanText) && !this.resourcePackNoticeLogged) {
+      this.freshSmpResourcePackNotice = cleanText;
+      this.resourcePackNoticeLogged = true;
+      this.logActivity(
+        'warning',
+        `FreshSMP resource-pack preference notice: "${cleanText}". This is a server text notice after login, separate from RakNet connection or Lifesteal queue failures.`
+      );
+    }
+
     // Pattern recognition: extract player sender if embedded in message
     // Handles formats like:
     // "<Player> message"
@@ -1396,6 +1524,7 @@ export class PebbleBotInstance {
     if (isLifestealQueueStatus && !isLifestealTimeout) {
       const wasQueueActive = this.isSubserverQueueActive;
       this.isSubserverQueueActive = true;
+      this.connectionPhase = 'FreshSMP Lifesteal queue';
       const queueStatus = queuePosition
         ? `position ${queuePosition[1]}/${queuePosition[2]}, ETA ${queuePosition[3]}s`
         : 'waiting for a queue position';
@@ -1424,6 +1553,7 @@ export class PebbleBotInstance {
         this.lastSubserverTimeoutAt = now;
         this.isInSubserver = false;
         this.isSubserverQueueActive = false;
+        this.connectionPhase = 'FreshSMP Lifesteal queue timed out; retry scheduled';
         this.subserverQueueTimeoutCount += 1;
 
         // A short retry loop just re-enters the same overloaded queue. Apply
@@ -1432,10 +1562,11 @@ export class PebbleBotInstance {
         const baseRetryDelay = Math.min(120_000, 20_000 * (2 ** Math.min(this.subserverQueueTimeoutCount - 1, 3)));
         const retryDelay = Math.min(120_000, baseRetryDelay + Math.floor(Math.random() * 5000));
         const retrySeconds = Math.ceil(retryDelay / 1000);
+        const queueWaitSeconds = Math.max(0, Math.floor((now - this.lastLifestealCommandAt) / 1000));
         console.log(chalk.yellow(`[PebbleAFK] FreshSMP queue notice for @${this.config.username}: "${cleanText}". (Queue attempt ended; retrying /lifesteal in ${retrySeconds}s, attempt ${this.subserverQueueTimeoutCount})...`));
         this.logActivity(
           'warning',
-          `FreshSMP queue notice from ${cleanSender}: "${cleanText}". The server ended the Lifesteal queue attempt; retrying /lifesteal in ${retrySeconds}s (attempt ${this.subserverQueueTimeoutCount}).`
+          `FreshSMP Lifesteal queue timeout from ${cleanSender}: "${cleanText}" after ${queueWaitSeconds}s. The game session is still connected; this is a subserver queue/transfer failure, not a RakNet or resource-pack failure. Retrying /lifesteal in ${retrySeconds}s (attempt ${this.subserverQueueTimeoutCount}).`
         );
         this.triggerJoinCommandRetry(retryDelay);
       }
@@ -1445,6 +1576,7 @@ export class PebbleBotInstance {
       this.isInSubserver = true;
       this.isSubserverQueueActive = false;
       this.subserverQueueTimeoutCount = 0;
+      this.connectionPhase = 'FreshSMP Lifesteal subserver';
       if (this.joinCommandTimer) {
         clearTimeout(this.joinCommandTimer);
         this.joinCommandTimer = null;
@@ -1454,6 +1586,7 @@ export class PebbleBotInstance {
     if (ownWelcome && ownWelcome[1].toLowerCase() === this.config.username.replace(/^_/, '').toLowerCase()) {
       this.isInSubserver = false;
       this.isSubserverQueueActive = false;
+      this.connectionPhase = 'FreshSMP lobby';
       const alreadyConnectedThenReturnedToLobby = Date.now() - this.lastAlreadyConnectedAt <= 30_000;
       this.lastAlreadyConnectedAt = 0;
       if (alreadyConnectedThenReturnedToLobby && hasRecentLifestealRequest) {
