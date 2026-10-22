@@ -55,7 +55,7 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
               <span className="text-[10px] font-bold rounded-full px-2.5 py-1 bg-sky-50 text-sky-700 border border-sky-100">FreshSMP only</span>
             </div>
             {assigned.length === 0 ? <p className="p-5 text-xs text-slate-500">No linked accounts to monitor.</p> : (
-              <div className="divide-y divide-slate-100">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
                 {assigned.map((account) => {
                   const botId = `${profile.id}__${account.id}`;
                   const detail = diagnostics[botId];
@@ -66,7 +66,7 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
                   const latestProblem = [...(detail?.events || [])].reverse().find((event) => event.severity === 'error' || event.severity === 'warning');
                   const status = botStates[botId] || 'DISCONNECTED';
                   return (
-                    <article key={account.id} className="p-4 sm:p-5">
+                    <article key={account.id} className="min-w-0 rounded-xl border border-slate-200 p-4 sm:p-5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5"><div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-xs font-black text-slate-600">{account.username.slice(0, 2).toUpperCase()}</div><div><h3 className="text-xs font-black text-slate-900">{account.ign || account.username}</h3><p className="text-[10px] text-slate-500">{account.username} · {status}</p></div></div>
                         <div className="flex items-center gap-2">

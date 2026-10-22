@@ -268,6 +268,10 @@ export class PebbleBotInstance {
   private isInSubserver: boolean = false;
   private isSubserverQueueActive: boolean = false;
   private lastQueueStatusLogAt: number = 0;
+  private lastQueueDiagnosticAt: number = 0;
+  private lastQueueDiagnosticMessage: string = '';
+  private requiredResourcePackCount: number = 0;
+  private resourcePacksMustBeAccepted: boolean = false;
   private lastSubserverTimeoutAt: number = 0;
   private lastLifestealCommandAt: number = 0;
   private lastAlreadyConnectedAt: number = 0;
@@ -493,6 +497,7 @@ export class PebbleBotInstance {
       this.lastAttemptedVersion = targetVersion;
 
       this.logActivity('connect', `🚀 Initiating RakNet handshake with ${cleanHost} (${connectHost}):${cleanPort} (Minecraft Bedrock ${targetVersion}, Transport: ${rakBackend})...`);
+      this.recordFreshSmpEvent('connection', 'info', `RakNet attempt: logical host ${cleanHost}:${cleanPort}, pinned IPv4 ${connectHost}, edge ${ipv4Addresses.indexOf(connectHost) + 1 || 1}/${ipv4Addresses.length || 1}, Bedrock ${targetVersion}, backend ${rakBackend}.`);
 
       const clientOptions: any = {
         host: connectHost,
@@ -544,9 +549,58 @@ export class PebbleBotInstance {
       const client = bedrock.createClient(clientOptions);
       this.client = client;
 
+      let recentPlayStatus = 'not received';
+      const clientStatuses: Record<number, string> = { 0: 'disconnected', 1: 'connecting', 2: 'authenticating', 3: 'initializing', 4: 'initialized' };
+      this.recordFreshSmpEvent('protocol', 'info', `bedrock-protocol client status at instrumentation: ${clientStatuses[Number(client.status)] || client.status}.`);
+      client.on('status', (status: number) => {
+        this.recordFreshSmpEvent('protocol', status === 0 ? 'warning' : 'info', `bedrock-protocol client status changed to ${clientStatuses[Number(status)] || status}.`);
+      });
+      client.on('packet', (decoded: any) => {
+        const packetName = decoded?.data?.name;
+        const params = decoded?.data?.params || {};
+        if (!packetName) return;
+        if (packetName === 'network_settings') {
+          this.recordFreshSmpEvent('protocol', 'info', `Received Bedrock network_settings (compression threshold ${params.compression_threshold ?? 'unknown'}).`);
+        } else if (packetName === 'play_status') {
+          const statuses: Record<number, string> = {
+            0: 'login_success', 1: 'failed_client', 2: 'failed_spawn', 3: 'player_spawn',
+            4: 'failed_invalid_tenant', 5: 'failed_vanilla_edu', 6: 'failed_edu_vanilla', 7: 'failed_server_full',
+          };
+          recentPlayStatus = typeof params.status === 'number'
+            ? (statuses[params.status] || `unknown(${params.status})`)
+            : String(params.status || 'unknown');
+          const failed = recentPlayStatus !== 'login_success' && recentPlayStatus !== 'player_spawn';
+          this.recordFreshSmpEvent('protocol', failed ? 'error' : 'success', `Server play_status: ${recentPlayStatus}.`);
+        } else if (packetName === 'start_game') {
+          this.recordFreshSmpEvent('protocol', 'info', `Received start_game (game version ${params.game_version || 'not supplied'}); latest play_status was ${recentPlayStatus}.`);
+        } else if (packetName === 'change_dimension') {
+          this.recordFreshSmpEvent('subserver', 'info', `Server sent change_dimension to ${params.dimension ?? 'unknown'}; awaiting FreshSMP Lifesteal/AFK-zone confirmation.`);
+        } else if (packetName === 'transfer') {
+          this.recordFreshSmpEvent('subserver', 'info', `Inbound transfer packet target: ${params.server_address || 'same host'}:${params.port || 19132}.`);
+        } else if (packetName === 'disconnect') {
+          const reason = params.message || params.filtered_message || params.reason || 'no reason supplied';
+          this.recordFreshSmpEvent('connection', 'error', `Inbound Bedrock disconnect packet: ${String(reason).slice(0, 400)}.`);
+        }
+      });
+
+      // Capture the actual automatic resource-pack replies made by bedrock-protocol.
+      const originalWrite = client.write.bind(client);
+      client.write = (name: string, params: any) => {
+        if (name === 'resource_pack_client_response') {
+          const statusNames: Record<string, string> = { '0': 'none', '1': 'refused', '2': 'send_packs', '3': 'have_all_packs', '4': 'completed', none: 'none', refused: 'refused', send_packs: 'send_packs', have_all_packs: 'have_all_packs', completed: 'completed' };
+          const status = String(params?.response_status ?? 'unknown');
+          const ids = Array.isArray(params?.resourcepackids) ? params.resourcepackids.length : 0;
+          const potentialMismatch = this.resourcePacksMustBeAccepted && this.requiredResourcePackCount > 0 && statusNames[status] === 'completed' && ids === 0;
+          this.recordFreshSmpEvent('resource_pack', potentialMismatch ? 'warning' : 'info', `Client sent resource_pack_client_response: ${statusNames[status] || status}, ${ids} pack ID(s).${potentialMismatch ? ` Server required ${this.requiredResourcePackCount} pack(s), but the client reports completion with no pack IDs; this is a protocol compatibility lead, not yet proof of the disconnect cause.` : ''}`);
+        }
+        return originalWrite(name, params);
+      };
+
       // Observe, but leave the automatic resource-pack response to bedrock-protocol.
       client.on('resource_packs_info', (packet: any) => {
         const count = (packet?.texture_packs?.length || 0) + (packet?.behaviour_packs?.length || packet?.behavior_packs?.length || 0);
+        this.requiredResourcePackCount = count;
+        this.resourcePacksMustBeAccepted = Boolean(packet?.must_accept);
         this.recordFreshSmpEvent('resource_pack', 'info', `Server sent resource-pack info (${count} pack(s); must_accept=${Boolean(packet?.must_accept)}). bedrock-protocol will auto-acknowledge.`);
       });
       client.on('resource_pack_stack', (packet: any) => {
@@ -570,7 +624,7 @@ export class PebbleBotInstance {
         this.hookConnectionDiagnostics(client);
         this.connectStartTime = Date.now();
         this.updateState('LOGGED_IN');
-        this.recordFreshSmpEvent('connection', 'success', 'FreshSMP accepted the Bedrock login.');
+        this.recordFreshSmpEvent('connection', 'success', 'Bedrock encryption handshake completed; awaiting server login_success and world spawn.');
         this.logActivity('connect', `Successfully joined Bedrock server ${this.config.host}:${this.config.port}`);
         this.handleSystemMessage(`Connected to ${this.config.host}:${this.config.port}`);
         this.pushChat({
@@ -783,6 +837,7 @@ export class PebbleBotInstance {
           const clean = stripMinecraftFormatting(titleText);
           this.lastServerNotice = clean;
           this.lastServerNoticeAt = Date.now();
+          if (this.isFreshSmpProfile()) this.handleBedrockText({ type: 'system', source_name: 'System', message: clean }, false);
           this.handleSystemMessage(`📢 ${clean}`);
         }
       });
@@ -1002,6 +1057,8 @@ export class PebbleBotInstance {
           this.lifestealAttemptStartedAt = this.lastLifestealCommandAt;
           this.lifestealSessionStartedAt = 0;
           this.lifestealThresholdReported = false;
+          this.lastQueueDiagnosticAt = 0;
+          this.lastQueueDiagnosticMessage = '';
           this.setFreshSmpPhase('queue');
           this.recordFreshSmpEvent('queue', 'info', 'Sent /lifesteal; waiting for FreshSMP queue or subserver confirmation.');
           this.armLifestealThreshold('attempt');
@@ -1387,7 +1444,7 @@ export class PebbleBotInstance {
     });
   }
 
-  private handleBedrockText(packet: any) {
+  private handleBedrockText(packet: any, emitChat = true) {
     if (!packet) return;
     try {
       let rawMsg = packet.message || packet.text || '';
@@ -1533,6 +1590,12 @@ export class PebbleBotInstance {
         ? `position ${queuePosition[1]}/${queuePosition[2]}, ETA ${queuePosition[3]}s`
         : 'waiting for a queue position';
       const now = Date.now();
+      const queueFingerprint = queuePosition ? `${queuePosition[1]}/${queuePosition[2]}` : cleanText.slice(0, 80);
+      if (!wasQueueActive || queueFingerprint !== this.lastQueueDiagnosticMessage || now - this.lastQueueDiagnosticAt >= 15_000) {
+        this.lastQueueDiagnosticMessage = queueFingerprint;
+        this.lastQueueDiagnosticAt = now;
+        this.recordFreshSmpEvent('queue', 'info', `FreshSMP queue notice from ${cleanSender}: "${cleanText.slice(0, 240)}" (${queueStatus}).`);
+      }
 
       // Queue position messages can arrive frequently. Keep useful state in
       // the account log without mirroring every server countdown update.
@@ -1552,9 +1615,11 @@ export class PebbleBotInstance {
       // message and a chat line. Do not count or schedule that twice.
       const alreadyConnectedRecently = now - this.lastAlreadyConnectedAt <= 15_000;
       if (alreadyConnectedRecently || this.isInSubserver) {
+        this.recordFreshSmpEvent('queue', 'warning', `FreshSMP sent a duplicate/late timeout notice while the account was considered connected: ${cleanSender}: "${cleanText.slice(0, 240)}".`);
         this.logActivity('warning', 'Ignored a Lifesteal timeout notice because FreshSMP recently confirmed this account is already connected; waiting for session state instead of reissuing /lifesteal.');
       } else if (hasRecentLifestealRequest && now - this.lastSubserverTimeoutAt >= 5000) {
         this.lastSubserverTimeoutAt = now;
+        this.recordFreshSmpEvent('queue', 'error', `FreshSMP timeout/cancellation notice from ${cleanSender}: "${cleanText.slice(0, 240)}".`);
         this.finishLifestealAttempt(`FreshSMP ended the /lifesteal queue: ${cleanText}`, 'error');
         this.isInSubserver = false;
         this.isSubserverQueueActive = false;
@@ -1583,7 +1648,8 @@ export class PebbleBotInstance {
       if (firstEntry) {
         this.lifestealSessionStartedAt = Date.now();
         this.setFreshSmpPhase('lifesteal');
-        this.recordFreshSmpEvent('subserver', 'success', 'FreshSMP confirmed entry into the AFK zone / Lifesteal subserver.');
+        const attemptDuration = this.lifestealAttemptStartedAt ? Date.now() - this.lifestealAttemptStartedAt : undefined;
+        this.recordFreshSmpEvent('subserver', 'success', `FreshSMP confirmed entry into the AFK zone / Lifesteal subserver${attemptDuration !== undefined ? ` after ${(attemptDuration / 1000).toFixed(1)}s` : ''}.`, attemptDuration);
       }
       if (this.lifestealThresholdTimer) clearTimeout(this.lifestealThresholdTimer);
       this.lifestealThresholdTimer = null;
@@ -1595,6 +1661,7 @@ export class PebbleBotInstance {
     }
     const ownWelcome = cleanText.match(/\bwelcome\s+_?([a-zA-Z0-9_]{3,16})\s+to\s+play\.freshsmp\.fun\b/i);
     if (ownWelcome && ownWelcome[1].toLowerCase() === this.config.username.replace(/^_/, '').toLowerCase()) {
+      this.recordFreshSmpEvent('subserver', this.lifestealSessionStartedAt && Date.now() - this.lifestealSessionStartedAt < 60_000 ? 'error' : 'warning', `FreshSMP lobby welcome received for this account: "${cleanText.slice(0, 240)}".`);
       if (this.lifestealSessionStartedAt) this.finishLifestealAttempt('FreshSMP returned this account to its lobby', 'warning');
       this.isInSubserver = false;
       this.isSubserverQueueActive = false;
@@ -1611,7 +1678,7 @@ export class PebbleBotInstance {
       this.lastServerNoticeAt = Date.now();
     }
 
-    this.pushChat({
+    if (emitChat) this.pushChat({
       botId: this.config.id,
       serverId: this.config.serverId,
       accountUsername: this.config.username,
