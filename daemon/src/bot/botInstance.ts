@@ -70,6 +70,10 @@ const SERVER_VERSION_CACHE: Map<string, string> = new Map([
   ['play.freshsmp.fun', '1.26.51'],
 ]);
 const SERVER_ENDPOINT_CURSORS = new Map<string, number>();
+// Once a Bedrock edge has completed the full game handshake, prefer that edge
+// for other accounts on the same daemon/host. Ping responses alone do not
+// guarantee that a gateway will accept RakNet Open Connection requests.
+const SERVER_WORKING_ENDPOINTS = new Map<string, string>();
 
 async function waitForNativeRaknetPreparation(): Promise<void> {
   const statusFile = process.env.PEBBLEAFK_NATIVE_STATUS_FILE;
@@ -338,7 +342,12 @@ export class PebbleBotInstance {
       let connectHost = cleanHost;
       if (ipv4Addresses.length) {
         const hostKey = cleanHost.toLowerCase();
-        if (!this.hasAttemptedEndpoint) {
+        const knownWorkingEndpoint = SERVER_WORKING_ENDPOINTS.get(hostKey);
+        const knownWorkingIndex = knownWorkingEndpoint ? ipv4Addresses.indexOf(knownWorkingEndpoint) : -1;
+        if (knownWorkingIndex >= 0) {
+          this.endpointAttemptCursor = knownWorkingIndex;
+          this.hasAttemptedEndpoint = true;
+        } else if (!this.hasAttemptedEndpoint) {
           this.endpointAttemptCursor = SERVER_ENDPOINT_CURSORS.get(hostKey) || 0;
           SERVER_ENDPOINT_CURSORS.set(hostKey, (this.endpointAttemptCursor + 1) % ipv4Addresses.length);
           this.hasAttemptedEndpoint = true;
@@ -494,6 +503,9 @@ export class PebbleBotInstance {
         this.reconnectAttemptCount = 0;
         this.reconnectFailureCount = 0;
         this.loginThrottleCount = 0;
+        if (ipv4Addresses.includes(connectHost)) {
+          SERVER_WORKING_ENDPOINTS.set(cleanHost.toLowerCase(), connectHost);
+        }
         this.currentVersionCandidate = null;
         SERVER_VERSION_CACHE.set(cleanHost, targetVersion);
         this.scheduleJoinCommand(client);
@@ -718,7 +730,12 @@ export class PebbleBotInstance {
         this.lastDisconnectReason = reason;
 
         if (ipv4Addresses.length > 1 && /connect timed out|no reply to RakNet UDP packets|filtering UDP/i.test(reason)) {
+          const hostKey = cleanHost.toLowerCase();
+          if (SERVER_WORKING_ENDPOINTS.get(hostKey) === connectHost) {
+            SERVER_WORKING_ENDPOINTS.delete(hostKey);
+          }
           this.endpointAttemptCursor = (this.endpointAttemptCursor + 1) % ipv4Addresses.length;
+          SERVER_ENDPOINT_CURSORS.set(hostKey, this.endpointAttemptCursor);
           const nextAddress = ipv4Addresses[this.endpointAttemptCursor];
           this.logActivity('status', `🔁 Bedrock edge ${connectHost} did not answer RakNet; next retry will use ${nextAddress}.`);
           console.log(chalk.yellow(`[PebbleAFK] Rotating Bedrock IPv4 edge ${connectHost} -> ${nextAddress} after RakNet timeout.`));
