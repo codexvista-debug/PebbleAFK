@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",
+    "test:signet": "tsx --test test/signet.test.ts",
     "serve": "node dist/index.js"
   },
   "keywords": [

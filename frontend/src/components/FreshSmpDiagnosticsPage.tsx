@@ -33,13 +33,13 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
           <div className="p-2.5 rounded-xl bg-gradient-to-br from-amber-300 to-orange-400 text-amber-950 border border-amber-200 shadow-sm"><Activity className="w-5 h-5" /></div>
           <div>
             <h1 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900">FreshSMP Lifesteal Diagnostics</h1>
-            <p className="mt-1.5 max-w-4xl text-sm leading-6 font-medium text-slate-600">Follow each account from Bedrock login through the resource-pack check, Lifesteal queue, and subserver. Queue waits are flagged after 60 seconds, while shorter sessions are recorded as short stays.</p>
+            <p className="mt-1.5 max-w-4xl text-sm leading-6 font-medium text-slate-600">Follow each account from Bedrock login through the resource-pack check, Lifesteal queue, and subserver. Signet retries silent or failed transfers, then refreshes a stale Bedrock session after repeated short returns while pacing reconnects across accounts.</p>
           </div>
         </div>
         <div className="mt-4 grid gap-2 sm:grid-cols-3">
           <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><Radio className="inline w-4 h-4 mr-2 text-sky-500" />RakNet login and world spawn</div>
           <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><ShieldAlert className="inline w-4 h-4 mr-2 text-amber-500" />Resource-pack exchange observations</div>
-          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><Clock3 className="inline w-4 h-4 mr-2 text-rose-500" />Exact 60-second queue threshold</div>
+          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><Clock3 className="inline w-4 h-4 mr-2 text-rose-500" />Silent attempts checked at 60 seconds · repeated failures escalate</div>
         </div>
       </div>
 
@@ -91,6 +91,13 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
                           {detail && <span className="text-[11px] font-semibold text-slate-500">{detail.lifestealAttemptStartedAt ? `Attempt ${elapsed(attemptDuration)}` : elapsed(phaseDuration)}</span>}
                         </div>
                       </div>
+                      {detail?.signet && <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-[11px] font-bold text-emerald-900">
+                        <span className="text-emerald-800">Signet</span>
+                        <span className="rounded-full border border-emerald-200 bg-white px-2 py-0.5">Short returns {detail.signet.shortReturnStreak}/3</span>
+                        <span className="rounded-full border border-emerald-200 bg-white px-2 py-0.5">Queue failures {detail.signet.queueFailureStreak}/3</span>
+                        {detail.signet.recoveryCycle > 0 && <span className="rounded-full border border-emerald-200 bg-white px-2 py-0.5">Session resets {detail.signet.recoveryCycle}</span>}
+                        {detail.signet.nextAction && <span className="basis-full text-emerald-800">{detail.signet.nextAction}{detail.signet.nextActionAt ? ` in ${elapsed(Math.max(0, detail.signet.nextActionAt - now))}` : ''}</span>}
+                      </div>}
                       {botReasons[botId] && <div className="mt-3 rounded-xl bg-rose-50 border border-rose-200 px-3 py-2.5 text-xs font-bold leading-relaxed text-rose-800 shadow-sm"><AlertTriangle className="inline w-4 h-4 mr-1.5 align-[-3px] text-rose-600" />{botReasons[botId]}</div>}
                       {latestProblem && <p className="mt-2 rounded-lg border border-amber-300/40 bg-amber-950/25 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-200"><AlertTriangle className="inline w-4 h-4 mr-1.5 align-[-3px] text-amber-400" />Most recent issue: {latestProblem.message}</p>}
                       {!detail ? <p className="mt-3 text-xs font-medium text-slate-500">No daemon diagnostic events yet. Connect an account or reconnect the daemon to start collecting evidence.</p> : detail.events.length === 0 ? <p className="mt-3 text-xs font-medium text-slate-500">Waiting for the first connection event.</p> : (
@@ -111,7 +118,7 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
           </section>
         );
       })}
-      <p className="text-xs leading-relaxed font-medium text-slate-500 px-1">These diagnostics show where a failure occurs. Queue waits and RakNet transport timeouts are different issues. The Termux daemon retains events for the current process and resyncs them when the dashboard reconnects.</p>
+      <p className="text-xs leading-relaxed font-medium text-slate-500 px-1">These diagnostics show where a failure occurs. Queue waits, FreshSMP service errors, and RakNet transport timeouts are different issues; Signet handles repeated transfer failures without retrying a confirmed live queue. Events are retained for the current daemon process and resynced when the dashboard reconnects.</p>
     </div>
   );
 }

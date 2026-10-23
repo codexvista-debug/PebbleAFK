@@ -6,6 +6,7 @@ import { Authflow, Titles } from 'prismarine-auth';
 const bedrock = require('bedrock-protocol');
 import { BotConfig, BotLifecycleState, BossBarPayload, DaemonMessage, FreshSmpDiagnosticEvent, FreshSmpDiagnosticPhase, FreshSmpDiagnosticState, TelemetryPayload } from '../types';
 import { getAndSyncTokenFolder, migrateTokenCache } from './tokenManager';
+import { signetCommandRetryDelayMs, signetConnectionRecoveryDelayMs, shouldResetFreshSmpSession } from './signet';
 
 function pingBedrockJsp(host: string, port: number, timeoutMs = 2000): Promise<{ version?: string; motd?: string; protocol?: string } | null> {
   return new Promise((resolve) => {
@@ -251,6 +252,7 @@ export class PebbleBotInstance {
   private static lastHandshakeTime: number = 0;
   private static handshakeQueue: Promise<void> = Promise.resolve();
   private static recentChatConsoleLines = new Map<string, number>();
+  private static nextFreshSmpRecoveryAt: number = 0;
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
   public chatHistory: any[] = [];
@@ -319,6 +321,9 @@ export class PebbleBotInstance {
   private lifestealAttemptStartedAt = 0;
   private lifestealSessionStartedAt = 0;
   private shortLifestealReturnCount = 0;
+  private freshSmpRecoveryCount = 0;
+  private signetNextAction = '';
+  private signetNextActionAt = 0;
   private lifestealThresholdReported = false;
   private lifestealThresholdTimer: NodeJS.Timeout | null = null;
   private lifestealStabilityTimer: NodeJS.Timeout | null = null;
@@ -369,6 +374,13 @@ export class PebbleBotInstance {
       phaseSince: this.freshSmpPhaseSince,
       lifestealAttemptStartedAt: this.lifestealAttemptStartedAt || undefined,
       lifestealSessionStartedAt: this.lifestealSessionStartedAt || undefined,
+      signet: {
+        shortReturnStreak: this.shortLifestealReturnCount,
+        queueFailureStreak: this.subserverQueueTimeoutCount,
+        recoveryCycle: this.freshSmpRecoveryCount,
+        nextAction: this.signetNextAction || undefined,
+        nextActionAt: this.signetNextActionAt || undefined,
+      },
       events: [...this.freshSmpEvents],
     };
   }
@@ -399,6 +411,12 @@ export class PebbleBotInstance {
     this.publishFreshSmpDiagnostics();
   }
 
+  private setSignetNextAction(action = '', at = 0) {
+    this.signetNextAction = action;
+    this.signetNextActionAt = at;
+    this.publishFreshSmpDiagnostics();
+  }
+
   private armLifestealThreshold(origin: 'attempt' | 'queue') {
     if (!this.isFreshSmpProfile() || !this.lifestealAttemptStartedAt || this.lifestealThresholdReported) return;
     if (this.lifestealThresholdTimer) clearTimeout(this.lifestealThresholdTimer);
@@ -414,7 +432,67 @@ export class PebbleBotInstance {
         : 'No confirmed /lifesteal queue or subserver entry arrived within 60 seconds.';
       this.recordFreshSmpEvent('queue', 'error', detail, elapsed);
       this.logActivity('warning', detail);
+      if (origin === 'attempt' && !this.isSubserverQueueActive) {
+        this.finishLifestealAttempt('No FreshSMP queue response arrived', 'warning');
+        this.isSubserverQueueActive = false;
+        this.setFreshSmpPhase('lobby');
+        this.subserverQueueTimeoutCount += 1;
+        this.handleSignetTransferFailure('No confirmed /lifesteal queue or subserver response arrived within 60 seconds.');
+      }
     }, Math.max(0, dueAt - Date.now()));
+  }
+
+  private handleSignetTransferFailure(reason: string) {
+    if (shouldResetFreshSmpSession(this.shortLifestealReturnCount, this.subserverQueueTimeoutCount) && this.scheduleFreshSmpRecovery(reason)) return;
+
+    const attempt = Math.max(1, this.shortLifestealReturnCount, this.subserverQueueTimeoutCount);
+    const retryDelay = signetCommandRetryDelayMs(attempt);
+    const retryNote = `${reason} Signet will retry /lifesteal in ${Math.ceil(retryDelay / 1000)}s (short returns ${this.shortLifestealReturnCount}/3, queue failures ${this.subserverQueueTimeoutCount}/3).`;
+    this.recordFreshSmpEvent('queue', 'warning', retryNote);
+    this.logActivity('warning', retryNote);
+    this.triggerJoinCommandRetry(retryDelay);
+  }
+
+  private scheduleFreshSmpRecovery(reason: string): boolean {
+    if (!this.isFreshSmpProfile() || this.isExplicitlyStopped || !this.config.settings?.autoReconnect || !this.client || this.reconnectTimer) return false;
+
+    this.freshSmpRecoveryCount = Math.min(this.freshSmpRecoveryCount + 1, 5);
+    const localDelay = signetConnectionRecoveryDelayMs(this.freshSmpRecoveryCount);
+    const now = Date.now();
+    const reconnectAt = Math.max(now + localDelay, PebbleBotInstance.nextFreshSmpRecoveryAt);
+    // Preserve a 12-second daemon-wide login slot so simultaneous recoveries
+    // don't turn a proxy hiccup into a burst of Bedrock handshakes.
+    PebbleBotInstance.nextFreshSmpRecoveryAt = reconnectAt + 12_000;
+    const delay = reconnectAt - now;
+    const recoveryNote = `Signet recovery cycle ${this.freshSmpRecoveryCount}: resetting the FreshSMP Bedrock session and reconnecting in ${Math.ceil(delay / 1000)}s. ${reason}`;
+
+    this.recordFreshSmpEvent('connection', 'warning', recoveryNote);
+    this.logActivity('warning', recoveryNote);
+    this.setFreshSmpPhase('reconnecting');
+    this.updateState('RECONNECTING', `Signet session recovery; reconnecting in ${Math.ceil(delay / 1000)}s`);
+    this.setSignetNextAction('Reconnect to FreshSMP', reconnectAt);
+
+    this.isInSubserver = false;
+    this.isSubserverQueueActive = false;
+    this.isTransferring = false;
+    this.hasTransferredToFreshSmpSubserver = false;
+    this.hasTransferredToSubserver = false;
+    this.lastLifestealCommandAt = 0;
+    this.lastAlreadyConnectedAt = 0;
+    this.config.host = this.originalHost;
+    this.config.port = this.originalPort;
+    this.finishLifestealAttempt('Signet FreshSMP recovery cycle started', 'warning');
+    this.cleanup();
+
+    const oldClient = this.client;
+    this.client = null;
+    try { oldClient.close(); } catch (_) {}
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.isExplicitlyStopped) this.start();
+    }, delay);
+    return true;
   }
 
   private finishLifestealAttempt(reason: string, severity: FreshSmpDiagnosticEvent['severity']) {
@@ -452,6 +530,8 @@ export class PebbleBotInstance {
       if (duration < 60_000) return;
       this.shortLifestealReturnCount = 0;
       this.subserverQueueTimeoutCount = 0;
+      this.freshSmpRecoveryCount = 0;
+      this.setSignetNextAction();
       const detail = 'Account remained confirmed in FreshSMP Lifesteal for 60 seconds; recovery backoff reset.';
       this.recordFreshSmpEvent('subserver', 'success', detail, duration);
       this.logActivity('status', detail);
@@ -466,6 +546,7 @@ export class PebbleBotInstance {
     }
 
     this.isExplicitlyStopped = false;
+    this.setSignetNextAction();
     const startGeneration = ++this.startGeneration;
     this.startInProgress = true;
     this.clearBossBars();
@@ -1258,11 +1339,17 @@ export class PebbleBotInstance {
 
     // Do not send another transfer request while FreshSMP still has this
     // account in its Lifesteal queue (or after it reached the AFK area).
-    if (this.isInSubserver || this.isSubserverQueueActive) return;
+    if (this.isInSubserver || this.isSubserverQueueActive) {
+      this.setSignetNextAction();
+      return;
+    }
 
     const isFreshSmp = this.isFreshSmpProfile();
     const configuredCommand = this.config.settings?.joinCommand?.trim().slice(0, 256) || (isFreshSmp ? '/lifesteal' : '');
-    if (!configuredCommand) return;
+    if (!configuredCommand) {
+      this.setSignetNextAction();
+      return;
+    }
 
     const command = configuredCommand.startsWith('/') ? configuredCommand : `/${configuredCommand}`;
     const minDelay = command.toLowerCase().includes('lifesteal') ? 10000 : 3000;
@@ -1281,9 +1368,11 @@ export class PebbleBotInstance {
 
     console.log(chalk.cyan(`[PebbleAFK] Scheduling join/transfer command for @${this.config.username} (${command}) in ${Math.round(finalDelay / 1000)}s...`));
     this.logActivity('status', `Join/transfer command (${command}) scheduled in ${Math.round(finalDelay / 1000)}s.`);
+    this.setSignetNextAction(`Retry ${command}`, Date.now() + finalDelay);
 
     this.joinCommandTimer = setTimeout(() => {
       this.joinCommandTimer = null;
+      this.setSignetNextAction();
       if (this.isInSubserver || this.isSubserverQueueActive) return;
       if (this.state === 'SPAWNED' || this.state === 'LOGGED_IN') {
         console.log(chalk.cyan(`[PebbleAFK] Running join/transfer command for @${this.config.username}: ${command}`));
@@ -1910,18 +1999,10 @@ export class PebbleBotInstance {
         this.setFreshSmpPhase('lobby');
         this.subserverQueueTimeoutCount += 1;
 
-        // This is a subserver/queue failure, not a broken Bedrock session. Keep
-        // the healthy lobby connection and back off before asking for Lifesteal
-        // again; tearing down the whole client adds login pressure and delays.
-        this.subserverQueueTimeoutCount = Math.min(this.subserverQueueTimeoutCount, 6);
-        const baseRetryDelay = Math.min(120_000, 20_000 * (2 ** Math.min(this.subserverQueueTimeoutCount - 1, 3)));
-        const retryDelay = Math.min(120_000, baseRetryDelay + Math.floor(Math.random() * 5000));
-        const retrySeconds = Math.ceil(retryDelay / 1000);
-        const retryNote = `FreshSMP ended the Lifesteal queue attempt; keeping the lobby connection and retrying /lifesteal in ${retrySeconds}s (attempt ${this.subserverQueueTimeoutCount}).`;
-        console.log(chalk.yellow(`[PebbleAFK] ${retryNote} for @${this.config.username}.`));
-        this.logActivity('warning', retryNote);
-        this.recordFreshSmpEvent('queue', 'warning', retryNote);
-        this.triggerJoinCommandRetry(retryDelay);
+        this.subserverQueueTimeoutCount = Math.min(this.subserverQueueTimeoutCount, 3);
+        const retryReason = `FreshSMP ended the Lifesteal queue attempt (${cleanText.slice(0, 180)}).`;
+        console.log(chalk.yellow(`[PebbleAFK] Signet detected queue failure ${this.subserverQueueTimeoutCount}/3 for @${this.config.username}.`));
+        this.handleSignetTransferFailure(retryReason);
       }
     }
 
@@ -1957,6 +2038,8 @@ export class PebbleBotInstance {
       const wasStableSession = priorSessionDuration >= 60_000;
       if (wasStableSession) {
         this.shortLifestealReturnCount = 0;
+        this.subserverQueueTimeoutCount = 0;
+        this.freshSmpRecoveryCount = 0;
       }
       const countsAsShortReturn = !wasStableSession && (
         (priorSessionDuration > 0 && priorSessionDuration < 60_000)
@@ -1964,24 +2047,19 @@ export class PebbleBotInstance {
         || hasRecentLifestealRequest
       );
       const shouldRejoinLifesteal = priorSessionDuration > 0 || alreadyConnectedThenReturnedToLobby || hasRecentLifestealRequest;
-      if (shouldRejoinLifesteal && !this.joinCommandTimer) {
+      if (shouldRejoinLifesteal) {
         if (countsAsShortReturn) this.shortLifestealReturnCount = Math.min(this.shortLifestealReturnCount + 1, 3);
         const cause = alreadyConnectedThenReturnedToLobby
           ? 'after an already-connected response'
           : priorSessionDuration
             ? `${priorSessionDuration < 60_000 ? 'after only' : 'after'} ${(priorSessionDuration / 1000).toFixed(1)}s in Lifesteal`
             : 'before Lifesteal entry was confirmed';
-        // A short-lived Lifesteal return leaves the lobby client usable. Never
-        // force a full reconnect just because the subserver transfer failed;
-        // wait longer after repeated short stays, then retry on this session.
-        const retryAttempt = Math.max(1, this.shortLifestealReturnCount);
-        const baseRetryDelay = Math.min(120_000, 20_000 * (2 ** Math.min(retryAttempt - 1, 3)));
-        const retryDelay = Math.min(120_000, baseRetryDelay + Math.floor(Math.random() * 5000));
-        const retrySeconds = Math.ceil(retryDelay / 1000);
-        const retryNote = `FreshSMP returned this account to its lobby ${cause}; keeping the lobby connection and retrying /lifesteal in ${retrySeconds}s${countsAsShortReturn ? ` (short-return ${this.shortLifestealReturnCount})` : ''}.`;
-        this.recordFreshSmpEvent('queue', 'warning', retryNote, priorSessionDuration || undefined);
-        this.logActivity('warning', retryNote);
-        this.triggerJoinCommandRetry(retryDelay);
+        const recoveryScheduled = countsAsShortReturn && shouldResetFreshSmpSession(this.shortLifestealReturnCount, this.subserverQueueTimeoutCount)
+          ? this.scheduleFreshSmpRecovery(`FreshSMP returned this account to its lobby ${cause}; Signet reached the repeated short-return threshold.`)
+          : false;
+        if (!recoveryScheduled && !this.joinCommandTimer && !this.reconnectTimer) {
+          this.handleSignetTransferFailure(`FreshSMP returned this account to its lobby ${cause}.`);
+        }
       }
     }
     if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk') || isLifestealTimeout) {

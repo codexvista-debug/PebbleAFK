@@ -140,6 +140,13 @@ export interface FreshSmpDiagnosticEvent {
   message: string;
   durationMs?: number;
 }
+export interface FreshSmpSignetState {
+  shortReturnStreak: number;
+  queueFailureStreak: number;
+  recoveryCycle: number;
+  nextAction?: string;
+  nextActionAt?: number;
+}
 export interface FreshSmpDiagnosticState {
   botId: string;
   serverId?: string;
@@ -149,6 +156,7 @@ export interface FreshSmpDiagnosticState {
   phaseSince: number;
   lifestealAttemptStartedAt?: number;
   lifestealSessionStartedAt?: number;
+  signet?: FreshSmpSignetState;
   events: FreshSmpDiagnosticEvent[];
 }
 

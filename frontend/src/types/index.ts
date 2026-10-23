@@ -122,6 +122,13 @@ export interface FreshSmpDiagnosticState {
   phaseSince: number;
   lifestealAttemptStartedAt?: number;
   lifestealSessionStartedAt?: number;
+  signet?: {
+    shortReturnStreak: number;
+    queueFailureStreak: number;
+    recoveryCycle: number;
+    nextAction?: string;
+    nextActionAt?: number;
+  };
   events: FreshSmpDiagnosticEvent[];
 }
 
