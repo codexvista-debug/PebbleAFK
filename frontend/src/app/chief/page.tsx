@@ -843,9 +843,9 @@ export default function ChiefAdminPage() {
   }, [accounts]);
 
   return (
-    <div className="min-h-screen bg-slate-50/50 text-slate-900 font-sans flex flex-col md:flex-row pb-16 md:pb-0">
+    <div className="mc-surface mc-admin-shell min-h-screen bg-slate-50/50 text-slate-900 font-sans flex flex-col md:flex-row pb-16 md:pb-0">
       {/* MOBILE TOP BAR */}
-      <div className="md:hidden bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between sticky top-0 z-30 shadow-2xs">
+      <div className="mc-mobile-topbar md:hidden bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between sticky top-0 z-30 shadow-2xs">
         <Link href="/" className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 text-white flex items-center justify-center font-black text-xs shadow-xs ring-1 ring-emerald-500/30">
             ⛏
@@ -876,7 +876,7 @@ export default function ChiefAdminPage() {
       {/* MOBILE DRAWER */}
       {mobileMenuOpen && (
         <div className="md:hidden fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs flex flex-col pt-14">
-          <div className="bg-white p-4 border-b border-slate-200 space-y-3 shadow-xl">
+          <div className="mc-mobile-drawer bg-white p-4 border-b border-slate-200 space-y-3 shadow-xl">
             <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">
               Admin Sections
             </div>
@@ -940,9 +940,9 @@ export default function ChiefAdminPage() {
       )}
 
       {/* LEFT SIDEBAR (Desktop) */}
-      <aside className="hidden md:flex w-64 bg-white border-r border-slate-200 flex-col shrink-0 shadow-2xs z-20 md:sticky md:top-0 md:h-screen">
+      <aside className="mc-sidebar hidden md:flex w-64 bg-white border-r border-slate-200 flex-col shrink-0 shadow-2xs z-20 md:sticky md:top-0 md:h-screen">
         {/* Logo Bar */}
-        <div className="p-4 border-b border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
+        <div className="mc-brandbar p-4 border-b border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
           <Link
             href="/"
             className="flex items-center gap-2.5 text-left group hover:opacity-90 transition cursor-pointer"
@@ -1117,9 +1117,9 @@ export default function ChiefAdminPage() {
       </aside>
 
       {/* RIGHT MAIN CONTENT AREA */}
-      <div className="flex-1 flex flex-col min-w-0 bg-slate-50/50">
+      <div className="mc-admin-content flex-1 flex flex-col min-w-0 bg-slate-50/50">
         {/* Desktop Header Bar */}
-        <header className="hidden md:flex h-16 bg-white border-b border-slate-200 px-6 lg:px-8 items-center justify-between sticky top-0 z-10 shadow-2xs">
+        <header className="mc-desktop-topbar hidden md:flex h-16 bg-white border-b border-slate-200 px-6 lg:px-8 items-center justify-between sticky top-0 z-10 shadow-2xs">
           {/* Breadcrumb Left */}
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center">
@@ -1155,7 +1155,7 @@ export default function ChiefAdminPage() {
         </header>
 
         {/* Scrollable Main Content */}
-        <main className="flex-1 p-4 md:p-6 lg:p-8 space-y-6 max-w-7xl w-full mx-auto">
+        <main className="mc-workspace flex-1 p-4 md:p-6 lg:p-8 space-y-6 max-w-7xl w-full mx-auto">
           {/* Toast Alert */}
           {toast && (
             <div

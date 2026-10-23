@@ -79,6 +79,7 @@ import {
 
 export default function Home() {
   const [currentUser, setCurrentUser] = useState<string | null>(null);
+  const [sessionRestored, setSessionRestored] = useState(false);
   const [secretCode, setSecretCode] = useState<string>('');
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -459,65 +460,71 @@ export default function Home() {
 
   // Load saved session, secretCode, and Supabase accounts
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const savedUser = localStorage.getItem('pebbleafk_current_user');
-      if (savedUser) {
-        setCurrentUser(savedUser);
-        const cachedSecret = localStorage.getItem(`pebbleafk_secret_${savedUser.toLowerCase()}`) || '';
-        if (cachedSecret) {
-          setSecretCode(cachedSecret);
-        } else {
-          fetch(`/api/auth?username=${encodeURIComponent(savedUser)}`)
-            .then((r) => r.json())
-            .then((data) => {
-              if (data?.secretCode) {
-                setSecretCode(data.secretCode);
-                localStorage.setItem(`pebbleafk_secret_${savedUser.toLowerCase()}`, data.secretCode);
+    try {
+      if (typeof window !== 'undefined') {
+        const savedUser = localStorage.getItem('pebbleafk_current_user');
+        if (savedUser) {
+          setCurrentUser(savedUser);
+          const cachedSecret = localStorage.getItem(`pebbleafk_secret_${savedUser.toLowerCase()}`) || '';
+          if (cachedSecret) {
+            setSecretCode(cachedSecret);
+          } else {
+            fetch(`/api/auth?username=${encodeURIComponent(savedUser)}`)
+              .then((r) => r.json())
+              .then((data) => {
+                if (data?.secretCode) {
+                  setSecretCode(data.secretCode);
+                  localStorage.setItem(`pebbleafk_secret_${savedUser.toLowerCase()}`, data.secretCode);
+                }
+              })
+              .catch(() => {});
+          }
+
+          // Instant load from localStorage cache
+          const cachedAccs = localStorage.getItem(`pebbleafk_accounts_${savedUser.toLowerCase()}`);
+          if (cachedAccs) {
+            try {
+              const parsed = JSON.parse(cachedAccs);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setAccounts(parsed);
               }
-            })
-            .catch(() => {});
-        }
-
-        // Instant load from localStorage cache
-        const cachedAccs = localStorage.getItem(`pebbleafk_accounts_${savedUser.toLowerCase()}`);
-        if (cachedAccs) {
-          try {
-            const parsed = JSON.parse(cachedAccs);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              setAccounts(parsed);
-            }
-          } catch (_) {}
-        }
-
-        const cachedSrvs = localStorage.getItem(`pebbleafk_servers_${savedUser.toLowerCase()}`);
-        if (cachedSrvs) {
-          try {
-            const parsed = JSON.parse(cachedSrvs);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              setServers(parsed);
-              setActiveServerId((prev) => prev || parsed[0].id);
-            }
-          } catch (_) {}
-        }
-
-        // Load accounts from Supabase (filter out any old dummy names)
-        loadAccountsFromSupabase(savedUser).then((accs) => {
-          if (accs && accs.length > 0) {
-            const cleanAccs = accs.filter((a) => !a.ign?.startsWith('bedrock_user_') && !a.username?.startsWith('bedrock_user_'));
-            setAccounts(cleanAccs);
-            localStorage.setItem(`pebbleafk_accounts_${savedUser.toLowerCase()}`, JSON.stringify(cleanAccs));
+            } catch (_) {}
           }
-        });
 
-        // Load server profiles from Supabase
-        loadServersFromSupabase(savedUser).then((srvs) => {
-          if (srvs && srvs.length > 0) {
-            setServers(srvs);
-            setActiveServerId((prev) => prev || srvs[0].id);
-            localStorage.setItem(`pebbleafk_servers_${savedUser.toLowerCase()}`, JSON.stringify(srvs));
+          const cachedSrvs = localStorage.getItem(`pebbleafk_servers_${savedUser.toLowerCase()}`);
+          if (cachedSrvs) {
+            try {
+              const parsed = JSON.parse(cachedSrvs);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setServers(parsed);
+                setActiveServerId((prev) => prev || parsed[0].id);
+              }
+            } catch (_) {}
           }
-        });
+
+          // Load accounts from Supabase (filter out any old dummy names)
+          loadAccountsFromSupabase(savedUser).then((accs) => {
+            if (accs && accs.length > 0) {
+              const cleanAccs = accs.filter((a) => !a.ign?.startsWith('bedrock_user_') && !a.username?.startsWith('bedrock_user_'));
+              setAccounts(cleanAccs);
+              localStorage.setItem(`pebbleafk_accounts_${savedUser.toLowerCase()}`, JSON.stringify(cleanAccs));
+            }
+          });
+
+          // Load server profiles from Supabase
+          loadServersFromSupabase(savedUser).then((srvs) => {
+            if (srvs && srvs.length > 0) {
+              setServers(srvs);
+              setActiveServerId((prev) => prev || srvs[0].id);
+              localStorage.setItem(`pebbleafk_servers_${savedUser.toLowerCase()}`, JSON.stringify(srvs));
+            }
+          });
+        }
       }
+    } catch (error) {
+      console.warn('Could not restore the saved PebbleAFK session.', error);
+    } finally {
+      setSessionRestored(true);
     }
   }, []);
 
@@ -1451,30 +1458,64 @@ export default function Home() {
   };
 
   // 1. UNLOGGED VIEW: Main page
+  if (!sessionRestored) {
+    return (
+      <main className="mc-boot-scene min-h-screen flex items-center justify-center p-6">
+        <div className="mc-loading-card">
+          <div className="mc-loading-mark" aria-hidden="true">⛏</div>
+          <div className="mc-loading-blocks" aria-hidden="true"><i /><i /><i /></div>
+          <span className="mc-loading-title">Loading your world…</span>
+          <span className="mc-loading-caption">RESTORING YOUR CONTROL DECK</span>
+        </div>
+      </main>
+    );
+  }
+
   if (!currentUser) {
     return (
-      <main className="min-h-screen bg-grid-slate flex flex-col items-center justify-center p-4">
-        <div className="glass-panel p-8 sm:p-10 rounded-3xl border border-slate-200/90 shadow-2xl max-w-sm w-full text-center space-y-6">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center mx-auto text-3xl font-black shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-500/20">
-            ⛏
+      <main className="mc-login-scene min-h-screen flex flex-col p-4 sm:p-7 lg:p-10">
+        <div className="mc-login-topbar mx-auto w-full max-w-7xl flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="mc-brand-mark" aria-hidden="true">⛏</div>
+            <div>
+              <div className="mc-brand-name">PebbleAFK</div>
+              <div className="mc-brand-caption">BEDROCK CONTROL DECK</div>
+            </div>
+          </div>
+          <span className="mc-edition-chip"><Radio className="w-3.5 h-3.5" /> MADE FOR BEDROCK</span>
+        </div>
+
+        <section className="mc-login-hero mx-auto my-auto w-full max-w-7xl">
+          <div className="mc-login-copy">
+            <span className="mc-eyebrow"><span className="mc-eyebrow-block" /> YOUR WORLD, UNDER CONTROL</span>
+            <h1>Keep your world <span>moving.</span></h1>
+            <p>One home for your Bedrock accounts, server profiles, live chat, and the Termux daemon that keeps your crew online.</p>
+            <button
+              onClick={() => setIsAuthOpen(true)}
+              className="mc-button-primary flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>Sign in or create an account</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+            <div className="mc-login-footnote"><ShieldCheck className="w-4 h-4" /> Your server credentials stay in your control.</div>
           </div>
 
-          <div className="space-y-2">
-            <h1 className="text-2xl font-black tracking-tight text-slate-900">
-              PebbleAFK
-            </h1>
-            <p className="text-xs text-slate-500 leading-relaxed max-w-xs mx-auto">
-              24/7 Pure Bedrock AFK bot powered by Termux on Android. Sign in with your username to manage server profiles &amp; bots.
-            </p>
+          <div className="mc-login-world" aria-label="Pixel-art Overworld landscape">
+            <div className="mc-world-glow" />
+            <div className="mc-world-plaque">
+              <span className="mc-plaque-label"><span className="mc-status-dot" /> BEDROCK AFK CREW</span>
+              <h2>Adventure<br />doesn’t have to log off.</h2>
+              <p>Manage your worlds from one cozy control room.</p>
+              <div className="mc-block-row" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>
+            </div>
+            <span className="mc-world-signature">PEBBLEAFK · BEDROCK CORE</span>
           </div>
+        </section>
 
-          <button
-            onClick={() => setIsAuthOpen(true)}
-            className="w-full py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold text-sm shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2 transition cursor-pointer"
-          >
-            <LogIn className="w-4 h-4" />
-            <span>Sign In / Register</span>
-          </button>
+        <div className="mc-login-footer mx-auto w-full max-w-7xl">
+          <span>BUILT FOR YOUR LITTLE CORNER OF THE OVERWORLD</span>
+          <span>PEBBLEAFK <span className="mc-footer-separator">/</span> BEDROCK CORE</span>
         </div>
 
         <AuthModal
@@ -1490,7 +1531,7 @@ export default function Home() {
 
   // 2. LOGGED-IN VIEW
   return (
-    <div className="h-[100dvh] min-h-0 overflow-hidden bg-slate-50 flex flex-col">
+    <div className="mc-surface minecraft-shell h-[100dvh] min-h-0 overflow-hidden bg-slate-50 flex flex-col">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed bottom-5 right-5 z-70 animate-in slide-in-from-bottom-2 fade-in duration-200">
@@ -1512,7 +1553,7 @@ export default function Home() {
       )}
 
       {/* Mobile Top Header Bar */}
-      <div className="md:hidden flex items-center justify-between p-3.5 bg-white border-b border-slate-200/90 shrink-0 sticky top-0 z-30 shadow-2xs">
+      <div className="mc-mobile-topbar md:hidden flex items-center justify-between p-3.5 bg-white border-b border-slate-200/90 shrink-0 sticky top-0 z-30 shadow-2xs">
         <div className="flex items-center gap-2.5">
           <button
             type="button"
@@ -1599,13 +1640,13 @@ export default function Home() {
 
         {/* LEFT SIDEBAR */}
         <aside
-          className={`fixed md:static inset-y-0 left-0 z-50 w-72 max-w-[85vw] md:w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 shadow-2xl md:shadow-none transition-transform duration-200 ease-in-out ${
+          className={`mc-sidebar fixed md:static inset-y-0 left-0 z-50 w-72 max-w-[85vw] md:w-64 bg-white border-r border-slate-200 flex flex-col justify-between shrink-0 shadow-2xl md:shadow-none transition-transform duration-200 ease-in-out ${
             isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
           }`}
         >
           <div>
             {/* Logo Bar inside Sidebar */}
-            <div className="p-4 border-b border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
+            <div className="mc-brandbar p-4 border-b border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
               <button
                 type="button"
                 onClick={() => {
@@ -1882,7 +1923,7 @@ export default function Home() {
           </div>
 
           {/* User Profile + Logout at Bottom */}
-          <div className="p-3 border-t border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
+          <div className="mc-sidebar-footer p-3 border-t border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
             <div className="flex items-center gap-1.5 overflow-hidden">
               <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white border border-slate-200/90 text-slate-800 text-xs font-extrabold shadow-2xs truncate max-w-[170px]">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
@@ -1923,7 +1964,7 @@ export default function Home() {
         {/* Desktop Header + Main View Area */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
           {/* Desktop Top Header Bar */}
-          <header className="hidden md:flex shrink-0 sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-6 py-2.5 items-center justify-between shadow-2xs">
+          <header className="mc-desktop-topbar hidden md:flex shrink-0 sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 px-6 py-2.5 items-center justify-between shadow-2xs">
             <div className="flex items-center gap-2.5 text-xs font-bold">
               {activeTab === 'servers' && activeServer ? (
                 <>
@@ -1968,7 +2009,7 @@ export default function Home() {
           </header>
 
           {/* Main Scrollable Content */}
-          <main className={`flex-1 min-h-0 min-w-0 w-full bg-grid-slate overflow-x-hidden ${
+          <main className={`mc-workspace flex-1 min-h-0 min-w-0 w-full bg-grid-slate overflow-x-hidden ${
             activeTab === 'servers' && activeSubTab === 'chat' && activeServer
               ? 'flex flex-col overflow-y-hidden p-2 sm:p-4'
               : 'overflow-y-auto p-3 sm:p-6'

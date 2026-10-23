@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" shape-rendering="crispEdges">
+  <defs>
+    <linearGradient id="sky" x2="0" y2="1">
+      <stop stop-color="#38bdf0"/>
+      <stop offset=".58" stop-color="#83d9ef"/>
+      <stop offset="1" stop-color="#d1e8c6"/>
+    </linearGradient>
+    <linearGradient id="hill" x2="0" y2="1">
+      <stop stop-color="#449d66"/>
+      <stop offset="1" stop-color="#28634e"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#sky)"/>
+  <!-- Blocky clouds -->
+  <g fill="#effaff" opacity=".88">
+    <path d="M92 154h110v-34h112v32h86v42H92zm465-64h76V55h142v35h102v40H557zm574 82h80v-34h120v34h90v43h-290z"/>
+  </g>
+  <g fill="#b8e5ed" opacity=".66">
+    <path d="M121 194h164v16H121zm466-64h185v16H587zm605 62h173v16h-173z"/>
+  </g>
+  <!-- Distant blocky peaks -->
+  <path fill="#84c7ac" d="M0 481 190 344h80l95-137 71 42 105-171 67 24 119 167 115-54 104 137 98-92 120 88 112-57 124 82v192H0z"/>
+  <path fill="#b2d9bb" d="m365 249 71 42 105-171 67 24 119 167-99-48-47 40-78-82-45 42-56-30-37 53z"/>
+  <path fill="#6fae91" d="M0 506 137 408h86l83-67 80 39 104-81 79 39 103-67 108 74 113-77 104 81 81-59 102 58 115-78 124 75v195H0z"/>
+  <!-- Far forest -->
+  <g fill="#317d58">
+    <path d="M0 468h56v-88h38v88h54v78H0zm179 28h46V386h40v110h50v62H179zm268-10h48V354h42v132h46v70H447zm226 19h50V390h42v115h52v54H673zm239-7h51V348h42v145h44v66H912zm239 12h50V400h44v102h50v57h-144zm278-18h48V364h45v128h38v67h-131z"/>
+  </g>
+  <g fill="#41965f">
+    <path d="M34 410h100v38H34zm-20 43h127v34H14zm206-27h108v40H220zm-20 41h145v36H200zm272-65h105v38H472zm-20 42h149v38H452zm458-57h112v42H890zm-22 46h151v38H868zm288 3h114v36h-114zm-12 37h140v35h-140z"/>
+  </g>
+  <!-- Midground grass terraces -->
+  <path fill="url(#hill)" d="M0 566h184v-28h178v45h168v-35h176v41h183v-31h168v42h206v-37h180v277H0z"/>
+  <path fill="#65b64f" d="M0 552h184v-28h178v45h168v-35h176v41h183v-31h168v42h206v-37h180v35h-180v38h-206v-42h-168v31H886v-41H710v35H530v-45H352v28H184v28H0z"/>
+  <!-- Birches -->
+  <g>
+    <path fill="#f0eee2" d="M115 267h46v319h-46zm396-70h47v397h-47zm778 33h48v349h-48zm205-98h46v460h-46z"/>
+    <path fill="#454d47" d="M115 322h18v24h-18zm26 68h20v25h-20zm-26 81h17v21h-17zm396-202h20v25h-20zm25 86h22v27h-22zm-24 114h18v22h-18zm777-88h19v28h-19zm28 84h20v23h-20zm-27 79h18v21h-18zm205-241h20v26h-20zm26 102h19v27h-19zm-24 114h19v22h-19z"/>
+  </g>
+  <!-- Canopies -->
+  <g fill="#2d9a42">
+    <path d="M22 255h72v-42h100v42h45v77h-45v46H65v-40H22zm408-43h89v-48h115v49h65v79h-65v44H477v-37h-47zm721-12h93v-45h118v47h58v80h-67v47h-162v-41h-40zm222-95h79V59h110v50h50v84h-58v47h-181z"/>
+  </g>
+  <g fill="#48ba4c">
+    <path d="M62 245h98v35H62zm-23 42h128v37H39zm430-55h112v37H469zm-29 44h151v37H440zm746-46h116v39h-116zm-20 47h150v36h-150zm218-142h108v38h-108zm-15 49h146v37h-146z"/>
+  </g>
+  <!-- Foreground block terrain -->
+  <path fill="#795438" d="M0 669h256v-34h205v52h198v-41h231v43h235v-32h196v42h279v201H0z"/>
+  <path fill="#65b64b" d="M0 654h256v-34h205v52h198v-41h231v43h235v-32h196v42h279v34h-279v-42h-196v32H890v-43H659v41H461v-52H256v34H0z"/>
+  <g fill="#59402f" opacity=".72">
+    <path d="M0 744h255v55H0zm257 0h202v55H257zm205-9h197v58H462zm200 0h229v60H662zm232 3h232v59H894zm235-4h195v58h-195zm198 4h273v60h-273z"/>
+  </g>
+  <g fill="#858b83">
+    <path d="M0 809h178v91H0zm180 0h172v91H180zm410-11h200v102H590zm201 9h171v93H791zm440-10h179v103h-179zm181 0h188v103h-188z"/>
+  </g>
+  <g fill="#707971">
+    <path d="M18 826h63v18H18zm115 21h69v16h-69zm492-20h85v19h-85zm94 35h76v16h-76zm469-28h74v18h-74zm198 13h95v18h-95z"/>
+  </g>
+  <!-- Small flowers in the meadow -->
+  <g fill="#f3d982">
+    <rect x="196" y="609" width="8" height="8"/><rect x="300" y="635" width="8" height="8"/><rect x="818" y="618" width="8" height="8"/><rect x="1064" y="639" width="8" height="8"/><rect x="1396" y="614" width="8" height="8"/>
+  </g>
+  <g fill="#ed9fae">
+    <rect x="224" y="631" width="8" height="8"/><rect x="744" y="637" width="8" height="8"/><rect x="1007" y="604" width="8" height="8"/><rect x="1514" y="639" width="8" height="8"/>
+  </g>
+  <path fill="#eadfc7" d="M0 649h205v5H0zm463 18h177v5H463zm426-2h221v5H889z" opacity=".5"/>
+</svg>
