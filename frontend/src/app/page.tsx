@@ -105,6 +105,10 @@ export default function Home() {
   const microsoftSignOutReadyRef = useRef(false);
   const microsoftSignOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
+  const [smartAdjustNotices, setSmartAdjustNotices] = useState<Array<{ id: string; username: string; message: string }>>([]);
+  const smartAdjustNoticeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const seenSmartAdjustEventsRef = useRef<Set<string>>(new Set());
+  const seededSmartAdjustBotsRef = useRef<Set<string>>(new Set());
 
   // Live 1-second ticker for precise uptime formatting
   useEffect(() => {
@@ -404,6 +408,52 @@ export default function Home() {
     updateBotSettings,
     stopBot,
   } = useDaemonSocket(currentUser, handleAccountVerified);
+
+  useEffect(() => {
+    const diagnostics = Object.values(freshSmpDiagnostics);
+    if (diagnostics.length === 0) return;
+
+    diagnostics.forEach((diagnostic) => {
+      const botKey = diagnostic.botId.toLowerCase();
+      // Each bot's first snapshot is historical sync data, not a new action.
+      if (!seededSmartAdjustBotsRef.current.has(botKey)) {
+        diagnostic.events.forEach((event) => seenSmartAdjustEventsRef.current.add(`${botKey}:${event.id}`));
+        seededSmartAdjustBotsRef.current.add(botKey);
+        return;
+      }
+
+      diagnostic.events.forEach((event) => {
+        const eventKey = `${botKey}:${event.id}`;
+        if (seenSmartAdjustEventsRef.current.has(eventKey)) return;
+        seenSmartAdjustEventsRef.current.add(eventKey);
+
+        const message = event.message || '';
+        const normalized = message.toLowerCase();
+        const isSmartAdjustment =
+          normalized.includes('recovery cycle') ||
+          normalized.includes('scheduling a cautious /lifesteal retry') ||
+          normalized.includes('retrying /lifesteal in');
+        if (!isSmartAdjustment) return;
+
+        const noticeId = `${eventKey}:${event.timestamp}`;
+        setSmartAdjustNotices((previous) => [...previous.filter((notice) => notice.id !== noticeId), {
+          id: noticeId,
+          username: diagnostic.username,
+          message,
+        }].slice(-3));
+        const timer = setTimeout(() => {
+          setSmartAdjustNotices((previous) => previous.filter((notice) => notice.id !== noticeId));
+          smartAdjustNoticeTimersRef.current.delete(noticeId);
+        }, 8_000);
+        smartAdjustNoticeTimersRef.current.set(noticeId, timer);
+      });
+    });
+  }, [freshSmpDiagnostics]);
+
+  useEffect(() => () => {
+    smartAdjustNoticeTimersRef.current.forEach((timer) => clearTimeout(timer));
+    smartAdjustNoticeTimersRef.current.clear();
+  }, []);
 
   // Load saved session, secretCode, and Supabase accounts
   useEffect(() => {
@@ -853,6 +903,20 @@ export default function Home() {
 
   // Save server profile to state & Supabase
   const handleSaveServer = async (profile: ServerProfile) => {
+    const existingProfile = servers.find((server) => server.id === profile.id);
+    const normalizedHost = (host: string) => host.trim().toLowerCase().replace(/\.$/, '');
+    const supportedHosts = new Set(['play.freshsmp.fun', 'bedrock.donutsmp.net']);
+    if (!existingProfile && !supportedHosts.has(normalizedHost(profile.serverHost))) {
+      throw new Error('Only FreshSMP and DonutSMP profiles can be created right now.');
+    }
+    const duplicate = servers.find((server) => server.id !== profile.id && (
+      normalizedHost(server.serverHost) === normalizedHost(profile.serverHost) ||
+      (server.name || '').trim().toLowerCase() === profile.name.trim().toLowerCase()
+    ));
+    if (duplicate) {
+      throw new Error(`${profile.name} already has a server profile on this account.`);
+    }
+
     setServers((prev) => {
       const idx = prev.findIndex((s) => s.id === profile.id);
       let updated: ServerProfile[];
@@ -2407,6 +2471,34 @@ export default function Home() {
                     {/* SUBTAB 1: CONNECT */}
                     {activeSubTab === 'connect' && (
                       <div className="space-y-4">
+                        {smartAdjustNotices.length > 0 && (
+                          <div className="space-y-2" aria-live="polite" aria-label="FreshSMP smart recovery updates">
+                            {smartAdjustNotices.map((notice) => (
+                              <div key={notice.id} className="flex items-start gap-3 rounded-2xl border border-sky-200 bg-sky-50/90 px-4 py-3 shadow-2xs animate-in fade-in slide-in-from-top-1 duration-200">
+                                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-sky-200 bg-white text-sky-700">
+                                  <RotateCw className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-xs font-extrabold text-slate-900">FreshSMP recovery is adjusting @{notice.username}</div>
+                                  <p className="mt-0.5 truncate text-[11px] leading-relaxed text-slate-600" title={notice.message}>{notice.message}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  aria-label={`Dismiss recovery notice for ${notice.username}`}
+                                  onClick={() => {
+                                    const timer = smartAdjustNoticeTimersRef.current.get(notice.id);
+                                    if (timer) clearTimeout(timer);
+                                    smartAdjustNoticeTimersRef.current.delete(notice.id);
+                                    setSmartAdjustNotices((previous) => previous.filter((item) => item.id !== notice.id));
+                                  }}
+                                  className="rounded-lg p-1 text-slate-400 transition hover:bg-white hover:text-slate-700"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {/* Top Action Bar */}
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-2.5">
@@ -3973,7 +4065,7 @@ export default function Home() {
           setIsServerModalOpen(false);
           setEditingServer(null);
         }}
-        accounts={accounts}
+        serverProfiles={servers}
         initialProfile={editingServer}
         currentUser={currentUser}
         onSaveProfile={handleSaveServer}

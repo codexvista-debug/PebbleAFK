@@ -16,10 +16,14 @@ interface UserSummaryItem {
   createdAt: string;
   tunnelUrl?: string;
   isTunnelActive?: boolean;
+  daemonReachable?: boolean;
+  daemonProbeAt?: number;
 }
 
 interface AccountItem {
   id: string;
+  botId: string;
+  serverId?: string;
   owner: string;
   ign: string;
   serverHost: string;
@@ -27,6 +31,11 @@ interface AccountItem {
   serverName?: string;
   isConnected: boolean;
   connectedAt?: number;
+  runtimeState: string;
+  runtimeReason?: string;
+  runtimeHost?: string;
+  runtimePort?: number;
+  runtimeUpdatedAt?: number;
   updatedAt?: string;
   createdAt?: string;
   settings?: any;
@@ -47,6 +56,9 @@ interface AdminTunnelItem {
   updatedAt: number;
   isRecent: boolean;
   activeBots: number;
+  daemonReachable: boolean;
+  probeAt: number;
+  authError?: string;
 }
 
 interface LiveBotProbe {
@@ -54,24 +66,37 @@ interface LiveBotProbe {
   botId: string;
   accountId?: string;
   state: string;
+  reason?: string;
+  connectedAt?: number;
+  uptime?: number;
   host?: string;
   port?: number;
   serverId?: string;
 }
 
-// Proactively probes live phone daemons over WebSocket to detect running bots in real-time
-async function probeLiveDaemons(tunnels: Map<string, { url: string; token: string; updatedAt: number }>): Promise<Map<string, Map<string, LiveBotProbe>>> {
-  const results = new Map<string, Map<string, LiveBotProbe>>();
+interface LiveDaemonProbe {
+  reachable: boolean;
+  probeAt: number;
+  authError?: string;
+  bots: Map<string, LiveBotProbe>;
+}
+
+// Probes registered phone daemons over WebSocket to capture their current bot states.
+async function probeLiveDaemons(tunnels: Map<string, { url: string; token: string; updatedAt: number }>): Promise<Map<string, LiveDaemonProbe>> {
+  const results = new Map<string, LiveDaemonProbe>();
   if (typeof WebSocket === 'undefined') return results;
 
   const probePromises: Promise<void>[] = [];
 
   tunnels.forEach((tData, owner) => {
-    const isLive = Boolean(tData.url && Date.now() - tData.updatedAt < 300000);
-    if (!isLive || (!tData.url.startsWith('ws://') && !tData.url.startsWith('wss://'))) return;
+    if (!tData.url || (!tData.url.startsWith('ws://') && !tData.url.startsWith('wss://'))) return;
 
     const p = new Promise<void>((resolve) => {
       let settled = false;
+      let authenticated = false;
+      let authError: string | undefined;
+      const probeAt = Date.now();
+      const bots = new Map<string, LiveBotProbe>();
       let timer: NodeJS.Timeout | null = null;
       let ws: WebSocket | null = null;
 
@@ -79,11 +104,12 @@ async function probeLiveDaemons(tunnels: Map<string, { url: string; token: strin
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
+        results.set(owner, { reachable: authenticated, probeAt, authError, bots });
         try { ws?.close(); } catch (_) {}
         resolve();
       };
 
-      timer = setTimeout(finish, 1800);
+      timer = setTimeout(finish, 3500);
 
       try {
         ws = new WebSocket(tData.url);
@@ -98,28 +124,30 @@ async function probeLiveDaemons(tunnels: Map<string, { url: string; token: strin
           try {
             const raw = typeof event.data === 'string' ? event.data : event.data?.toString();
             const msg = JSON.parse(raw);
-            if (msg.type === 'AUTH_RESULT' && msg.payload?.success) {
-              ws?.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+            if (msg.type === 'AUTH_RESULT') {
+              if (msg.payload?.success && !authenticated) {
+                authenticated = true;
+                ws?.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+              } else if (!msg.payload?.success) {
+                authError = msg.payload?.message || 'Daemon authentication failed';
+                finish();
+              }
             } else if (msg.type === 'BOT_STATE') {
               const p = msg.payload;
-              if (p?.state === 'SPAWNED' || p?.state === 'LOGGED_IN') {
-                let userMap = results.get(owner);
-                if (!userMap) {
-                  userMap = new Map<string, LiveBotProbe>();
-                  results.set(owner, userMap);
-                }
+              if (authenticated && p?.botId) {
                 const probeInfo: LiveBotProbe = {
                   username: (p.username || '').toLowerCase().trim(),
                   botId: (p.botId || '').toLowerCase().trim(),
                   accountId: (p.accountId || '').toLowerCase().trim(),
                   state: p.state,
+                  reason: p.reason,
+                  connectedAt: Number(p.connectedAt) || undefined,
+                  uptime: Number(p.uptime) || undefined,
                   host: p.host,
                   port: p.port ? Number(p.port) : undefined,
                   serverId: p.serverId,
                 };
-                if (p.username) userMap.set(p.username.toLowerCase().trim(), probeInfo);
-                if (p.botId) userMap.set(p.botId.toLowerCase().trim(), probeInfo);
-                if (p.accountId) userMap.set(p.accountId.toLowerCase().trim(), probeInfo);
+                bots.set(probeInfo.botId, probeInfo);
               }
             }
           } catch (_) {}
@@ -194,7 +222,7 @@ export async function GET(req: NextRequest) {
     });
 
     // 4. Live probe all active daemons to detect active bots
-    const liveOnlineBotsByOwner = await probeLiveDaemons(tunnelMap);
+    const liveDaemonsByOwner = await probeLiveDaemons(tunnelMap);
 
     // 5. Build user server profile map from __meta_servers__
     const userServersMap = new Map<string, any[]>();
@@ -205,238 +233,158 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    // 6. Separate metadata rows from real Bedrock accounts, deduplicate, and resolve accurate server
-    const realAccounts: AccountItem[] = [];
-    const seenAccountKeys = new Map<string, AccountItem>();
-    const duplicateIdsToDelete: string[] = [];
-
+    // 6. Deduplicate the account inventory in memory, then expand it into one
+    // deployment per assigned server profile. A read-only admin GET must never
+    // delete account rows from the user's inventory.
+    const accountRowsByKey = new Map<string, any>();
     (allAccounts || []).forEach((row) => {
-      const lowerOwner = (row.username || '').toLowerCase().trim();
       const botName = (row.bot_name || '').trim();
+      if (!botName || botName.startsWith('__')) return;
+      const owner = (row.username || '').toLowerCase().trim();
+      const key = `${owner}::${botName.replace(/^@/, '').toLowerCase().trim()}`;
+      const current = accountRowsByKey.get(key);
+      if (!current || new Date(row.updated_at || row.created_at || 0).getTime() > new Date(current.updated_at || current.created_at || 0).getTime()) {
+        accountRowsByKey.set(key, row);
+      }
+    });
 
-      if (!botName.startsWith('__')) {
-        const userTunnel = tunnelMap.get(lowerOwner);
-        // Authoritative liveness: Phone daemon must have sent heartbeat within 300 seconds (5m)
-        const isTunnelLive = Boolean(userTunnel?.url && Date.now() - userTunnel.updatedAt < 300000);
+    const realAccounts: AccountItem[] = [];
+    const now = Date.now();
+    accountRowsByKey.forEach((row) => {
+      const owner = (row.username || '').trim();
+      const lowerOwner = owner.toLowerCase();
+      const botName = (row.bot_name || '').trim();
+      const cleanBotName = botName.replace(/^@/, '').toLowerCase().trim();
+      const rowId = String(row.id);
+      const accountId = `acc_${rowId}`.toLowerCase();
+      const userTunnel = tunnelMap.get(lowerOwner);
+      const daemonProbe = liveDaemonsByOwner.get(lowerOwner);
+      const userServers = userServersMap.get(lowerOwner) || [];
+      const runtimeBots = Array.from(daemonProbe?.bots.values() || []);
 
-        const onlineBotMap = liveOnlineBotsByOwner.get(lowerOwner);
-        const cleanBotName = botName.replace(/^@/, '').toLowerCase().trim();
-        const rowIdStr = String(row.id).toLowerCase();
+      const assignments = userServers.filter((server) => {
+        const assigned = Array.isArray(server.assignedAccountIds) ? server.assignedAccountIds : [];
+        return assigned.some((id: unknown) => {
+          const lowerId = String(id).toLowerCase().trim();
+          return lowerId === accountId || lowerId === rowId.toLowerCase() || lowerId === cleanBotName;
+        }) || String(server.accountId || '').toLowerCase().trim() === accountId;
+      });
 
-        // Check if detected as online by daemon probe or marked connected in DB
-        let isLiveOnDaemon = false;
-        let matchedLiveProbe: LiveBotProbe | undefined;
+      // The daemon's exact server/account identity is authoritative when the
+      // profile metadata predates explicit account assignments.
+      const runtimeAssignments = runtimeBots
+        .filter((bot) => bot.accountId === accountId || bot.accountId === rowId.toLowerCase())
+        .map((bot) => userServers.find((server) => server.id?.toLowerCase() === bot.serverId?.toLowerCase()))
+        .filter(Boolean);
+      runtimeAssignments.forEach((server) => {
+        if (!assignments.some((item) => item.id === server!.id)) assignments.push(server);
+      });
 
-        if (onlineBotMap && isTunnelLive) {
-          matchedLiveProbe =
-            onlineBotMap.get(cleanBotName) ||
-            onlineBotMap.get(botName.toLowerCase()) ||
-            onlineBotMap.get(rowIdStr) ||
-            onlineBotMap.get(`acc_${rowIdStr}`);
+      if (assignments.length === 0 && row.server_host) {
+        const savedHost = String(row.server_host).toLowerCase().trim();
+        const savedPort = Number(row.server_port || 19132);
+        assignments.push(...userServers.filter((server) =>
+          String(server.serverHost || '').toLowerCase().trim() === savedHost &&
+          Number(server.serverPort || 19132) === savedPort
+        ));
+      }
 
-          if (matchedLiveProbe) {
-            isLiveOnDaemon = true;
-          } else {
-            // If user has active daemon with online bots and only 1 registered account, match it
-            const ownerAccounts = (allAccounts || []).filter(
-              (a) => (a.username || '').toLowerCase().trim() === lowerOwner && !a.bot_name?.startsWith('__')
-            );
-            if (ownerAccounts.length === 1 && onlineBotMap.size > 0) {
-              matchedLiveProbe = Array.from(onlineBotMap.values())[0];
-              isLiveOnDaemon = true;
-            }
-          }
-        }
+      const resolvedServers = assignments.length > 0
+        ? assignments
+        : userServers.length === 1
+          ? [userServers[0]]
+          : [undefined];
 
-        const rawConnected = Boolean(row.settings?.is_connected) || isLiveOnDaemon;
-        const isConnected = rawConnected && isTunnelLive;
+      resolvedServers.forEach((server: any) => {
+        const serverId = server?.id ? String(server.id) : undefined;
+        const botId = serverId ? `${serverId}__${accountId}` : accountId;
+        const probe = runtimeBots.find((candidate) => candidate.botId === botId.toLowerCase()) ||
+          runtimeBots.find((candidate) => candidate.accountId === accountId && candidate.serverId?.toLowerCase() === serverId?.toLowerCase());
+        const daemonReachable = Boolean(daemonProbe?.reachable);
+        const runtimeState = probe?.state || (daemonReachable ? 'DISCONNECTED' : userTunnel?.url ? 'UNKNOWN' : 'DISCONNECTED');
+        const isConnected = runtimeState === 'SPAWNED' || runtimeState === 'LOGGED_IN';
+        const activeDaemonUrl = (isConnected ? userTunnel?.url : row.settings?.daemon_url || userTunnel?.url) || '';
+        const serverHost = server?.serverHost || probe?.host || row.server_host || 'Unknown server';
+        const serverPort = Number(server?.serverPort || probe?.port || row.server_port || 19132);
+        const serverName = server?.name || server?.id || '';
 
-        const activeDaemonUrl = (row.settings?.daemon_url || '').trim() || (isConnected ? userTunnel?.url || '' : '');
-
-        // Resolve exact server profile from __meta_servers__
-        const userServers = userServersMap.get(lowerOwner) || [];
-        let assignedServer = userServers.find((s) => {
-          const assigned = Array.isArray(s.assignedAccountIds) ? s.assignedAccountIds : [];
-          return assigned.some((id: string) => {
-            const lowerId = String(id).toLowerCase();
-            return (
-              lowerId === rowIdStr ||
-              lowerId === `acc_${rowIdStr}` ||
-              lowerId === cleanBotName ||
-              lowerId === botName.toLowerCase()
-            );
-          });
-        });
-
-        if (!assignedServer && userServers.length === 1) {
-          assignedServer = userServers[0];
-        }
-
-        const finalHost =
-          matchedLiveProbe?.host ||
-          assignedServer?.serverHost ||
-          row.server_host ||
-          'play.cubecraft.net';
-
-        const finalPort =
-          matchedLiveProbe?.port ||
-          assignedServer?.serverPort ||
-          row.server_port ||
-          19132;
-
-        const finalServerName =
-          assignedServer?.name ||
-          (matchedLiveProbe?.serverId ? matchedLiveProbe.serverId : '');
-
-        let legitimacy: AccountItem['legitimacy'];
-
-        if (!isConnected) {
-          legitimacy = {
-            status: 'offline',
-            badge: 'Standby / Offline',
-            description: userTunnel?.url
-              ? isTunnelLive
-                ? `Phone daemon live on ${userTunnel.url} (Bot offline)`
-                : `Phone daemon offline (Last heartbeat ${Math.max(1, Math.round((Date.now() - userTunnel.updatedAt) / 60000))}m ago)`
+        let legitimacy: AccountItem['legitimacy'] = {
+          status: 'offline',
+          badge: runtimeState === 'UNKNOWN' ? 'Daemon status unknown' : 'Standby / Offline',
+          description: runtimeState === 'UNKNOWN'
+            ? `Could not verify this bot because @${owner}'s daemon is not reachable right now.`
+            : userTunnel?.url
+              ? daemonReachable ? `Daemon reachable at ${userTunnel.url}; this exact bot is ${runtimeState.toLowerCase()}.` : 'Phone daemon is not reachable.'
               : 'No phone daemon registered for this user',
-            isLegit: true,
-          };
-        } else {
-          // Connected bot - analyze legitimacy
-          if (!activeDaemonUrl && !userTunnel?.url) {
-            legitimacy = {
-              status: 'unverified',
-              badge: 'Unregistered Daemon',
-              description: `User @${row.username} has no active phone daemon registered in the system!`,
-              isLegit: false,
-            };
-          } else {
-            let foreignOwner: string | null = null;
-            if (activeDaemonUrl) {
-              tunnelMap.forEach((tData, tUser) => {
-                if (
-                  !foreignOwner &&
-                  tUser !== lowerOwner &&
-                  tData.url &&
-                  (tData.url === activeDaemonUrl || activeDaemonUrl.includes(tData.url) || tData.url.includes(activeDaemonUrl))
-                ) {
-                  foreignOwner = tUser;
-                }
-              });
-            }
+          isLegit: true,
+        };
 
-            if (foreignOwner) {
-              legitimacy = {
-                status: 'leak',
-                badge: `Foreign Tunnel (@${foreignOwner})`,
-                description: `CRITICAL LEAK: Account owned by @${row.username} is routed through @${foreignOwner}'s phone tunnel!`,
-                isLegit: false,
-              };
-            } else if (
-              userTunnel?.url &&
-              activeDaemonUrl &&
-              !userTunnel.url.includes(activeDaemonUrl) &&
-              !activeDaemonUrl.includes(userTunnel.url)
-            ) {
-              legitimacy = {
-                status: 'leak',
-                badge: 'Tunnel URL Mismatch',
-                description: `Account is routed via ${activeDaemonUrl}, but @${row.username}'s registered tunnel is ${userTunnel.url}`,
-                isLegit: false,
-              };
-            } else if (!userTunnel?.url && activeDaemonUrl) {
-              legitimacy = {
-                status: 'unverified',
-                badge: 'Direct Tunnel (Standalone)',
-                description: `Connected directly via ${activeDaemonUrl} without user-registered phone daemon.`,
-                isLegit: true,
-              };
-            } else {
-              legitimacy = {
-                status: 'legit',
-                badge: 'Verified Legit Owner',
-                description: `Legitimate connection: Running securely on @${row.username}'s dedicated phone daemon tunnel.`,
-                isLegit: true,
-              };
-            }
-          }
+        if (isConnected) {
+          const foreignOwner = Array.from(tunnelMap.entries()).find(([otherOwner, tunnel]) =>
+            otherOwner !== lowerOwner && tunnel.url && activeDaemonUrl && tunnel.url === activeDaemonUrl
+          )?.[0];
+          legitimacy = foreignOwner
+            ? { status: 'leak', badge: `Foreign Tunnel (@${foreignOwner})`, description: `Bot is running through @${foreignOwner}'s registered tunnel.`, isLegit: false }
+            : { status: 'legit', badge: 'Verified Legit Owner', description: `Live bot state confirmed by @${owner}'s daemon.`, isLegit: true };
         }
 
-        const accountItem: AccountItem = {
-          id: row.id,
-          owner: row.username,
+        realAccounts.push({
+          id: rowId,
+          botId,
+          serverId,
+          owner,
           ign: botName,
-          serverHost: finalHost,
-          serverPort: finalPort,
-          serverName: finalServerName,
+          serverHost,
+          serverPort,
+          serverName,
           isConnected,
-          connectedAt: isConnected ? (row.settings?.connected_at || Date.now()) : undefined,
+          connectedAt: isConnected ? (probe?.connectedAt || row.settings?.connected_at || undefined) : undefined,
+          runtimeState,
+          runtimeReason: probe?.reason,
+          runtimeHost: probe?.host,
+          runtimePort: probe?.port,
+          runtimeUpdatedAt: daemonProbe?.probeAt,
           updatedAt: row.updated_at,
           createdAt: row.created_at,
           settings: row.settings || {},
           daemonUrl: activeDaemonUrl,
           registeredTunnel: userTunnel?.url,
           legitimacy,
-        };
-
-        const dedupeKey = `${lowerOwner}::${cleanBotName}`;
-        const existing = seenAccountKeys.get(dedupeKey);
-        if (existing) {
-          // Keep connected or more recent account row, delete the duplicate
-          if (!existing.isConnected && accountItem.isConnected) {
-            duplicateIdsToDelete.push(existing.id);
-            seenAccountKeys.set(dedupeKey, accountItem);
-          } else {
-            duplicateIdsToDelete.push(accountItem.id);
-          }
-        } else {
-          seenAccountKeys.set(dedupeKey, accountItem);
-        }
-      }
+        });
+      });
     });
-
-    realAccounts.push(...Array.from(seenAccountKeys.values()));
-
-    // Asynchronously delete duplicate account rows from Supabase
-    if (duplicateIdsToDelete.length > 0) {
-      supabase
-        .from('accounts')
-        .delete()
-        .in('id', duplicateIdsToDelete)
-        .then(
-          () => {
-            console.log("[ChiefAdmin] Cleaned up duplicate account rows from Supabase");
-          },
-          () => {}
-        );
-    }
 
     // 6. Build user summary list
     const userList: UserSummaryItem[] = (users || []).map((u) => {
       const lowerU = (u.username || '').toLowerCase().trim();
       const userAccounts = realAccounts.filter((a) => a.owner.toLowerCase().trim() === lowerU);
-      const connectedCount = userAccounts.filter((a) => a.isConnected).length;
+      const uniqueAccounts = new Set(userAccounts.map((a) => a.id));
+      const connectedCount = new Set(userAccounts.filter((a) => a.isConnected).map((a) => a.id)).size;
       const secretCode = u.password_hash ? generateSecretCode(u.username, u.password_hash) : undefined;
       const userTunnel = tunnelMap.get(lowerU);
-      const isTunnelActive = Boolean(userTunnel?.url && Date.now() - userTunnel.updatedAt < 300000);
+      const daemonProbe = liveDaemonsByOwner.get(lowerU);
+      const isTunnelActive = Boolean(daemonProbe?.reachable);
 
       return {
         id: u.id,
         username: u.username,
-        accountCount: userAccounts.length,
+        accountCount: uniqueAccounts.size,
         connectedCount,
         secretCode,
         createdAt: u.created_at || new Date().toISOString(),
         tunnelUrl: userTunnel?.url,
         isTunnelActive,
+        daemonReachable: Boolean(daemonProbe?.reachable),
+        daemonProbeAt: daemonProbe?.probeAt || now,
       };
     });
 
     // 7. Build tunnel overview list
     const tunnelList: AdminTunnelItem[] = [];
     tunnelMap.forEach((t, u) => {
-      const activeBots = realAccounts.filter((a) => a.owner.toLowerCase().trim() === u && a.isConnected).length;
+      const activeBots = new Set(realAccounts.filter((a) => a.owner.toLowerCase().trim() === u && a.isConnected).map((a) => a.id)).size;
       const isRecent = Boolean(t.url && Date.now() - t.updatedAt < 300000);
+      const daemonProbe = liveDaemonsByOwner.get(u);
       tunnelList.push({
         username: u,
         url: t.url,
@@ -444,17 +392,20 @@ export async function GET(req: NextRequest) {
         updatedAt: t.updatedAt,
         isRecent,
         activeBots,
+        daemonReachable: Boolean(daemonProbe?.reachable),
+        probeAt: daemonProbe?.probeAt || now,
+        authError: daemonProbe?.authError,
       });
     });
 
-    const activeTunnelsCount = tunnelList.filter((t) => t.isRecent).length;
+    const activeTunnelsCount = tunnelList.filter((t) => t.daemonReachable).length;
     const isRegistrationsPaused = await getRegistrationsPaused();
 
     return NextResponse.json({
       stats: {
         totalUsers: userList.length,
-        totalAccounts: realAccounts.length,
-        totalConnected: realAccounts.filter((a) => a.isConnected).length,
+        totalAccounts: new Set(realAccounts.map((a) => `${a.owner.toLowerCase()}::${a.id}`)).size,
+        totalConnected: new Set(realAccounts.filter((a) => a.isConnected).map((a) => `${a.owner.toLowerCase()}::${a.id}`)).size,
         totalTunnels: activeTunnelsCount,
         isRegistrationsPaused,
       },
@@ -473,7 +424,8 @@ async function sendStopBotToDaemon(
   username: string,
   token: string,
   botIgn: string,
-  lastBotId?: string
+  lastBotId?: string,
+  exactBotId?: string
 ): Promise<boolean> {
   return new Promise((resolve) => {
     try {
@@ -498,13 +450,13 @@ async function sendStopBotToDaemon(
           const raw = typeof event.data === 'string' ? event.data : event.data?.toString();
           const msg = JSON.parse(raw);
           if (msg.type === 'AUTH_RESULT' && msg.payload?.success) {
-            if (botIgn) {
+            if (exactBotId || lastBotId || botIgn) {
               ws.send(JSON.stringify({
                 type: 'STOP_BOT',
-                payload: { botId: botIgn, id: botIgn, username: botIgn }
+                payload: { botId: exactBotId || lastBotId || botIgn, id: exactBotId || lastBotId || botIgn, username: botIgn }
               }));
             }
-            if (lastBotId && lastBotId.toLowerCase() !== botIgn.toLowerCase()) {
+            if (!exactBotId && lastBotId && lastBotId.toLowerCase() !== botIgn.toLowerCase()) {
               ws.send(JSON.stringify({
                 type: 'STOP_BOT',
                 payload: { botId: lastBotId, id: lastBotId, username: lastBotId }
@@ -716,7 +668,7 @@ export async function POST(req: NextRequest) {
 
     // Action 6: Disconnect Bedrock account
     if (action === 'disconnect_account') {
-      const { accountId, ign } = body;
+      const { accountId, ign, botId } = body;
       if (!accountId) {
         return NextResponse.json({ error: 'accountId required' }, { status: 400 });
       }
@@ -760,7 +712,7 @@ export async function POST(req: NextRequest) {
             .ilike('username', owner)
             .maybeSingle();
           const token = userRow?.password_hash ? generateSecretCode(owner, userRow.password_hash) : '';
-          await sendStopBotToDaemon(daemonUrl, owner, token, botIgn, existingSettings.last_bot_id);
+          await sendStopBotToDaemon(daemonUrl, owner, token, botIgn, existingSettings.last_bot_id, botId);
         } catch (e) {
           console.warn('[Admin] Failed to send STOP_BOT to daemon:', e);
         }
