@@ -4,7 +4,7 @@ import fs from 'fs';
 import { randomUUID } from 'crypto';
 import { Authflow, Titles } from 'prismarine-auth';
 const bedrock = require('bedrock-protocol');
-import { BotConfig, BotLifecycleState, BotSettings, BossBarPayload, DaemonMessage, FreshSmpDiagnosticEvent, FreshSmpDiagnosticPhase, FreshSmpDiagnosticState, TelemetryPayload } from '../types';
+import { BotConfig, BotLifecycleState, BossBarPayload, DaemonMessage, FreshSmpDiagnosticEvent, FreshSmpDiagnosticPhase, FreshSmpDiagnosticState, TelemetryPayload } from '../types';
 import { getAndSyncTokenFolder, migrateTokenCache } from './tokenManager';
 
 function pingBedrockJsp(host: string, port: number, timeoutMs = 2000): Promise<{ version?: string; motd?: string; protocol?: string } | null> {
@@ -70,10 +70,6 @@ const SERVER_VERSION_CACHE: Map<string, string> = new Map([
   ['freshsmp.fun', '1.26.51'],
   ['play.freshsmp.fun', '1.26.51'],
 ]);
-const FRESH_SMP_BALANCE_CHECK_INTERVAL_MS = 2 * 60_000;
-const FRESH_SMP_PAYOUT_THRESHOLD = 10_000;
-const FRESH_SMP_PAYOUT_AMOUNT = `${FRESH_SMP_PAYOUT_THRESHOLD / 1_000}k`;
-const FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS = 7 * 60_000;
 const SERVER_ENDPOINT_CURSORS = new Map<string, number>();
 // Once a Bedrock edge has completed the full game handshake, prefer that edge
 // for other accounts on the same daemon/host. Ping responses alone do not
@@ -255,7 +251,6 @@ export class PebbleBotInstance {
   private client: any = null;
   private startInProgress: boolean = false;
   private startGeneration: number = 0;
-  private hasAppliedInitialJoinDelay: boolean = false;
   private connectStartTime: number = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private tickSyncInterval: NodeJS.Timeout | null = null;
@@ -313,14 +308,6 @@ export class PebbleBotInstance {
   private lifestealThresholdReported = false;
   private lifestealThresholdTimer: NodeJS.Timeout | null = null;
   private lifestealStabilityTimer: NodeJS.Timeout | null = null;
-  private freshSmpAutomationInterval: NodeJS.Timeout | null = null;
-  private freshSmpFirstPayTimer: NodeJS.Timeout | null = null;
-  private freshSmpSecondPayTimer: NodeJS.Timeout | null = null;
-  private freshSmpNextHourlyCommandAt = 0;
-  private freshSmpNextBalanceCheckAt = 0;
-  private freshSmpBalanceCheckPendingUntil = 0;
-  private freshSmpPaidForCurrentThreshold = false;
-  private freshSmpFirstPaySentForCurrentThreshold = false;
 
   // Telemetry cache
   private position = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -375,7 +362,6 @@ export class PebbleBotInstance {
 
   private setFreshSmpPhase(phase: FreshSmpDiagnosticPhase) {
     if (!this.isFreshSmpProfile()) return;
-    if (phase !== 'lifesteal') this.stopFreshSmpAutomationSchedule();
     if (phase === 'lobby') {
       this.hasTransferredToFreshSmpSubserver = false;
       this.hasTransferredToSubserver = false;
@@ -446,206 +432,7 @@ export class PebbleBotInstance {
       const detail = 'Account remained confirmed in FreshSMP Lifesteal for 60 seconds; recovery backoff reset.';
       this.recordFreshSmpEvent('subserver', 'success', detail, duration);
       this.logActivity('status', detail);
-      this.startFreshSmpAutomationSchedule();
     }, Math.max(0, this.lifestealSessionStartedAt + 60_000 - Date.now()));
-  }
-
-  private isFreshSmpStableSession(now = Date.now()): boolean {
-    return this.isFreshSmpProfile() &&
-      (this.state === 'SPAWNED' || this.state === 'LOGGED_IN') &&
-      this.isInSubserver &&
-      this.freshSmpPhase === 'lifesteal' &&
-      this.lifestealSessionStartedAt > 0 &&
-      now - this.lifestealSessionStartedAt >= 60_000;
-  }
-
-  private hasFreshSmpHourlyCommand(): boolean {
-    return this.config.settings?.freshSmpHourlyCommandEnabled === true &&
-      Boolean(this.config.settings?.freshSmpHourlyCommand?.trim());
-  }
-
-  private getFreshSmpPayUsername(): string {
-    const username = (this.config.settings?.freshSmpBalancePayUsername || '').trim().replace(/^@/, '');
-    return /^[A-Za-z0-9_]{3,16}$/.test(username) ? username : '';
-  }
-
-  private hasFreshSmpBalancePay(): boolean {
-    return this.config.settings?.freshSmpBalancePayEnabled === true && Boolean(this.getFreshSmpPayUsername());
-  }
-
-  private startFreshSmpAutomationSchedule() {
-    if (!this.isFreshSmpStableSession() || this.freshSmpAutomationInterval) return;
-    if (!this.hasFreshSmpHourlyCommand() && !this.hasFreshSmpBalancePay()) return;
-
-    const now = Date.now();
-    this.freshSmpNextHourlyCommandAt = this.hasFreshSmpHourlyCommand() ? now + FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS : 0;
-    this.freshSmpNextBalanceCheckAt = this.hasFreshSmpBalancePay() ? now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS : 0;
-    this.freshSmpAutomationInterval = setInterval(() => this.tickFreshSmpAutomations(), 5_000);
-    this.freshSmpAutomationInterval.unref?.();
-  }
-
-  private stopFreshSmpAutomationSchedule() {
-    if (this.freshSmpAutomationInterval) {
-      clearInterval(this.freshSmpAutomationInterval);
-      this.freshSmpAutomationInterval = null;
-    }
-    if (this.freshSmpFirstPayTimer) {
-      clearTimeout(this.freshSmpFirstPayTimer);
-      this.freshSmpFirstPayTimer = null;
-      if (!this.freshSmpFirstPaySentForCurrentThreshold) {
-        this.freshSmpPaidForCurrentThreshold = false;
-      }
-    }
-    if (this.freshSmpSecondPayTimer) {
-      clearTimeout(this.freshSmpSecondPayTimer);
-      this.freshSmpSecondPayTimer = null;
-    }
-    this.freshSmpNextHourlyCommandAt = 0;
-    this.freshSmpNextBalanceCheckAt = 0;
-    this.freshSmpBalanceCheckPendingUntil = 0;
-  }
-
-  private tickFreshSmpAutomations() {
-    const now = Date.now();
-    if (!this.isFreshSmpStableSession(now)) {
-      this.stopFreshSmpAutomationSchedule();
-      return;
-    }
-
-    if (this.hasFreshSmpHourlyCommand()) {
-      if (!this.freshSmpNextHourlyCommandAt) this.freshSmpNextHourlyCommandAt = now + FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS;
-      if (now >= this.freshSmpNextHourlyCommandAt) {
-        this.freshSmpNextHourlyCommandAt = now + FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS;
-        const command = this.config.settings.freshSmpHourlyCommand!.trim();
-        this.logActivity('command', `FreshSMP scheduled automation: running ${command}.`);
-        this.sendChat(command.startsWith('/') ? command : `/${command}`);
-      }
-    } else {
-      this.freshSmpNextHourlyCommandAt = 0;
-    }
-
-    if (!this.hasFreshSmpBalancePay()) {
-      this.freshSmpNextBalanceCheckAt = 0;
-      this.freshSmpBalanceCheckPendingUntil = 0;
-      return;
-    }
-
-    if (!this.freshSmpNextBalanceCheckAt) this.freshSmpNextBalanceCheckAt = now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS;
-    if (now >= this.freshSmpNextBalanceCheckAt) {
-      this.freshSmpNextBalanceCheckAt = now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS;
-      this.freshSmpBalanceCheckPendingUntil = now + 60_000;
-      this.logActivity('command', 'FreshSMP balance automation: checking balance with /bal.');
-      this.sendChat('/bal');
-    }
-  }
-
-  public updateSettings(settings: Partial<BotSettings>) {
-    const previous = this.config.settings || ({} as BotSettings);
-    this.config.settings = { ...previous, ...settings };
-    if (!this.isFreshSmpStableSession()) return;
-
-    const now = Date.now();
-    const hourlyChanged = previous.freshSmpHourlyCommandEnabled !== this.config.settings.freshSmpHourlyCommandEnabled ||
-      previous.freshSmpHourlyCommand !== this.config.settings.freshSmpHourlyCommand;
-    const balanceChanged = previous.freshSmpBalancePayEnabled !== this.config.settings.freshSmpBalancePayEnabled ||
-      previous.freshSmpBalancePayUsername !== this.config.settings.freshSmpBalancePayUsername;
-
-    if (hourlyChanged) {
-      this.freshSmpNextHourlyCommandAt = this.hasFreshSmpHourlyCommand() ? now + FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS : 0;
-    }
-    if (balanceChanged) {
-      this.freshSmpNextBalanceCheckAt = this.hasFreshSmpBalancePay() ? now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS : 0;
-      this.freshSmpBalanceCheckPendingUntil = 0;
-      if (previous.freshSmpBalancePayUsername !== this.config.settings.freshSmpBalancePayUsername) {
-        this.freshSmpPaidForCurrentThreshold = false;
-        this.freshSmpFirstPaySentForCurrentThreshold = false;
-      }
-      if (this.freshSmpFirstPayTimer) {
-        clearTimeout(this.freshSmpFirstPayTimer);
-        this.freshSmpFirstPayTimer = null;
-        if (!this.freshSmpFirstPaySentForCurrentThreshold) {
-          this.freshSmpPaidForCurrentThreshold = false;
-        }
-      }
-      if (this.freshSmpSecondPayTimer) {
-        clearTimeout(this.freshSmpSecondPayTimer);
-        this.freshSmpSecondPayTimer = null;
-      }
-    }
-
-    if (this.hasFreshSmpHourlyCommand() || this.hasFreshSmpBalancePay()) this.startFreshSmpAutomationSchedule();
-    else this.stopFreshSmpAutomationSchedule();
-  }
-
-  private parseFreshSmpBalance(text: string): number | null {
-    if (!/\b(?:balance|bal)\b/i.test(text)) return null;
-    const match = text.match(/\b(?:balance|bal)\b[^0-9$]*\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?\s*[kmb]?)/i) ||
-      text.match(/\$([0-9][0-9,]*(?:\.[0-9]+)?\s*[kmb]?)/i);
-    if (!match) return null;
-
-    const amount = match[1].replace(/[\s,]/g, '').toLowerCase();
-    const suffix = amount.slice(-1);
-    const numeric = Number.parseFloat(/[kmb]$/.test(amount) ? amount.slice(0, -1) : amount);
-    if (!Number.isFinite(numeric)) return null;
-    const multiplier = suffix === 'k' ? 1_000 : suffix === 'm' ? 1_000_000 : suffix === 'b' ? 1_000_000_000 : 1;
-    return numeric * multiplier;
-  }
-
-  private handleFreshSmpBalanceMessage(text: string, sender: string, isSystem: boolean) {
-    if (!this.freshSmpBalanceCheckPendingUntil || Date.now() > this.freshSmpBalanceCheckPendingUntil || !this.isFreshSmpStableSession() || !this.hasFreshSmpBalancePay()) return;
-    if (!isSystem && !/\b(?:server|system|freshsmp|economy)\b/i.test(sender)) return;
-    if (!/\b(?:balance|bal)\b/i.test(text)) return;
-
-    const balance = this.parseFreshSmpBalance(text);
-    this.freshSmpBalanceCheckPendingUntil = 0;
-    if (balance === null) {
-      this.logActivity('warning', `FreshSMP /bal response could not be parsed safely; no payment was sent. Response: ${text.slice(0, 180)}`);
-      return;
-    }
-
-    if (balance < FRESH_SMP_PAYOUT_THRESHOLD) {
-      this.freshSmpPaidForCurrentThreshold = false;
-      this.freshSmpFirstPaySentForCurrentThreshold = false;
-      this.logActivity('status', `FreshSMP balance check: ${balance.toLocaleString('en-US')}; it is below ${FRESH_SMP_PAYOUT_THRESHOLD.toLocaleString('en-US')}, so no payment was sent.`);
-      return;
-    }
-
-    if (this.freshSmpPaidForCurrentThreshold) {
-      this.logActivity('status', `FreshSMP balance check: ${balance.toLocaleString('en-US')}; this ${FRESH_SMP_PAYOUT_THRESHOLD.toLocaleString('en-US')} balance threshold was already processed.`);
-      return;
-    }
-
-    const recipient = this.getFreshSmpPayUsername();
-    if (!this.hasFreshSmpBalancePay() || !recipient) return;
-    const command = `/pay ${recipient} ${FRESH_SMP_PAYOUT_AMOUNT}`;
-    const payoutDelayMs = 10_000;
-    this.freshSmpPaidForCurrentThreshold = true;
-    this.freshSmpFirstPaySentForCurrentThreshold = false;
-    this.logActivity('warning', `FreshSMP balance is ${balance.toLocaleString('en-US')}; scheduling ${command} in 10s, then the confirmation payment 10s later.`);
-    this.freshSmpFirstPayTimer = setTimeout(() => {
-      this.freshSmpFirstPayTimer = null;
-      if (!this.isFreshSmpStableSession() || !this.hasFreshSmpBalancePay() || this.getFreshSmpPayUsername() !== recipient) {
-        this.freshSmpPaidForCurrentThreshold = false;
-        this.logActivity('warning', `Skipped ${command} because this account is no longer stable or the payout setting changed.`);
-        return;
-      }
-
-      this.freshSmpFirstPaySentForCurrentThreshold = true;
-      this.logActivity('command', `FreshSMP balance automation: sending ${command}.`);
-      this.sendChat(command);
-
-      this.freshSmpSecondPayTimer = setTimeout(() => {
-        this.freshSmpSecondPayTimer = null;
-        if (!this.isFreshSmpStableSession() || !this.hasFreshSmpBalancePay() || this.getFreshSmpPayUsername() !== recipient) {
-          this.logActivity('warning', `Skipped the confirmation payment ${command} because this account is no longer stable or the payout setting changed.`);
-          return;
-        }
-        this.logActivity('command', `FreshSMP balance automation: sending the confirmation payment ${command}.`);
-        this.sendChat(command);
-      }, payoutDelayMs);
-      this.freshSmpSecondPayTimer.unref?.();
-    }, payoutDelayMs);
-    this.freshSmpFirstPayTimer.unref?.();
   }
 
   private scheduleFreshSmpRecovery(reason: string): boolean {
@@ -723,21 +510,6 @@ export class PebbleBotInstance {
     this.logActivity('connect', `Connecting to Bedrock server ${this.config.host}:${this.config.port}...`);
 
     try {
-      if (!this.hasAppliedInitialJoinDelay) {
-        this.hasAppliedInitialJoinDelay = true;
-        const configuredDelay = Number(this.config.settings?.joinDelay);
-        const hasLegacyConfiguredJoinDelay = this.config.settings?.joinDelayConfigured === undefined &&
-          Number.isFinite(configuredDelay) && configuredDelay > 0;
-        const joinDelaySeconds = this.config.settings?.joinDelayConfigured === true || hasLegacyConfiguredJoinDelay
-          ? (Number.isFinite(configuredDelay) ? Math.max(0, configuredDelay) : 0)
-          : 0;
-        if (joinDelaySeconds > 0) {
-          this.logActivity('connect', `Waiting ${joinDelaySeconds}s before the initial server connection.`);
-          await new Promise((resolve) => setTimeout(resolve, joinDelaySeconds * 1000));
-          if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
-        }
-      }
-
       const profilesFolder = getAndSyncTokenFolder();
       const isOffline = this.config.authType === 'offline';
       const cleanHost = (this.config.host || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
@@ -1957,8 +1729,6 @@ export class PebbleBotInstance {
       cleanSender = isSystem ? 'System' : 'Server';
     }
 
-    this.handleFreshSmpBalanceMessage(cleanText, cleanSender, isSystem);
-
     const isLifestealTimeout =
       (/^lifesteal$/i.test(cleanSender) && /\btimed\s*out\b|\btimeout\b/i.test(cleanText)) ||
       /\b<lifesteal>\s*timed\s*out\b/i.test(rawMsg) ||
@@ -2308,7 +2078,6 @@ export class PebbleBotInstance {
   }
 
   private cleanup() {
-    this.stopFreshSmpAutomationSchedule();
     if (this.playerAuthInterval) {
       clearInterval(this.playerAuthInterval);
       this.playerAuthInterval = null;

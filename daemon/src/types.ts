@@ -10,19 +10,13 @@ export interface BotSettings {
   mobFarmIntervalMs: number;
   autoReconnect: boolean;
   autoReconnectDelay: number;
-  /** Initial connection delay in seconds; this flag distinguishes deliberate zero from legacy defaults. */
   joinDelay?: number;
-  joinDelayConfigured?: boolean;
   joinCommandEnabled?: boolean;
   joinCommand?: string;
   joinCommandDelay?: number;
   subserverJoinCommandEnabled?: boolean;
   subserverJoinCommand?: string;
   subserverJoinCommandDelay?: number;
-  freshSmpHourlyCommandEnabled?: boolean;
-  freshSmpHourlyCommand?: string;
-  freshSmpBalancePayEnabled?: boolean;
-  freshSmpBalancePayUsername?: string;
 }
 
 export interface BotConfig {

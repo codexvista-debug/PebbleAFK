@@ -223,13 +223,6 @@ export function useDaemonSocket(
       return;
     }
 
-    // The close handler owns transient retries. Tunnel polling and focus events
-    // can also ask for a reconnect; do not let those requests cancel the
-    // backoff and create a rapid stream of replacement sockets.
-    if (!force && reconnectTimeoutRef.current) {
-      return;
-    }
-
     const cleanTarget = url.replace(/\/+$/, '');
 
     // Do NOT destroy an active or connecting socket unless forced

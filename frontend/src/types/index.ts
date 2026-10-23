@@ -10,19 +10,13 @@ export interface BotSettings {
   mobFarmIntervalMs: number;
   autoReconnect: boolean;
   autoReconnectDelay: number;
-  /** Initial connection delay in seconds; this flag distinguishes deliberate zero from legacy defaults. */
   joinDelay?: number;
-  joinDelayConfigured?: boolean;
   joinCommandEnabled?: boolean;
   joinCommand?: string;
   joinCommandDelay?: number;
   subserverJoinCommandEnabled?: boolean;
   subserverJoinCommand?: string;
   subserverJoinCommandDelay?: number;
-  freshSmpHourlyCommandEnabled?: boolean;
-  freshSmpHourlyCommand?: string;
-  freshSmpBalancePayEnabled?: boolean;
-  freshSmpBalancePayUsername?: string;
 }
 
 /** Defaults applied to newly created server profiles. FreshSMP profiles also
@@ -40,17 +34,12 @@ export const DEFAULT_BOT_SETTINGS: BotSettings = {
   autoReconnect: true,
   autoReconnectDelay: 5000,
   joinDelay: 0,
-  joinDelayConfigured: false,
   joinCommandEnabled: false,
   joinCommand: '',
   joinCommandDelay: 3,
   subserverJoinCommandEnabled: false,
   subserverJoinCommand: '',
   subserverJoinCommandDelay: 5,
-  freshSmpHourlyCommandEnabled: false,
-  freshSmpHourlyCommand: '',
-  freshSmpBalancePayEnabled: false,
-  freshSmpBalancePayUsername: '',
 };
 
 export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
@@ -63,10 +52,6 @@ export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
   subserverJoinCommandEnabled: true,
   subserverJoinCommand: '/warp afk',
   subserverJoinCommandDelay: 5,
-  freshSmpHourlyCommandEnabled: true,
-  freshSmpHourlyCommand: '/afkrewards spin',
-  freshSmpBalancePayEnabled: false,
-  freshSmpBalancePayUsername: '',
 };
 
 export const MAX_BEDROCK_ACCOUNTS = 50;

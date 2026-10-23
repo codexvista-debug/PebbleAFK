@@ -104,7 +104,6 @@ export default function Home() {
   const pendingMicrosoftSignInUrlRef = useRef<string | null>(null);
   const microsoftSignOutReadyRef = useRef(false);
   const microsoftSignOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const appliedFreshSmpAutomationBotsRef = useRef<Set<string>>(new Set());
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
   const [smartAdjustNotices, setSmartAdjustNotices] = useState<Array<{ id: string; username: string; message: string }>>([]);
   const smartAdjustNoticeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -691,8 +690,6 @@ export default function Home() {
           if (targetUrl && targetUrl.startsWith('wss://')) {
             const cleanTarget = targetUrl.replace(/\/+$/, '');
             const cleanCurrent = (daemonUrlRef.current || '').trim().replace(/\/+$/, '');
-            const tokenChanged = Boolean(targetToken && targetToken !== authTokenRef.current);
-            if (targetToken) setAuthToken(targetToken);
             const username = currentUser.trim().toLowerCase();
             if (tunnelRegistrationRef.current.username !== username) {
               const storedUpdatedAt = typeof window !== 'undefined'
@@ -705,19 +702,14 @@ export default function Home() {
             const lastAcceptedAt = tunnelRegistrationRef.current.updatedAt;
             const isNewerTermuxRegistration = Number.isFinite(updatedAt) && updatedAt > lastAcceptedAt;
             const isSameRegistration = updatedAt === lastAcceptedAt && cleanTarget === cleanCurrent;
-            const socketStatus = daemonStatusRef.current;
-            const isDisconnected = socketStatus === 'DISCONNECTED';
-            // A rejected credential is not a transient network failure. Retry it
-            // only when Termux publishes a new tunnel or the shared token changes.
-            const canRecoverAuthError = socketStatus === 'AUTH_ERROR' && (cleanTarget !== cleanCurrent || tokenChanged);
+            const isDisconnected = daemonStatusRef.current === 'DISCONNECTED' || daemonStatusRef.current === 'AUTH_ERROR';
 
             // Accept registration if:
             // 1. Termux published a newer timestamp, OR
-            // 2. We are disconnected and this tunnel is reported live, OR
-            // 3. The matching URL/token can recover a previous auth rejection
-            // 4. It's the active registration
-            if (isNewerTermuxRegistration || (isDisconnected && data?.isLive && cleanTarget) || canRecoverAuthError || isSameRegistration) {
-              if (isNewerTermuxRegistration || isDisconnected || canRecoverAuthError) {
+            // 2. We are currently DISCONNECTED and this tunnel is reported live with a valid URL, OR
+            // 3. It's the active registration
+            if (isNewerTermuxRegistration || (isDisconnected && data?.isLive && cleanTarget) || isSameRegistration) {
+              if (isNewerTermuxRegistration || isDisconnected) {
                 tunnelRegistrationRef.current = { username, updatedAt: updatedAt || Date.now() };
                 if (typeof window !== 'undefined') {
                   localStorage.setItem(`pebbleafk_tunnel_updated_at_${username}`, String(updatedAt || Date.now()));
@@ -726,13 +718,11 @@ export default function Home() {
               if (cleanTarget !== cleanCurrent) {
                 setDaemonUrl(cleanTarget);
                 reconnect(true);
-              } else if (isDisconnected && data?.isLive) {
-                // A matching retry timer is respected by the socket hook so
-                // tunnel polling cannot defeat its exponential backoff.
+              } else if (isDisconnected) {
+                // Target URL is already saved and socket is disconnected; allow gentle reconnect without killing connecting handshake
                 reconnect(false);
-              } else if (canRecoverAuthError && data?.isLive) {
-                reconnect(true);
               }
+              if (targetToken) setAuthToken(targetToken);
             }
           }
         }
@@ -890,20 +880,6 @@ export default function Home() {
   const subserverJoinCommandEnabled = activeServer?.settings?.subserverJoinCommandEnabled ?? activeServerIsFreshSmp;
   const subserverJoinCommand = activeServer?.settings?.subserverJoinCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommand : DEFAULT_BOT_SETTINGS.subserverJoinCommand);
   const subserverJoinCommandDelay = activeServer?.settings?.subserverJoinCommandDelay ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay : DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay);
-  const freshSmpHourlyCommandEnabled = activeServer?.settings?.freshSmpHourlyCommandEnabled ?? activeServerIsFreshSmp;
-  const freshSmpHourlyCommand = activeServer?.settings?.freshSmpHourlyCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.freshSmpHourlyCommand ?? '/afkrewards spin' : DEFAULT_BOT_SETTINGS.freshSmpHourlyCommand ?? '');
-  const freshSmpBalancePayEnabled = activeServer?.settings?.freshSmpBalancePayEnabled ?? false;
-  const freshSmpBalancePayUsername = activeServer?.settings?.freshSmpBalancePayUsername ?? '';
-  const hasLegacyConfiguredJoinDelay = activeServer?.settings?.joinDelayConfigured === undefined &&
-    Number(activeServer?.settings?.joinDelay) > 0;
-  const activeServerJoinDelay = activeServer?.settings?.joinDelayConfigured === true || hasLegacyConfiguredJoinDelay
-    ? activeServer?.settings?.joinDelay ?? 0
-    : DEFAULT_BOT_SETTINGS.joinDelay ?? 0;
-  const [freshSmpBalancePayUsernameDraft, setFreshSmpBalancePayUsernameDraft] = useState(freshSmpBalancePayUsername);
-
-  useEffect(() => {
-    setFreshSmpBalancePayUsernameDraft(freshSmpBalancePayUsername);
-  }, [activeServer?.id, freshSmpBalancePayUsername]);
 
   const [gatewayStatus, setGatewayStatus] = useState<{ online: boolean; checking: boolean; version?: string } | null>(null);
 
@@ -986,13 +962,13 @@ export default function Home() {
   };
 
   // Update specific setting (physics, resource packs, delays) on active server
-  const handleUpdateServerSettings = (partialSettings: Partial<BotSettings>) => {
+  const handleUpdateServerSetting = (key: keyof BotSettings, value: any) => {
     if (!activeServer) return;
     const isFreshSmp = /freshsmp/i.test(activeServer.name) || /(?:^|\.)freshsmp\.fun$/i.test(activeServer.serverHost);
     const updatedSettings: BotSettings = {
       ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
       ...(activeServer.settings || {}),
-      ...partialSettings,
+      [key]: value,
     };
     handleUpdateActiveServer({ settings: updatedSettings });
     const accountIds = Array.isArray(activeServer.assignedAccountIds)
@@ -1001,10 +977,6 @@ export default function Home() {
     accountIds.forEach((accountId) => {
       updateBotSettings(`${activeServer.id}__${accountId}`, updatedSettings);
     });
-  };
-
-  const handleUpdateServerSetting = (key: keyof BotSettings, value: any) => {
-    handleUpdateServerSettings({ [key]: value } as Partial<BotSettings>);
   };
 
   // Accounts assigned to current Server Profile (strictly filtered to existing accounts, plus active bots reported by daemon)
@@ -1041,44 +1013,6 @@ export default function Home() {
       return ign.includes(q);
     });
   }, [accounts, profileAccountIds, accountFilter]);
-
-  const accountStatusCounts = useMemo(() => {
-    const counts = { stable: 0, unstable: 0, offline: 0 };
-    if (!activeServer) return counts;
-
-    const assignedIds = new Set(profileAccountIds);
-    accounts.forEach((account) => {
-      if (!assignedIds.has(account.id)) return;
-
-      const botId = `${activeServer.id}__${account.id}`;
-      const state = daemonStatus === 'AUTHENTICATED'
-        ? botStates[botId] || botStates[account.id] || 'DISCONNECTED'
-        : 'DISCONNECTED';
-
-      if (state === 'SPAWNED' || state === 'LOGGED_IN') {
-        if (!activeServerIsFreshSmp) {
-          counts.stable += 1;
-          return;
-        }
-
-        const diagnostic = freshSmpDiagnostics[botId];
-        const sessionStartedAt = diagnostic?.lifestealSessionStartedAt;
-        const isStable = diagnostic?.phase === 'lifesteal' &&
-          typeof sessionStartedAt === 'number' && nowTick - sessionStartedAt >= 60_000;
-        counts[isStable ? 'stable' : 'unstable'] += 1;
-        return;
-      }
-
-      if (state === 'CONNECTING' || state === 'RECONNECTING') {
-        counts.unstable += 1;
-        return;
-      }
-
-      counts.offline += 1;
-    });
-
-    return counts;
-  }, [activeServer, activeServerIsFreshSmp, accounts, profileAccountIds, daemonStatus, botStates, freshSmpDiagnostics, nowTick]);
 
   useEffect(() => {
     const chatAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
@@ -1200,41 +1134,6 @@ export default function Home() {
     return st === 'SPAWNED' || st === 'LOGGED_IN';
   }).length : 0;
 
-  // Apply only these new automation settings to bots that were already running
-  // when the feature was introduced. No reconnect or other runtime setting is changed.
-  useEffect(() => {
-    if (daemonStatus !== 'AUTHENTICATED') return;
-
-    servers.forEach((server) => {
-      if (!/freshsmp/i.test(`${server.name} ${server.serverHost}`)) return;
-      const defaults = { ...FRESHSMP_DEFAULT_BOT_SETTINGS, ...(server.settings || {}) };
-      const automationSettings: Partial<BotSettings> = {
-        freshSmpHourlyCommandEnabled: defaults.freshSmpHourlyCommandEnabled ?? true,
-        freshSmpHourlyCommand: defaults.freshSmpHourlyCommand ?? '/afkrewards spin',
-        freshSmpBalancePayEnabled: defaults.freshSmpBalancePayEnabled ?? false,
-        freshSmpBalancePayUsername: defaults.freshSmpBalancePayUsername ?? '',
-      };
-      const accountIds = new Set(server.assignedAccountIds || []);
-      if (server.accountId) accountIds.add(server.accountId);
-      accounts.forEach((account) => {
-        const botId = `${server.id}__${account.id}`;
-        if (botStates[botId]) accountIds.add(account.id);
-      });
-
-      accountIds.forEach((accountId) => {
-        const botId = `${server.id}__${accountId}`;
-        const botState = botStates[botId];
-        if (!['CONNECTING', 'LOGGED_IN', 'SPAWNED', 'RECONNECTING'].includes(botState || '')) return;
-
-        const applyKey = `${currentUser || 'guest'}::${botId}`;
-        if (appliedFreshSmpAutomationBotsRef.current.has(applyKey)) return;
-        if (updateBotSettings(botId, automationSettings)) {
-          appliedFreshSmpAutomationBotsRef.current.add(applyKey);
-        }
-      });
-    });
-  }, [accounts, botStates, currentUser, daemonStatus, servers, updateBotSettings]);
-
   // Connect / Disconnect individual account to server
   const handleConnectAccount = (acc: BedrockAccount, srv: ServerProfile) => {
     if (daemonStatus !== 'AUTHENTICATED') {
@@ -1266,10 +1165,6 @@ export default function Home() {
       ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
       ...(srv.settings || {}),
     };
-    const hasLegacyConfiguredJoinDelay = srv.settings?.joinDelayConfigured === undefined && Number(srv.settings?.joinDelay) > 0;
-    if (srv.settings?.joinDelayConfigured !== true && !hasLegacyConfiguredJoinDelay) {
-      effectiveSettings.joinDelay = DEFAULT_BOT_SETTINGS.joinDelay ?? 0;
-    }
     if (isFreshSmp) {
       effectiveSettings.joinCommandEnabled = true;
       if (!effectiveSettings.joinCommand) effectiveSettings.joinCommand = '/lifesteal';
@@ -2605,20 +2500,6 @@ export default function Home() {
                           </div>
                         )}
                         {/* Top Action Bar */}
-                        <div className="flex flex-wrap items-center gap-2" aria-label="Assigned account status counts">
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-800">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                            Stable {accountStatusCounts.stable}
-                          </span>
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-700">
-                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-                            Unstable {accountStatusCounts.unstable}
-                          </span>
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">
-                            <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-                            Offline {accountStatusCounts.offline}
-                          </span>
-                        </div>
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-2.5">
                             <button
@@ -3905,10 +3786,10 @@ export default function Home() {
                                     type="number"
                                     min={0}
                                     max={300}
-                                    value={activeServerJoinDelay}
+                                    value={activeServer.settings?.joinDelay ?? 0}
                                     onChange={(e) => {
                                       const val = Math.max(0, parseInt(e.target.value, 10) || 0);
-                                      handleUpdateServerSettings({ joinDelay: val, joinDelayConfigured: true });
+                                      handleUpdateServerSetting('joinDelay', val);
                                     }}
                                     className="w-10 bg-transparent text-xs font-mono font-bold text-slate-900 text-center focus:outline-none"
                                   />
@@ -3918,17 +3799,17 @@ export default function Home() {
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const currentVal = activeServerJoinDelay > 0;
-                                    const newVal = currentVal ? 0 : 5;
-                                    handleUpdateServerSettings({ joinDelay: newVal, joinDelayConfigured: true });
+                                    const currentVal = (activeServer.settings?.joinDelay ?? 0) > 0;
+                                    const newVal = currentVal ? 0 : 3;
+                                    handleUpdateServerSetting('joinDelay', newVal);
                                   }}
                                   className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                                    activeServerJoinDelay > 0 ? 'bg-emerald-600' : 'bg-slate-200'
+                                    (activeServer.settings?.joinDelay ?? 0) > 0 ? 'bg-emerald-600' : 'bg-slate-200'
                                   }`}
                                 >
                                   <span
                                     className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                                      activeServerJoinDelay > 0 ? 'translate-x-5' : 'translate-x-0'
+                                      (activeServer.settings?.joinDelay ?? 0) > 0 ? 'translate-x-5' : 'translate-x-0'
                                     }`}
                                   />
                                 </button>
@@ -4032,85 +3913,6 @@ export default function Home() {
                                   </button>
                                 </div>
                               </div>
-                            )}
-
-                            {activeServerIsFreshSmp && (
-                              <>
-                                <div className="flex flex-col gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
-                                  <div className="flex-1 pr-4">
-                                    <label className="text-xs font-bold text-slate-800 block">Scheduled command for stable accounts</label>
-                                    <span className="text-[11px] text-slate-400 block mt-0.5">
-                                      Runs every 7 minutes only while this account is stable in /lifesteal. Enabled by default.
-                                    </span>
-                                  </div>
-                                  <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
-                                    <input
-                                      type="text"
-                                      value={freshSmpHourlyCommand}
-                                      onChange={(e) => handleUpdateServerSetting('freshSmpHourlyCommand', e.target.value)}
-                                      disabled={!freshSmpHourlyCommandEnabled}
-                                      placeholder="/afkrewards spin"
-                                      aria-label="FreshSMP scheduled stable-account command"
-                                      className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400"
-                                    />
-                                    <span className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-[11px] font-bold text-slate-500">7 min</span>
-                                    <button
-                                      type="button"
-                                      role="switch"
-                                      aria-checked={freshSmpHourlyCommandEnabled}
-                                      aria-label="Enable scheduled FreshSMP command for stable accounts"
-                                      onClick={() => handleUpdateServerSetting('freshSmpHourlyCommandEnabled', !freshSmpHourlyCommandEnabled)}
-                                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${freshSmpHourlyCommandEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
-                                    >
-                                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${freshSmpHourlyCommandEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                                    </button>
-                                  </div>
-                                </div>
-
-                                <div className="flex flex-col gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
-                                  <div className="flex-1 pr-4">
-                                    <label className="text-xs font-bold text-slate-800 block">Pay main account when balance reaches 10k</label>
-                                    <span className="text-[11px] text-slate-400 block mt-0.5">
-                                      Checks /bal every 2 minutes while stable. At 10k+, waits 10 seconds, sends /pay 10k, then sends it again 10 seconds later. Off until enabled.
-                                    </span>
-                                  </div>
-                                  <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
-                                    <input
-                                      type="text"
-                                      value={freshSmpBalancePayUsernameDraft}
-                                      onChange={(e) => setFreshSmpBalancePayUsernameDraft(e.target.value)}
-                                      onBlur={() => {
-                                        if (freshSmpBalancePayUsernameDraft !== freshSmpBalancePayUsername) {
-                                          handleUpdateServerSetting('freshSmpBalancePayUsername', freshSmpBalancePayUsernameDraft);
-                                        }
-                                      }}
-                                      placeholder="Main account username"
-                                      aria-label="Main account username to pay"
-                                      className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500"
-                                    />
-                                    <button
-                                      type="button"
-                                      role="switch"
-                                      aria-checked={freshSmpBalancePayEnabled}
-                                      aria-label="Enable FreshSMP balance payout"
-                                      onClick={() => {
-                                        const recipient = freshSmpBalancePayUsernameDraft.trim().replace(/^@/, '');
-                                        if (!freshSmpBalancePayEnabled && !/^[A-Za-z0-9_]{3,16}$/.test(recipient)) {
-                                          showToast('Enter a valid Minecraft username before enabling automatic payments.', 'error');
-                                          return;
-                                        }
-                                        handleUpdateServerSettings({
-                                          freshSmpBalancePayUsername: freshSmpBalancePayUsernameDraft,
-                                          freshSmpBalancePayEnabled: !freshSmpBalancePayEnabled,
-                                        });
-                                      }}
-                                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${freshSmpBalancePayEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
-                                    >
-                                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${freshSmpBalancePayEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                                    </button>
-                                  </div>
-                                </div>
-                              </>
                             )}
 
                             {/* Auto reconnect delay */}

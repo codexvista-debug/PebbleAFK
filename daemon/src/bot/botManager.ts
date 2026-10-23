@@ -216,7 +216,7 @@ export class BotManager {
       case 'UPDATE_SETTINGS': {
         const bot = this.getBot(msg.payload.botId);
         if (bot) {
-          bot.updateSettings(msg.payload.settings);
+          bot.config.settings = { ...bot.config.settings, ...msg.payload.settings };
           this.desiredBots.set(msg.payload.botId, { ...bot.config, settings: { ...bot.config.settings } });
           this.persistDesiredBots();
           console.log(chalk.green(`[BotManager] Settings updated for ${bot.config.username}`));
