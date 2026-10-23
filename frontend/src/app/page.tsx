@@ -1019,6 +1019,44 @@ export default function Home() {
     });
   }, [accounts, profileAccountIds, accountFilter]);
 
+  const accountStatusCounts = useMemo(() => {
+    const counts = { stable: 0, unstable: 0, offline: 0 };
+    if (!activeServer) return counts;
+
+    const assignedIds = new Set(profileAccountIds);
+    accounts.forEach((account) => {
+      if (!assignedIds.has(account.id)) return;
+
+      const botId = `${activeServer.id}__${account.id}`;
+      const state = daemonStatus === 'AUTHENTICATED'
+        ? botStates[botId] || botStates[account.id] || 'DISCONNECTED'
+        : 'DISCONNECTED';
+
+      if (state === 'SPAWNED' || state === 'LOGGED_IN') {
+        if (!activeServerIsFreshSmp) {
+          counts.stable += 1;
+          return;
+        }
+
+        const diagnostic = freshSmpDiagnostics[botId];
+        const sessionStartedAt = diagnostic?.lifestealSessionStartedAt;
+        const isStable = diagnostic?.phase === 'lifesteal' &&
+          typeof sessionStartedAt === 'number' && nowTick - sessionStartedAt >= 60_000;
+        counts[isStable ? 'stable' : 'unstable'] += 1;
+        return;
+      }
+
+      if (state === 'CONNECTING' || state === 'RECONNECTING') {
+        counts.unstable += 1;
+        return;
+      }
+
+      counts.offline += 1;
+    });
+
+    return counts;
+  }, [activeServer, activeServerIsFreshSmp, accounts, profileAccountIds, daemonStatus, botStates, freshSmpDiagnostics, nowTick]);
+
   useEffect(() => {
     const chatAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
     if (chatAccounts.length === 0) {
@@ -2540,6 +2578,20 @@ export default function Home() {
                           </div>
                         )}
                         {/* Top Action Bar */}
+                        <div className="flex flex-wrap items-center gap-2" aria-label="Assigned account status counts">
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-800">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                            Stable {accountStatusCounts.stable}
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-bold text-rose-700">
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                            Unstable {accountStatusCounts.unstable}
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">
+                            <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                            Offline {accountStatusCounts.offline}
+                          </span>
+                        </div>
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-2.5">
                             <button
