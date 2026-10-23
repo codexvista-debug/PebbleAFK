@@ -1890,7 +1890,7 @@ export default function Home() {
                 }`}
               >
                 <div className="mc-nav-block mc-nav-block--crafting">
-                  <MinecraftCraftingTableIcon className="w-4 h-4" />
+                  <MinecraftCraftingTableIcon className="w-5 h-5" />
                 </div>
                 <span>Dashboard</span>
               </button>
@@ -1909,7 +1909,7 @@ export default function Home() {
               >
                 <div className="flex items-center gap-3">
                   <div className="mc-nav-block mc-nav-block--command">
-                    <MinecraftCommandBlockIcon className="w-4 h-4" />
+                    <MinecraftCommandBlockIcon className="w-5 h-5" />
                   </div>
                   <span>Termux Stream</span>
                 </div>
@@ -1928,7 +1928,7 @@ export default function Home() {
                 }`}
               >
                 <div className="mc-nav-block mc-nav-block--redstone">
-                  <MinecraftHeartIcon className="w-4 h-4" />
+                  <MinecraftHeartIcon className="w-5 h-5" />
                 </div>
                 <span>Diagnostics</span>
               </button>
@@ -1945,7 +1945,7 @@ export default function Home() {
                 }`}
               >
                 <div className="mc-nav-block mc-nav-block--ender">
-                  <MinecraftEnderChestIcon className="w-4 h-4" />
+                  <MinecraftEnderChestIcon className="w-5 h-5" />
                 </div>
                 <span>Servers</span>
               </button>
@@ -1963,7 +1963,7 @@ export default function Home() {
               >
                 <div className="flex items-center gap-3">
                   <div className="mc-nav-block mc-nav-block--steve">
-                    <MinecraftSteveIcon className="w-4 h-4" />
+                    <MinecraftSteveIcon className="w-5 h-5" />
                   </div>
                   <span>Accounts</span>
                 </div>
@@ -2071,7 +2071,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <span className="mc-nav-mini-block mc-nav-mini-block--compass"><MinecraftCompassIcon className="h-3.5 w-3.5" /></span>
+                              <span className="mc-nav-mini-block mc-nav-mini-block--compass"><MinecraftCompassIcon className="h-4 w-4" /></span>
                               <span>Connect</span>
                             </button>
 
@@ -2087,7 +2087,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <span className="mc-nav-mini-block mc-nav-mini-block--chat"><MinecraftBookQuillIcon className="h-3.5 w-3.5" /></span>
+                              <span className="mc-nav-mini-block mc-nav-mini-block--chat"><MinecraftBookQuillIcon className="h-4 w-4" /></span>
                               <span>Chat</span>
                             </button>
 
@@ -2103,7 +2103,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <span className="mc-nav-mini-block mc-nav-mini-block--repeater"><MinecraftRepeaterIcon className="h-3.5 w-3.5" /></span>
+                              <span className="mc-nav-mini-block mc-nav-mini-block--repeater"><MinecraftRepeaterIcon className="h-4 w-4" /></span>
                               <span>Settings</span>
                             </button>
                           </div>
