@@ -20,6 +20,7 @@ import {
   UserPlus,
   CheckCircle2,
   AlertCircle,
+  MinusCircle,
   Info,
   Trash2,
   RefreshCw,
@@ -154,6 +155,7 @@ export default function Home() {
   const [chatSourceTooltipId, setChatSourceTooltipId] = useState<string | null>(null);
   const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const [isChatAccountDropdownOpen, setIsChatAccountDropdownOpen] = useState(false);
+  const [stablePayUsernameDraft, setStablePayUsernameDraft] = useState('');
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const handleTogglePin = (accId: string) => {
@@ -880,6 +882,12 @@ export default function Home() {
   const subserverJoinCommandEnabled = activeServer?.settings?.subserverJoinCommandEnabled ?? activeServerIsFreshSmp;
   const subserverJoinCommand = activeServer?.settings?.subserverJoinCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommand : DEFAULT_BOT_SETTINGS.subserverJoinCommand);
   const subserverJoinCommandDelay = activeServer?.settings?.subserverJoinCommandDelay ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay : DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay);
+  const stableRewardEnabled = activeServer?.settings?.stableRewardEnabled ?? activeServerIsFreshSmp;
+  const stablePayEnabled = activeServer?.settings?.stablePayEnabled ?? false;
+
+  useEffect(() => {
+    setStablePayUsernameDraft(activeServer?.settings?.stablePayUsername || '');
+  }, [activeServer?.id, activeServer?.settings?.stablePayUsername]);
 
   const [gatewayStatus, setGatewayStatus] = useState<{ online: boolean; checking: boolean; version?: string } | null>(null);
 
@@ -961,14 +969,15 @@ export default function Home() {
     handleSaveServer(updated);
   };
 
-  // Update specific setting (physics, resource packs, delays) on active server
-  const handleUpdateServerSetting = (key: keyof BotSettings, value: any) => {
+  // Update server settings together so paired fields (for example payee + enabled)
+  // are saved and sent to connected bots as one coherent configuration.
+  const handleUpdateServerSettings = (partialSettings: Partial<BotSettings>) => {
     if (!activeServer) return;
     const isFreshSmp = /freshsmp/i.test(activeServer.name) || /(?:^|\.)freshsmp\.fun$/i.test(activeServer.serverHost);
     const updatedSettings: BotSettings = {
       ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
       ...(activeServer.settings || {}),
-      [key]: value,
+      ...partialSettings,
     };
     handleUpdateActiveServer({ settings: updatedSettings });
     const accountIds = Array.isArray(activeServer.assignedAccountIds)
@@ -977,6 +986,10 @@ export default function Home() {
     accountIds.forEach((accountId) => {
       updateBotSettings(`${activeServer.id}__${accountId}`, updatedSettings);
     });
+  };
+
+  const handleUpdateServerSetting = (key: keyof BotSettings, value: any) => {
+    handleUpdateServerSettings({ [key]: value });
   };
 
   // Accounts assigned to current Server Profile (strictly filtered to existing accounts, plus active bots reported by daemon)
@@ -3082,6 +3095,17 @@ export default function Home() {
                         return diagnostic?.phase === 'lifesteal' && typeof sessionStartedAt === 'number' &&
                           nowTick - sessionStartedAt >= 60_000;
                       };
+                      const getAccountStabilityBucket = (account: BedrockAccount): 'stable' | 'unstable' | 'offline' => {
+                        const botId = `${activeServer.id}__${account.id}`;
+                        const state = botStates[botId] || botStates[account.id];
+                        if (daemonStatus !== 'AUTHENTICATED' || !state || state === 'DISCONNECTED' || state === 'ERROR' || state === 'KICKED') return 'offline';
+                        if (isFreshSmpProfile) return isAccountStable(account) ? 'stable' : 'unstable';
+                        return state === 'SPAWNED' || state === 'LOGGED_IN' ? 'stable' : 'unstable';
+                      };
+                      const stabilityCounts = targetAccounts.reduce((counts, account) => {
+                        counts[getAccountStabilityBucket(account)] += 1;
+                        return counts;
+                      }, { stable: 0, unstable: 0, offline: 0 });
                       const isAllSelected = selectedChatAccountId === '__ALL__';
                       const selectedAccountId = isAllSelected
                         ? '__ALL__'
@@ -3229,21 +3253,28 @@ export default function Home() {
                                       <h3 className="font-black text-sm text-slate-900 leading-none truncate">
                                         All Accounts ({targetAccounts.length})
                                       </h3>
-                                      <p className="text-[11px] text-slate-500 font-medium mt-1 flex items-center gap-1.5 truncate">
-                                        {isSelectedOnline ? (
-                                          <span className="inline-flex items-center gap-1 text-emerald-600 font-bold">
-                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                            {targetAccounts.filter((acc) => {
-                                              const bId = `${activeServer.id}__${acc.id}`;
-                                              const st = botStates[bId] || botStates[acc.id];
-                                              return daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
-                                            }).length} Online
-                                          </span>
-                                        ) : (
-                                          <span className="text-slate-400">Offline</span>
-                                        )}
-                                        <span className="text-slate-300">•</span>
-                                        <span className="text-slate-400 truncate">Multi-account broadcast</span>
+                                      <p className="mt-1 flex items-center gap-1.5 text-[10px] font-bold">
+                                        <span
+                                          title={`${stabilityCounts.stable} stable accounts`}
+                                          aria-label={`${stabilityCounts.stable} stable accounts`}
+                                          className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-emerald-700"
+                                        >
+                                          <CheckCircle2 className="h-3 w-3" />{stabilityCounts.stable}
+                                        </span>
+                                        <span
+                                          title={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
+                                          aria-label={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
+                                          className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-rose-700"
+                                        >
+                                          <AlertCircle className="h-3 w-3" />{stabilityCounts.unstable}
+                                        </span>
+                                        <span
+                                          title={`${stabilityCounts.offline} offline accounts`}
+                                          aria-label={`${stabilityCounts.offline} offline accounts`}
+                                          className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-slate-600"
+                                        >
+                                          <MinusCircle className="h-3 w-3" />{stabilityCounts.offline}
+                                        </span>
                                       </p>
                                     </div>
                                   </>
@@ -3913,6 +3944,81 @@ export default function Home() {
                                   </button>
                                 </div>
                               </div>
+                            )}
+
+                            {activeServerIsFreshSmp && (
+                              <>
+                                <div className="flex flex-col gap-3 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="flex-1 pr-4">
+                                    <label className="text-xs font-bold text-slate-800 block">Scheduled command for stable accounts</label>
+                                    <span className="text-[11px] text-slate-400 block mt-0.5">
+                                      Runs only while an account is stable in Lifesteal, once every 5 minutes.
+                                    </span>
+                                  </div>
+                                  <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-start">
+                                    <code className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-mono font-bold text-slate-700">
+                                      /afkrewards spin
+                                    </code>
+                                    <span className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-mono font-bold text-slate-600">5 min</span>
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={stableRewardEnabled}
+                                      aria-label="Enable /afkrewards spin for stable accounts"
+                                      onClick={() => handleUpdateServerSetting('stableRewardEnabled', !stableRewardEnabled)}
+                                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${stableRewardEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
+                                    >
+                                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${stableRewardEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-col gap-3 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="flex-1 pr-4">
+                                    <label className="text-xs font-bold text-slate-800 block">Pay main account at 10k balance</label>
+                                    <span className="text-[11px] text-slate-400 block mt-0.5">
+                                      Checks /bal every minute while stable. At 10k or more, waits 3 seconds, sends /pay twice with 3 seconds between.
+                                    </span>
+                                  </div>
+                                  <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[390px]">
+                                    <input
+                                      type="text"
+                                      value={stablePayUsernameDraft}
+                                      onChange={(event) => setStablePayUsernameDraft(event.target.value)}
+                                      onBlur={() => {
+                                        const username = stablePayUsernameDraft.trim().replace(/^@/, '');
+                                        if (username !== (activeServer.settings?.stablePayUsername || '')) {
+                                          handleUpdateServerSetting('stablePayUsername', username);
+                                        }
+                                      }}
+                                      onKeyDown={(event) => {
+                                        if (event.key === 'Enter') event.currentTarget.blur();
+                                      }}
+                                      placeholder="Main account username"
+                                      aria-label="Main account username to receive payments"
+                                      autoCapitalize="none"
+                                      autoCorrect="off"
+                                      spellCheck={false}
+                                      className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500"
+                                    />
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={stablePayEnabled}
+                                      aria-label="Enable automatic stable-account payments"
+                                      title={!stablePayEnabled && !/^[A-Za-z0-9_]{3,16}$/.test(stablePayUsernameDraft.trim().replace(/^@/, '')) ? 'Enter a valid Minecraft username first' : 'Toggle automatic payments'}
+                                      disabled={!stablePayEnabled && !/^[A-Za-z0-9_]{3,16}$/.test(stablePayUsernameDraft.trim().replace(/^@/, ''))}
+                                      onClick={() => {
+                                        const username = stablePayUsernameDraft.trim().replace(/^@/, '');
+                                        handleUpdateServerSettings({ stablePayUsername: username, stablePayEnabled: !stablePayEnabled });
+                                      }}
+                                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-40 ${stablePayEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
+                                    >
+                                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${stablePayEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </>
                             )}
 
                             {/* Auto reconnect delay */}

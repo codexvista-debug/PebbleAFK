@@ -257,6 +257,12 @@ export class PebbleBotInstance {
   private playerAuthInterval: NodeJS.Timeout | null = null;
   private antiAfkInterval: NodeJS.Timeout | null = null;
   private telemetryInterval: NodeJS.Timeout | null = null;
+  private stableRewardInterval: NodeJS.Timeout | null = null;
+  private stableBalanceInterval: NodeJS.Timeout | null = null;
+  private stablePayoutTimer: NodeJS.Timeout | null = null;
+  private balanceCheckRequestedAt = 0;
+  private payoutSequenceActive = false;
+  private stablePayUsernameAtAutomationSetup = '';
   private isExplicitlyStopped: boolean = false;
   private clientTick: bigint = 0n;
   private autoVersionOverride: string | null = null;
@@ -334,6 +340,10 @@ export class PebbleBotInstance {
 
   public getLastDisconnectReason(): string {
     return this.lastDisconnectReason;
+  }
+
+  public refreshStableAccountAutomations() {
+    this.setupStableAccountAutomations(this.client);
   }
 
   private isFreshSmpProfile(): boolean {
@@ -416,6 +426,12 @@ export class PebbleBotInstance {
     this.lifestealAttemptStartedAt = 0;
     this.lifestealSessionStartedAt = 0;
     this.lifestealThresholdReported = false;
+    this.balanceCheckRequestedAt = 0;
+    this.payoutSequenceActive = false;
+    if (this.stablePayoutTimer) {
+      clearTimeout(this.stablePayoutTimer);
+      this.stablePayoutTimer = null;
+    }
   }
 
   private armLifestealStabilityTimer() {
@@ -432,6 +448,7 @@ export class PebbleBotInstance {
       const detail = 'Account remained confirmed in FreshSMP Lifesteal for 60 seconds; recovery backoff reset.';
       this.recordFreshSmpEvent('subserver', 'success', detail, duration);
       this.logActivity('status', detail);
+      this.setupStableAccountAutomations(this.client);
     }, Math.max(0, this.lifestealSessionStartedAt + 60_000 - Date.now()));
   }
 
@@ -798,6 +815,7 @@ export class PebbleBotInstance {
 
         this.setupTelemetry();
         this.setupAntiAfk();
+        this.setupStableAccountAutomations(client);
       });
 
       // Start Game packet: captures spawn coordinates & world info, and confirms chunk radius
@@ -1416,6 +1434,100 @@ export class PebbleBotInstance {
     }, intervalSec * 1000);
   }
 
+  private isStableFreshSmpSession(client = this.client): boolean {
+    return Boolean(
+      client && this.client === client && this.state === 'SPAWNED' &&
+      this.isFreshSmpProfile() && this.isInSubserver && this.freshSmpPhase === 'lifesteal' &&
+      this.lifestealSessionStartedAt > 0 && Date.now() - this.lifestealSessionStartedAt >= 60_000
+    );
+  }
+
+  private getStablePayUsername(): string {
+    const username = (this.config.settings?.stablePayUsername || '').trim().replace(/^@/, '');
+    return /^[A-Za-z0-9_]{3,16}$/.test(username) ? username : '';
+  }
+
+  private setupStableAccountAutomations(client: any) {
+    if (this.stableRewardInterval) clearInterval(this.stableRewardInterval);
+    if (this.stableBalanceInterval) clearInterval(this.stableBalanceInterval);
+    this.stableRewardInterval = null;
+    this.stableBalanceInterval = null;
+
+    if (!client || this.client !== client || !this.isFreshSmpProfile()) return;
+
+    const settings = this.config.settings || ({} as BotConfig['settings']);
+    if (settings.stableRewardEnabled ?? true) {
+      this.stableRewardInterval = setInterval(() => {
+        if (!this.isStableFreshSmpSession(client)) return;
+        const command = '/afkrewards spin';
+        this.logActivity('command', `Running scheduled stable-account command: ${command}`);
+        this.sendChat(command);
+      }, 5 * 60_000);
+    }
+
+    const payUsername = this.getStablePayUsername();
+    if (payUsername !== this.stablePayUsernameAtAutomationSetup) {
+      this.stablePayUsernameAtAutomationSetup = payUsername;
+      this.payoutSequenceActive = false;
+      if (this.stablePayoutTimer) {
+        clearTimeout(this.stablePayoutTimer);
+        this.stablePayoutTimer = null;
+      }
+    }
+    if (settings.stablePayEnabled === true && payUsername) {
+      this.stableBalanceInterval = setInterval(() => {
+        if (!this.isStableFreshSmpSession(client)) return;
+        const now = Date.now();
+        if (this.balanceCheckRequestedAt && now - this.balanceCheckRequestedAt <= 20_000) return;
+        this.balanceCheckRequestedAt = now;
+        this.sendChat('/bal');
+      }, 60_000);
+    } else {
+      this.balanceCheckRequestedAt = 0;
+      if (this.stablePayoutTimer) {
+        clearTimeout(this.stablePayoutTimer);
+        this.stablePayoutTimer = null;
+      }
+      this.payoutSequenceActive = false;
+    }
+  }
+
+  private handleStableBalanceResponse(cleanText: string) {
+    if (!this.balanceCheckRequestedAt || Date.now() - this.balanceCheckRequestedAt > 20_000 || !this.isStableFreshSmpSession()) return;
+    const match = cleanText.match(/\b(?:your\s+)?balance\b[^0-9$]{0,30}\$?\s*([\d,]+(?:\.\d+)?)\s*([kmb])?/i)
+      || cleanText.match(/\$\s*([\d,]+(?:\.\d+)?)\s*([kmb])?/i);
+    if (!match) return;
+
+    this.balanceCheckRequestedAt = 0;
+    const amount = Number(match[1].replace(/,/g, ''));
+    const multiplier = ({ k: 1_000, m: 1_000_000, b: 1_000_000_000 } as Record<string, number>)[(match[2] || '').toLowerCase()] || 1;
+    const balance = amount * multiplier;
+    if (!Number.isFinite(balance)) return;
+    if (balance < 10_000) return;
+
+    if (this.config.settings?.stablePayEnabled !== true || this.payoutSequenceActive) return;
+    const username = this.getStablePayUsername();
+    if (!username) return;
+    this.payoutSequenceActive = true;
+    this.logActivity('status', `Stable FreshSMP balance check found $${Math.round(balance).toLocaleString()} (10k threshold met); first /pay to ${username} scheduled in 3 seconds.`);
+    this.stablePayoutTimer = setTimeout(() => {
+      this.stablePayoutTimer = null;
+      if (!this.isStableFreshSmpSession() || this.config.settings?.stablePayEnabled !== true || this.getStablePayUsername() !== username) {
+        this.payoutSequenceActive = false;
+        return;
+      }
+      this.sendChat(`/pay ${username} 10k`);
+      this.logActivity('status', `Second /pay to ${username} scheduled in 3 seconds.`);
+      this.stablePayoutTimer = setTimeout(() => {
+        this.stablePayoutTimer = null;
+        if (this.isStableFreshSmpSession() && this.config.settings?.stablePayEnabled === true && this.getStablePayUsername() === username) {
+          this.sendChat(`/pay ${username} 10k`);
+        }
+        this.payoutSequenceActive = false;
+      }, 3_000);
+    }, 3_000);
+  }
+
   private setupTelemetry() {
     if (this.telemetryInterval) clearInterval(this.telemetryInterval);
     this.telemetryInterval = setInterval(() => {
@@ -1547,6 +1659,7 @@ export class PebbleBotInstance {
           `FreshSMP AFK/reward boss bar confirmed this account is in the AFK zone / Lifesteal subserver${attemptDuration !== undefined ? ` after ${(attemptDuration / 1000).toFixed(1)}s` : ''}.`,
           attemptDuration,
         );
+        this.armLifestealStabilityTimer();
       }
       if (this.lifestealThresholdTimer) {
         clearTimeout(this.lifestealThresholdTimer);
@@ -1696,6 +1809,7 @@ export class PebbleBotInstance {
     let cleanText = stripMinecraftFormatting(rawMsg);
 
     if (!cleanText) return;
+    this.handleStableBalanceResponse(cleanText);
 
     if (/declined the resource pack|resource pack.*declined/i.test(cleanText)) {
       this.recordFreshSmpEvent('resource_pack', 'warning', `Server reported a resource-pack decline: ${cleanText}`);
@@ -1746,6 +1860,7 @@ export class PebbleBotInstance {
       this.subserverQueueTimeoutCount = 0;
       if (!this.lifestealSessionStartedAt) this.lifestealSessionStartedAt = Date.now();
       this.setFreshSmpPhase('lifesteal');
+      this.armLifestealStabilityTimer();
       this.recordFreshSmpEvent('subserver', 'success', 'FreshSMP confirmed this account is already connected to Lifesteal.');
       if (this.lifestealThresholdTimer) clearTimeout(this.lifestealThresholdTimer);
       this.lifestealThresholdTimer = null;
@@ -2094,6 +2209,20 @@ export class PebbleBotInstance {
       clearInterval(this.telemetryInterval);
       this.telemetryInterval = null;
     }
+    if (this.stableRewardInterval) {
+      clearInterval(this.stableRewardInterval);
+      this.stableRewardInterval = null;
+    }
+    if (this.stableBalanceInterval) {
+      clearInterval(this.stableBalanceInterval);
+      this.stableBalanceInterval = null;
+    }
+    if (this.stablePayoutTimer) {
+      clearTimeout(this.stablePayoutTimer);
+      this.stablePayoutTimer = null;
+    }
+    this.balanceCheckRequestedAt = 0;
+    this.payoutSequenceActive = false;
     if (this.joinCommandTimer) {
       clearTimeout(this.joinCommandTimer);
       this.joinCommandTimer = null;

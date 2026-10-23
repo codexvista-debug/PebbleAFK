@@ -217,6 +217,7 @@ export class BotManager {
         const bot = this.getBot(msg.payload.botId);
         if (bot) {
           bot.config.settings = { ...bot.config.settings, ...msg.payload.settings };
+          bot.refreshStableAccountAutomations();
           this.desiredBots.set(msg.payload.botId, { ...bot.config, settings: { ...bot.config.settings } });
           this.persistDesiredBots();
           console.log(chalk.green(`[BotManager] Settings updated for ${bot.config.username}`));

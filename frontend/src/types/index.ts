@@ -17,6 +17,9 @@ export interface BotSettings {
   subserverJoinCommandEnabled?: boolean;
   subserverJoinCommand?: string;
   subserverJoinCommandDelay?: number;
+  stableRewardEnabled?: boolean;
+  stablePayEnabled?: boolean;
+  stablePayUsername?: string;
 }
 
 /** Defaults applied to newly created server profiles. FreshSMP profiles also
@@ -40,6 +43,9 @@ export const DEFAULT_BOT_SETTINGS: BotSettings = {
   subserverJoinCommandEnabled: false,
   subserverJoinCommand: '',
   subserverJoinCommandDelay: 5,
+  stableRewardEnabled: false,
+  stablePayEnabled: false,
+  stablePayUsername: '',
 };
 
 export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
@@ -52,6 +58,9 @@ export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
   subserverJoinCommandEnabled: true,
   subserverJoinCommand: '/warp afk',
   subserverJoinCommandDelay: 5,
+  stableRewardEnabled: true,
+  stablePayEnabled: false,
+  stablePayUsername: '',
 };
 
 export const MAX_BEDROCK_ACCOUNTS = 50;
