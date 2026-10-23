@@ -691,6 +691,8 @@ export default function Home() {
           if (targetUrl && targetUrl.startsWith('wss://')) {
             const cleanTarget = targetUrl.replace(/\/+$/, '');
             const cleanCurrent = (daemonUrlRef.current || '').trim().replace(/\/+$/, '');
+            const tokenChanged = Boolean(targetToken && targetToken !== authTokenRef.current);
+            if (targetToken) setAuthToken(targetToken);
             const username = currentUser.trim().toLowerCase();
             if (tunnelRegistrationRef.current.username !== username) {
               const storedUpdatedAt = typeof window !== 'undefined'
@@ -703,14 +705,19 @@ export default function Home() {
             const lastAcceptedAt = tunnelRegistrationRef.current.updatedAt;
             const isNewerTermuxRegistration = Number.isFinite(updatedAt) && updatedAt > lastAcceptedAt;
             const isSameRegistration = updatedAt === lastAcceptedAt && cleanTarget === cleanCurrent;
-            const isDisconnected = daemonStatusRef.current === 'DISCONNECTED' || daemonStatusRef.current === 'AUTH_ERROR';
+            const socketStatus = daemonStatusRef.current;
+            const isDisconnected = socketStatus === 'DISCONNECTED';
+            // A rejected credential is not a transient network failure. Retry it
+            // only when Termux publishes a new tunnel or the shared token changes.
+            const canRecoverAuthError = socketStatus === 'AUTH_ERROR' && (cleanTarget !== cleanCurrent || tokenChanged);
 
             // Accept registration if:
             // 1. Termux published a newer timestamp, OR
-            // 2. We are currently DISCONNECTED and this tunnel is reported live with a valid URL, OR
-            // 3. It's the active registration
-            if (isNewerTermuxRegistration || (isDisconnected && data?.isLive && cleanTarget) || isSameRegistration) {
-              if (isNewerTermuxRegistration || isDisconnected) {
+            // 2. We are disconnected and this tunnel is reported live, OR
+            // 3. The matching URL/token can recover a previous auth rejection
+            // 4. It's the active registration
+            if (isNewerTermuxRegistration || (isDisconnected && data?.isLive && cleanTarget) || canRecoverAuthError || isSameRegistration) {
+              if (isNewerTermuxRegistration || isDisconnected || canRecoverAuthError) {
                 tunnelRegistrationRef.current = { username, updatedAt: updatedAt || Date.now() };
                 if (typeof window !== 'undefined') {
                   localStorage.setItem(`pebbleafk_tunnel_updated_at_${username}`, String(updatedAt || Date.now()));
@@ -719,11 +726,13 @@ export default function Home() {
               if (cleanTarget !== cleanCurrent) {
                 setDaemonUrl(cleanTarget);
                 reconnect(true);
-              } else if (isDisconnected) {
-                // Target URL is already saved and socket is disconnected; allow gentle reconnect without killing connecting handshake
+              } else if (isDisconnected && data?.isLive) {
+                // A matching retry timer is respected by the socket hook so
+                // tunnel polling cannot defeat its exponential backoff.
                 reconnect(false);
+              } else if (canRecoverAuthError && data?.isLive) {
+                reconnect(true);
               }
-              if (targetToken) setAuthToken(targetToken);
             }
           }
         }
