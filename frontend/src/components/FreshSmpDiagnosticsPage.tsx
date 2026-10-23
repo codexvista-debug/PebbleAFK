@@ -48,15 +48,30 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
       ) : profiles.map((profile) => {
         const assigned = (profile.assignedAccountIds?.length ? profile.assignedAccountIds : [profile.accountId])
           .map((id) => accounts.find((account) => account.id === id)).filter((account): account is Account => Boolean(account));
+        const isStableInLifesteal = (account: Account) => {
+          const botId = `${profile.id}__${account.id}`;
+          const detail = diagnostics[botId];
+          const state = botStates[botId];
+          return detail?.phase === 'lifesteal' && typeof detail.lifestealSessionStartedAt === 'number' &&
+            now - detail.lifestealSessionStartedAt >= 60_000 && (state === 'SPAWNED' || state === 'LOGGED_IN');
+        };
+        const unstable = assigned.filter((account) => !isStableInLifesteal(account));
+        const stableCount = assigned.length - unstable.length;
         return (
           <section key={profile.id} className="rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
-              <div><h2 className="text-sm font-black text-slate-900">{profile.name}</h2><p className="text-[11px] text-slate-500">{profile.serverHost}:{profile.serverPort} · {assigned.length} assigned account{assigned.length === 1 ? '' : 's'}</p></div>
+              <div><h2 className="text-sm font-black text-slate-900">{profile.name}</h2><p className="text-[11px] text-slate-500">{profile.serverHost}:{profile.serverPort} · {unstable.length} unstable · {stableCount} stable hidden</p></div>
               <span className="text-[10px] font-bold rounded-full px-2.5 py-1 bg-sky-50 text-sky-700 border border-sky-100">FreshSMP only</span>
             </div>
-            {assigned.length === 0 ? <p className="p-5 text-xs text-slate-500">No linked accounts to monitor.</p> : (
+            {assigned.length === 0 ? <p className="p-5 text-xs text-slate-500">No linked accounts to monitor.</p> : unstable.length === 0 ? (
+              <div className="p-8 text-center">
+                <CheckCircle2 className="mx-auto w-6 h-6 text-emerald-500" />
+                <p className="mt-2 text-sm font-bold text-emerald-800">All assigned accounts have held Lifesteal for at least 60 seconds.</p>
+                <p className="mt-1 text-xs text-slate-500">Stable accounts are hidden here; they will reappear if they disconnect or leave the subserver.</p>
+              </div>
+            ) : (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
-                {assigned.map((account) => {
+                {unstable.map((account) => {
                   const botId = `${profile.id}__${account.id}`;
                   const detail = diagnostics[botId];
                   const phase = detail?.phase || (botStates[botId] === 'RECONNECTING' || botStates[botId] === 'CONNECTING' ? 'reconnecting' : 'offline');

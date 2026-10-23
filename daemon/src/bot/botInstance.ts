@@ -299,6 +299,7 @@ export class PebbleBotInstance {
   private freshSmpEvents: FreshSmpDiagnosticEvent[] = [];
   private lifestealAttemptStartedAt = 0;
   private lifestealSessionStartedAt = 0;
+  private shortLifestealReturnCount = 0;
   private lifestealThresholdReported = false;
   private lifestealThresholdTimer: NodeJS.Timeout | null = null;
 
@@ -1716,6 +1717,7 @@ export class PebbleBotInstance {
     }
     const ownWelcome = cleanText.match(/\bwelcome\s+_?([a-zA-Z0-9_]{3,16})\s+to\s+play\.freshsmp\.fun\b/i);
     if (ownWelcome && ownWelcome[1].toLowerCase() === this.config.username.replace(/^_/, '').toLowerCase()) {
+      const priorSessionDuration = this.lifestealSessionStartedAt ? Date.now() - this.lifestealSessionStartedAt : 0;
       this.recordFreshSmpEvent('subserver', this.lifestealSessionStartedAt && Date.now() - this.lifestealSessionStartedAt < 60_000 ? 'error' : 'warning', `FreshSMP lobby welcome received for this account: "${cleanText.slice(0, 240)}".`);
       if (this.lifestealSessionStartedAt) this.finishLifestealAttempt('FreshSMP returned this account to its lobby', 'warning');
       this.isInSubserver = false;
@@ -1723,9 +1725,22 @@ export class PebbleBotInstance {
       this.setFreshSmpPhase('lobby');
       const alreadyConnectedThenReturnedToLobby = Date.now() - this.lastAlreadyConnectedAt <= 30_000;
       this.lastAlreadyConnectedAt = 0;
-      if (alreadyConnectedThenReturnedToLobby && hasRecentLifestealRequest) {
-        this.logActivity('warning', 'FreshSMP welcomed this account back to the lobby after an already-connected response; retrying /lifesteal after a cooldown.');
-        this.triggerJoinCommandRetry(20_000);
+      if (priorSessionDuration >= 60_000) this.shortLifestealReturnCount = 0;
+      const shouldRejoinLifesteal = priorSessionDuration > 0 || alreadyConnectedThenReturnedToLobby || hasRecentLifestealRequest;
+      if (shouldRejoinLifesteal && !this.joinCommandTimer) {
+        this.shortLifestealReturnCount += 1;
+        const baseRetryDelay = Math.min(120_000, 20_000 * (2 ** Math.min(this.shortLifestealReturnCount - 1, 3)));
+        const retryDelay = baseRetryDelay + Math.floor(Math.random() * 5000);
+        const retrySeconds = Math.ceil(retryDelay / 1000);
+        const cause = alreadyConnectedThenReturnedToLobby
+          ? 'after an already-connected response'
+          : priorSessionDuration
+            ? `${priorSessionDuration < 60_000 ? 'after only' : 'after'} ${(priorSessionDuration / 1000).toFixed(1)}s in Lifesteal`
+            : 'before Lifesteal entry was confirmed';
+        const retryNote = `FreshSMP returned this account to its lobby ${cause}; scheduling a cautious /lifesteal retry in ${retrySeconds}s (return ${this.shortLifestealReturnCount}).`;
+        this.recordFreshSmpEvent('queue', 'warning', retryNote, priorSessionDuration || undefined);
+        this.logActivity('warning', retryNote);
+        this.triggerJoinCommandRetry(retryDelay);
       }
     }
     if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk') || isLifestealTimeout) {
