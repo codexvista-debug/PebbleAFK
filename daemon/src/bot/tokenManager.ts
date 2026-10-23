@@ -9,190 +9,114 @@ export function computeNameHash(name: string): string {
 export function getPersistentTokenFolder(): string {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   const persistentDir = home ? path.resolve(home, '.pebbleafk_tokens') : path.resolve(process.cwd(), 'tokens');
-  if (!fs.existsSync(persistentDir)) {
-    try {
-      fs.mkdirSync(persistentDir, { recursive: true });
-    } catch (e) {}
-  }
+  try {
+    fs.mkdirSync(persistentDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(persistentDir, 0o700);
+  } catch (_) {}
   return persistentDir;
 }
 
+/**
+ * Use the home-directory cache as the single source of truth. Older releases
+ * wrote tokens inside the checkout, so migrate the newest copy of each file
+ * once rather than letting a stale backup win on the next restart.
+ */
 export function getAndSyncTokenFolder(): string {
-  const localFolder = path.resolve(process.cwd(), 'tokens');
   const persistentFolder = getPersistentTokenFolder();
-
-  if (!fs.existsSync(localFolder)) {
-    try {
-      fs.mkdirSync(localFolder, { recursive: true });
-    } catch (e) {}
-  }
-
+  const home = process.env.HOME || process.env.USERPROFILE || '';
   const possibleSources = [
-    persistentFolder,
+    path.resolve(process.cwd(), 'tokens'),
     path.resolve(process.cwd(), '..', 'tokens'),
     path.resolve(process.cwd(), 'profiles'),
-    path.resolve(process.env.HOME || '', '.pebbleafk_tokens'),
-    path.resolve(process.env.HOME || '', '.pocketafk_tokens'),
-    path.resolve(process.env.HOME || '', 'tokens'),
-    path.resolve('E:/PocketAFK/tokens'),
-    path.resolve('E:/PocketAFK/daemon/tokens'),
-    path.resolve('E:/VistaAFK/tokens'),
-    path.resolve('E:/VistaAFK/daemon/tokens'),
-  ];
+    home ? path.resolve(home, '.pocketafk_tokens') : '',
+    home ? path.resolve(home, 'tokens') : '',
+  ].filter(Boolean);
 
   for (const srcDir of possibleSources) {
-    if (fs.existsSync(srcDir) && srcDir !== localFolder) {
-      try {
-        const files = fs.readdirSync(srcDir);
-        for (const f of files) {
-          if (!f.endsWith('.json')) continue;
-          const srcPath = path.join(srcDir, f);
-          const destPath = path.join(localFolder, f);
-          if (!fs.existsSync(destPath)) {
-            try {
-              fs.copyFileSync(srcPath, destPath);
-            } catch (_) {}
-          }
-        }
-      } catch (_) {}
-    }
-  }
-
-  // 2. Also back up localFolder to persistentFolder
-  if (localFolder !== persistentFolder && fs.existsSync(localFolder)) {
+    if (srcDir === persistentFolder || !fs.existsSync(srcDir)) continue;
     try {
-      const files = fs.readdirSync(localFolder);
-      for (const f of files) {
-        if (!f.endsWith('.json')) continue;
-        const srcFile = path.join(localFolder, f);
-        const dstFile = path.join(persistentFolder, f);
-        if (!fs.existsSync(dstFile) && fs.statSync(srcFile).isFile()) {
-          fs.copyFileSync(srcFile, dstFile);
+      for (const file of fs.readdirSync(srcDir)) {
+        if (!file.endsWith('.json')) continue;
+        const srcPath = path.join(srcDir, file);
+        const destPath = path.join(persistentFolder, file);
+        const srcStat = fs.statSync(srcPath);
+        if (!srcStat.isFile()) continue;
+
+        let shouldCopy = !fs.existsSync(destPath);
+        if (!shouldCopy) {
+          try { shouldCopy = srcStat.mtimeMs > fs.statSync(destPath).mtimeMs; } catch (_) { shouldCopy = true; }
+        }
+        if (!shouldCopy) continue;
+
+        const tempPath = path.join(persistentFolder, `.${file}.${process.pid}.tmp`);
+        try {
+          fs.copyFileSync(srcPath, tempPath);
+          fs.utimesSync(tempPath, srcStat.atime, srcStat.mtime);
+          try { fs.chmodSync(tempPath, 0o600); } catch (_) {}
+          try {
+            fs.renameSync(tempPath, destPath);
+          } catch (_) {
+            try { fs.unlinkSync(destPath); } catch (_) {}
+            fs.renameSync(tempPath, destPath);
+          }
+        } catch (_) {
+          try { fs.unlinkSync(tempPath); } catch (_) {}
         }
       }
     } catch (_) {}
   }
 
-  return localFolder;
+  return persistentFolder;
 }
 
 /**
- * Automatically pairs and aliases cached Microsoft OAuth sessions to the target Bedrock account.
- * This ensures that once an account is authorized, PrismarineAuth finds the 90-day rolling refresh token
- * regardless of username casing, email vs Xbox Gamertag, or target variations.
+ * Migrate a single account's Prismarine Auth cache to its canonical identity.
+ * Never guess based on the number of other cached accounts; that can attach the
+ * wrong Microsoft session to a Bedrock username. Existing canonical caches are
+ * preserved unless the source is known to be the account just verified.
  */
-export function ensureTokenAliases(tokenFolder: string, targetUsername: string, realIgn?: string) {
+export function migrateTokenCache(
+  tokenFolder: string,
+  sourceUsername: string,
+  targetUsername: string,
+  overwrite = false,
+): boolean {
   try {
-    if (!fs.existsSync(tokenFolder) || !targetUsername) return;
-    const files = fs.readdirSync(tokenFolder);
+    if (!fs.existsSync(tokenFolder) || !sourceUsername || !targetUsername) return false;
+    const sourceHash = computeNameHash(sourceUsername);
+    const targetHash = computeNameHash(targetUsername);
+    if (sourceHash === targetHash) return true;
 
-    const cleanName = targetUsername.replace(/^@/, '').trim();
-    const candidateNames = new Set<string>();
-    candidateNames.add(cleanName);
-    candidateNames.add(cleanName.toLowerCase());
-    candidateNames.add(cleanName.toUpperCase());
-    if (cleanName.includes('@')) {
-      candidateNames.add(cleanName.split('@')[0]);
-    }
-    if (realIgn) {
-      candidateNames.add(realIgn);
-      candidateNames.add(realIgn.toLowerCase());
-    }
+    const sourceLiveCache = path.join(tokenFolder, `${sourceHash}_live-cache.json`);
+    if (!fs.existsSync(sourceLiveCache)) return false;
+    const targetLiveCache = path.join(tokenFolder, `${targetHash}_live-cache.json`);
+    if (!overwrite && fs.existsSync(targetLiveCache)) return true;
 
-    const targetHashes = new Set<string>();
-    for (const name of candidateNames) {
-      targetHashes.add(computeNameHash(name));
-    }
+    const files = fs.readdirSync(tokenFolder).filter((file) => file.startsWith(`${sourceHash}_`) && file.endsWith('.json'));
+    for (const file of files) {
+      const sourcePath = path.join(tokenFolder, file);
+      const targetPath = path.join(tokenFolder, `${targetHash}${file.substring(sourceHash.length)}`);
+      if (!overwrite && fs.existsSync(targetPath)) continue;
 
-    // Check if target already has a live cache
-    let hasTargetLiveCache = false;
-    for (const h of targetHashes) {
-      if (fs.existsSync(path.join(tokenFolder, `${h}_live-cache.json`))) {
-        hasTargetLiveCache = true;
-        break;
-      }
-    }
-
-    if (hasTargetLiveCache) {
-      const existingHash = Array.from(targetHashes).find((h) => fs.existsSync(path.join(tokenFolder, `${h}_live-cache.json`)));
-      if (existingHash) {
-        mirrorTokenSession(tokenFolder, existingHash, targetHashes);
-      }
-      return;
-    }
-
-    // Scan all live-cache files in tokenFolder
-    const allLiveHashes: string[] = [];
-    for (const f of files) {
-      if (f.endsWith('_live-cache.json')) {
-        const hash = f.replace('_live-cache.json', '');
-        allLiveHashes.push(hash);
-      }
-    }
-
-    if (allLiveHashes.length === 1) {
-      mirrorTokenSession(tokenFolder, allLiveHashes[0], targetHashes);
-    }
-  } catch (err: any) {
-    console.warn('[PebbleAFK Auth] Token aliasing warning:', err.message);
-  }
-}
-
-/**
- * Copies all session files (_live, _xbl, _bed, _mcs, _sisu) from a source hash to target hashes
- */
-function mirrorTokenSession(tokenFolder: string, sourceHash: string, targetHashes: Set<string>) {
-  try {
-    const files = fs.readdirSync(tokenFolder);
-    for (const targetHash of targetHashes) {
-      if (targetHash === sourceHash) continue;
-      for (const f of files) {
-        if (f.startsWith(`${sourceHash}_`)) {
-          const suffix = f.substring(sourceHash.length);
-          const src = path.join(tokenFolder, f);
-          const dst = path.join(tokenFolder, `${targetHash}${suffix}`);
-          if (!fs.existsSync(dst)) {
-            try {
-              fs.copyFileSync(src, dst);
-            } catch (_) {}
-          }
-        }
-      }
-    }
-
-    // Also sync mirrored files to persistent storage
-    const persistentFolder = getPersistentTokenFolder();
-    if (persistentFolder !== tokenFolder) {
-      const updatedFiles = fs.readdirSync(tokenFolder);
-      for (const f of updatedFiles) {
-        if (!f.endsWith('.json')) continue;
-        const src = path.join(tokenFolder, f);
-        const dst = path.join(persistentFolder, f);
-        if (!fs.existsSync(dst)) {
-          try {
-            fs.copyFileSync(src, dst);
-          } catch (_) {}
-        }
-      }
-    }
-  } catch (_) {}
-}
-
-/**
- * Backs up all cached token files to permanent Android storage
- */
-export function backupTokens(tokenFolder: string) {
-  try {
-    const persistentFolder = getPersistentTokenFolder();
-    if (persistentFolder === tokenFolder || !fs.existsSync(tokenFolder)) return;
-    const files = fs.readdirSync(tokenFolder);
-    for (const f of files) {
-      if (!f.endsWith('.json')) continue;
-      const src = path.join(tokenFolder, f);
-      const dst = path.join(persistentFolder, f);
+      const tempPath = `${targetPath}.${process.pid}.tmp`;
       try {
-        fs.copyFileSync(src, dst);
-      } catch (_) {}
+        fs.copyFileSync(sourcePath, tempPath);
+        try { fs.chmodSync(tempPath, 0o600); } catch (_) {}
+        try {
+          fs.renameSync(tempPath, targetPath);
+        } catch (_) {
+          if (!overwrite) throw _;
+          try { fs.unlinkSync(targetPath); } catch (_) {}
+          fs.renameSync(tempPath, targetPath);
+        }
+      } catch (_) {
+        try { fs.unlinkSync(tempPath); } catch (_) {}
+        throw _;
+      }
     }
-  } catch (_) {}
+    return true;
+  } catch (err: any) {
+    console.warn('[PebbleAFK Auth] Could not migrate one account cache:', err?.message || String(err));
+    return false;
+  }
 }

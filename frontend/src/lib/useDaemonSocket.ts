@@ -721,8 +721,8 @@ export function useDaemonSocket(
     setTerminalLogs([]);
   }, []);
 
-  const verifyAccount = useCallback((accountId: string, email?: string) => {
-    return send({ type: 'VERIFY_ACCOUNT', payload: { accountId, email } });
+  const verifyAccount = useCallback((accountId: string, email?: string, authCacheKey?: string) => {
+    return send({ type: 'VERIFY_ACCOUNT', payload: { accountId, email, authCacheKey } });
   }, [send]);
 
   const sendChat = useCallback((botId: string, message: string) => {

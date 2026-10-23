@@ -106,6 +106,7 @@ export async function loadAccountsFromSupabase(currentUser: string): Promise<Bed
           username: botName,
           ign: botName,
           auth_type: 'microsoft',
+          uuid: row.settings?.xuid || row.settings?.uuid || row.xuid || row.uuid,
           avatarUrl: row.settings?.avatarUrl,
           verified: true,
           addedAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
@@ -174,17 +175,29 @@ export async function syncAllToSupabase(
             server_host: assignedServer?.serverHost || 'play.freshsmp.fun',
             server_port: assignedServer?.serverPort || 19132,
             server_version: assignedServer?.serverVersion || 'auto',
-            settings: { ...(acc.settings || {}), avatarUrl: acc.avatarUrl },
+            settings: {
+              ...(acc.settings || {}),
+              ...(acc.avatarUrl ? { avatarUrl: acc.avatarUrl } : {}),
+              ...(acc.uuid ? { xuid: acc.uuid } : {}),
+            },
           },
         ]);
         existingBotNames.add(ign.toLowerCase());
-      } else if (assignedServer?.serverHost) {
+      } else {
+        const settings = {
+          ...(acc.settings || {}),
+          ...(acc.avatarUrl ? { avatarUrl: acc.avatarUrl } : {}),
+          ...(acc.uuid ? { xuid: acc.uuid } : {}),
+        };
         await supabase
           .from('accounts')
           .update({
-            server_host: assignedServer.serverHost,
-            server_port: assignedServer.serverPort,
-            server_version: assignedServer.serverVersion || 'auto',
+            ...(assignedServer?.serverHost ? {
+              server_host: assignedServer.serverHost,
+              server_port: assignedServer.serverPort,
+              server_version: assignedServer.serverVersion || 'auto',
+            } : {}),
+            settings,
           })
           .ilike('username', cleanUser)
           .ilike('bot_name', ign);

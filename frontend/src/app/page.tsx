@@ -729,6 +729,9 @@ export default function Home() {
     setMsAuthError(null);
     const targetId = typeof target === 'object' && target ? target.id : `acc_${Math.random().toString(36).substring(2, 9)}`;
     const targetEmail = typeof target === 'string' ? target : (target?.username || '');
+    const targetAuthCacheKey = typeof target === 'object' && target?.uuid
+      ? `xuid_${target.uuid}`
+      : undefined;
 
     const shouldSignOutFirst = !target;
 
@@ -767,7 +770,7 @@ export default function Home() {
         : 'Microsoft sign-out tab was blocked. Use Sign Out of Microsoft, then Open Microsoft Sign-In in the verification dialog.',
       'info'
     );
-    verifyAccount(targetId, targetEmail);
+    verifyAccount(targetId, targetEmail, targetAuthCacheKey);
   };
 
   useEffect(() => {
@@ -1091,6 +1094,7 @@ export default function Home() {
     const botConfig = {
       id: botId,
       username: acc.ign || acc.username,
+      authCacheKey: acc.uuid ? `xuid_${acc.uuid}` : undefined,
       host: srv.serverHost,
       port: srv.serverPort || 19132,
       version: srv.serverVersion || 'auto',

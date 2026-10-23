@@ -2,9 +2,10 @@ import chalk from 'chalk';
 import dns from 'dns';
 import fs from 'fs';
 import { randomUUID } from 'crypto';
+import { Authflow, Titles } from 'prismarine-auth';
 const bedrock = require('bedrock-protocol');
 import { BotConfig, BotLifecycleState, BossBarPayload, DaemonMessage, FreshSmpDiagnosticEvent, FreshSmpDiagnosticPhase, FreshSmpDiagnosticState, TelemetryPayload } from '../types';
-import { getAndSyncTokenFolder } from './tokenManager';
+import { getAndSyncTokenFolder, migrateTokenCache } from './tokenManager';
 
 function pingBedrockJsp(host: string, port: number, timeoutMs = 2000): Promise<{ version?: string; motd?: string; protocol?: string } | null> {
   return new Promise((resolve) => {
@@ -534,6 +535,38 @@ export class PebbleBotInstance {
           });
         },
       };
+
+      if (!isOffline) {
+        const authCacheKey = this.config.authCacheKey?.trim() || this.config.username;
+        if (this.config.authCacheKey) {
+          // One-time migration for accounts linked before Pebble stored XUIDs.
+          migrateTokenCache(profilesFolder, this.config.username, authCacheKey);
+        }
+        clientOptions.authflow = new Authflow(
+          authCacheKey,
+          profilesFolder,
+          {
+            authTitle: Titles.MinecraftNintendoSwitch,
+            deviceType: 'Nintendo',
+            flow: 'live',
+          },
+          (data: any) => {
+            console.log(chalk.yellow(`[MS Auth] Code for ${this.config.username}: ${data.user_code}`));
+            const directUri = data.user_code
+              ? `https://www.microsoft.com/link?otc=${encodeURIComponent(data.user_code)}&prompt=login`
+              : (data.verification_uri || 'https://www.microsoft.com/link');
+            this.broadcastFn({
+              type: 'MS_AUTH_CODE',
+              payload: {
+                botId: this.config.id,
+                userCode: data.user_code,
+                url: directUri,
+                message: data.message,
+              },
+            });
+          },
+        );
+      }
 
       // Stagger Bedrock RakNet connection handshakes so concurrent bots never send
       // near-simultaneous Open Connection Request UDP packets from the same device/IP.

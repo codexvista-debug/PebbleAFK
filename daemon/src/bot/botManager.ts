@@ -6,7 +6,7 @@ import { Authflow, Titles } from 'prismarine-auth';
 import { XboxClient } from 'prismarine-xbox-services';
 import { BotConfig, ClientMessage, DaemonMessage } from '../types';
 import { PebbleBotInstance } from './botInstance';
-import { getAndSyncTokenFolder, ensureTokenAliases, backupTokens } from './tokenManager';
+import { getAndSyncTokenFolder, migrateTokenCache } from './tokenManager';
 
 function describeBedrockVerificationError(error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error ?? 'Unknown verification error');
@@ -225,7 +225,7 @@ export class BotManager {
       }
 
       case 'VERIFY_ACCOUNT':
-        this.verifyAccount(msg.payload.accountId, msg.payload.email);
+        this.verifyAccount(msg.payload.accountId, msg.payload.email, msg.payload.authCacheKey);
         break;
 
       case 'REQUEST_SYNC': {
@@ -275,38 +275,29 @@ export class BotManager {
     }
   }
 
-  public async verifyAccount(accountId: string, email?: string) {
+  public async verifyAccount(accountId: string, email?: string, stableAuthCacheKey?: string) {
     const verificationId = ++this.currentVerificationId;
     const cleanEmail = email?.trim().toLowerCase();
-    const isNew = !cleanEmail || cleanEmail === 'new_account' || cleanEmail.startsWith('acc_') || cleanEmail.startsWith('bedrock_user_');
-    const authKey = isNew ? `bedrock_user_${Date.now()}` : cleanEmail;
+    const cleanStableKey = stableAuthCacheKey?.trim();
+    const isNew = !cleanStableKey && (!cleanEmail || cleanEmail === 'new_account' || cleanEmail.startsWith('acc_') || cleanEmail.startsWith('bedrock_user_'));
+    const authKey = cleanStableKey || (isNew ? `bedrock_user_${Date.now()}` : cleanEmail!);
+    const loginHint = cleanEmail?.includes('@') ? cleanEmail : undefined;
     console.log(chalk.cyan(`[Auth] Initiating Bedrock/Xbox Device Verification for ${authKey}...`));
 
     try {
       const profilesFolder = getAndSyncTokenFolder();
 
-      // Clean up any stale directory if present to force a fresh verification
-      const staleFolder = path.join(profilesFolder, authKey);
-      if (fs.existsSync(staleFolder)) {
-        try { fs.rmSync(staleFolder, { recursive: true, force: true }); } catch (_) {}
-      }
-      const staleNewAccFolder = path.join(profilesFolder, 'new_account');
-      if (fs.existsSync(staleNewAccFolder)) {
-        try { fs.rmSync(staleNewAccFolder, { recursive: true, force: true }); } catch (_) {}
-      }
-
       const options = {
         authTitle: Titles.MinecraftNintendoSwitch,
         deviceType: 'Nintendo',
         flow: 'live' as const,
-        forceRefresh: true,
       };
 
       const flow = new Authflow(authKey, profilesFolder, options, (data: any) => {
         if (verificationId !== this.currentVerificationId) return;
         console.log(chalk.yellow(`[Auth Code] Xbox Code for ${authKey}: ${data.user_code}`));
         const directUri = data.user_code
-          ? `https://login.live.com/oauth20_remoteconnect.srf?otc=${encodeURIComponent(data.user_code)}${!isNew ? `&login_hint=${encodeURIComponent(authKey)}` : ''}&prompt=login`
+          ? `https://login.live.com/oauth20_remoteconnect.srf?otc=${encodeURIComponent(data.user_code)}${loginHint ? `&login_hint=${encodeURIComponent(loginHint)}` : ''}&prompt=login`
           : (data.verification_uri || 'https://login.live.com/oauth20_remoteconnect.srf');
 
         this.broadcastFn({
@@ -316,7 +307,7 @@ export class BotManager {
             userCode: data.user_code,
             url: directUri,
             message: data.message,
-            targetEmail: !isNew ? authKey : undefined,
+            targetEmail: loginHint,
           },
         });
       });
@@ -411,16 +402,19 @@ export class BotManager {
         throw new Error('Could not retrieve your official Xbox Gamertag. Please make sure your Microsoft account has an Xbox Live profile.');
       }
 
-      // Ensure 90-day rolling token aliases are created
-      ensureTokenAliases(profilesFolder, authKey, realGamertag);
-      ensureTokenAliases(profilesFolder, realGamertag, authKey);
-      backupTokens(profilesFolder);
+      // Store this session under the stable Xbox identity. The gamertag/email
+      // cache can still be used as a migration source for accounts created by
+      // older releases, but it is never selected by guessing other accounts.
+      const canonicalAuthKey = xuid ? `xuid_${xuid}` : realGamertag;
+      if (canonicalAuthKey && canonicalAuthKey !== authKey) {
+        migrateTokenCache(profilesFolder, authKey, canonicalAuthKey, true);
+      }
 
       this.broadcastFn({
         type: 'ACCOUNT_VERIFIED',
         payload: {
           botId: accountId,
-          email: authKey,
+          email: cleanEmail || authKey,
           ign: realGamertag,
           uuid: xuid,
           avatarUrl: xboxAvatarUrl,

@@ -21,6 +21,7 @@ export interface BotConfig {
   serverId?: string;
   username: string;
   accountId?: string;
+  authCacheKey?: string;
   authType: 'microsoft' | 'offline';
   host: string;
   port: number;
@@ -158,7 +159,7 @@ export type ClientMessage =
   | { type: 'CLICK_SLOT'; payload: { botId: string; windowId: number; slot: number } }
   | { type: 'UPDATE_SETTINGS'; payload: { botId: string; settings: Partial<BotSettings> } }
   | { type: 'REQUEST_SYNC'; payload?: { botId?: string } }
-  | { type: 'VERIFY_ACCOUNT'; payload: { accountId: string; email?: string } }
+  | { type: 'VERIFY_ACCOUNT'; payload: { accountId: string; email?: string; authCacheKey?: string } }
   | { type: 'UPDATE_DAEMON'; payload?: { reason?: string } }
   | { type: 'RESTART_DAEMON'; payload?: { reason?: string } }
   | { type: 'SHUTDOWN_DAEMON' }
