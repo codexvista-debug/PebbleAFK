@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { X, Network, Check, Copy, Terminal, ChevronDown, RotateCw, Power, ArrowUpCircle } from 'lucide-react';
+import { ShutdownConfirmDialog } from './ShutdownConfirmDialog';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -38,6 +39,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateSuccess, setUpdateSuccess] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
+  const [showShutdownConfirm, setShowShutdownConfirm] = useState(false);
 
   React.useEffect(() => {
     setUrlInput(daemonUrl);
@@ -77,12 +79,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleShutdown = () => {
     if (!onShutdownDaemon || isShuttingDown) return;
-    const confirmed = typeof window !== 'undefined' && window.confirm(
-      'Fully shut down the Termux daemon? This will stop the Minecraft accounts, Cloudflare tunnel, and remove this device’s active tunnel from PebbleAFK.'
-    );
-    if (!confirmed) return;
+    setShowShutdownConfirm(true);
+  };
+
+  const confirmShutdown = () => {
+    const shutdownDaemon = onShutdownDaemon;
+    if (!shutdownDaemon) return;
+    setShowShutdownConfirm(false);
     setIsShuttingDown(true);
-    if (!onShutdownDaemon()) {
+    if (!shutdownDaemon()) {
       setIsShuttingDown(false);
       return;
     }
@@ -346,6 +351,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
       </div>
+      <ShutdownConfirmDialog
+        open={showShutdownConfirm}
+        onCancel={() => setShowShutdownConfirm(false)}
+        onConfirm={confirmShutdown}
+      />
     </div>
   );
 };

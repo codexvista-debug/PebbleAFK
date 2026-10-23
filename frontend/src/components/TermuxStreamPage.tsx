@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, Copy, Check, Trash2, ArrowDownCircle, ArrowUp, Power } from 'lucide-react';
+import { ShutdownConfirmDialog } from './ShutdownConfirmDialog';
 
 interface TermuxStreamPageProps {
   logs: string[];
@@ -25,6 +26,7 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
+  const [showShutdownConfirm, setShowShutdownConfirm] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -57,12 +59,15 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
 
   const handleShutdown = () => {
     if (!onShutdownDaemon || isShuttingDown || !isOnline) return;
-    const confirmed = typeof window !== 'undefined' && window.confirm(
-      'Fully shut down the Termux daemon? This will stop the Minecraft accounts, Cloudflare tunnel, and remove its active tunnel from PebbleAFK.'
-    );
-    if (!confirmed) return;
+    setShowShutdownConfirm(true);
+  };
+
+  const confirmShutdown = () => {
+    const shutdownDaemon = onShutdownDaemon;
+    if (!shutdownDaemon) return;
+    setShowShutdownConfirm(false);
     setIsShuttingDown(true);
-    if (!onShutdownDaemon()) setIsShuttingDown(false);
+    if (!shutdownDaemon()) setIsShuttingDown(false);
   };
 
   const formatLogLine = (line: string, idx: number) => {
@@ -215,6 +220,11 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
           </p>
         </div>
       </div>
+      <ShutdownConfirmDialog
+        open={showShutdownConfirm}
+        onCancel={() => setShowShutdownConfirm(false)}
+        onConfirm={confirmShutdown}
+      />
     </div>
   );
 };

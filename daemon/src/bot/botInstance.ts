@@ -243,6 +243,7 @@ function isPermanentBedrockAuthRejection(reason: string): boolean {
 export class PebbleBotInstance {
   private static lastHandshakeTime: number = 0;
   private static recentChatConsoleLines = new Map<string, number>();
+  private static nextFreshSmpRecoveryAt: number = 0;
   public config: BotConfig;
   public state: BotLifecycleState = 'DISCONNECTED';
   public chatHistory: any[] = [];
@@ -303,8 +304,10 @@ export class PebbleBotInstance {
   private lifestealAttemptStartedAt = 0;
   private lifestealSessionStartedAt = 0;
   private shortLifestealReturnCount = 0;
+  private freshSmpRecoveryCount = 0;
   private lifestealThresholdReported = false;
   private lifestealThresholdTimer: NodeJS.Timeout | null = null;
+  private lifestealStabilityTimer: NodeJS.Timeout | null = null;
 
   // Telemetry cache
   private position = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -391,6 +394,8 @@ export class PebbleBotInstance {
   private finishLifestealAttempt(reason: string, severity: FreshSmpDiagnosticEvent['severity']) {
     if (this.lifestealThresholdTimer) clearTimeout(this.lifestealThresholdTimer);
     this.lifestealThresholdTimer = null;
+    if (this.lifestealStabilityTimer) clearTimeout(this.lifestealStabilityTimer);
+    this.lifestealStabilityTimer = null;
     const duration = this.lifestealSessionStartedAt ? Date.now() - this.lifestealSessionStartedAt : 0;
     if (this.lifestealSessionStartedAt) {
       const underMinute = duration < 60_000;
@@ -403,6 +408,67 @@ export class PebbleBotInstance {
     this.lifestealAttemptStartedAt = 0;
     this.lifestealSessionStartedAt = 0;
     this.lifestealThresholdReported = false;
+  }
+
+  private armLifestealStabilityTimer() {
+    if (!this.isFreshSmpProfile() || !this.lifestealSessionStartedAt) return;
+    if (this.lifestealStabilityTimer) clearTimeout(this.lifestealStabilityTimer);
+    this.lifestealStabilityTimer = setTimeout(() => {
+      this.lifestealStabilityTimer = null;
+      if (!this.isInSubserver || !this.lifestealSessionStartedAt) return;
+      const duration = Date.now() - this.lifestealSessionStartedAt;
+      if (duration < 60_000) return;
+      this.shortLifestealReturnCount = 0;
+      this.subserverQueueTimeoutCount = 0;
+      this.freshSmpRecoveryCount = 0;
+      const detail = 'Account remained confirmed in FreshSMP Lifesteal for 60 seconds; recovery backoff reset.';
+      this.recordFreshSmpEvent('subserver', 'success', detail, duration);
+      this.logActivity('status', detail);
+    }, Math.max(0, this.lifestealSessionStartedAt + 60_000 - Date.now()));
+  }
+
+  private scheduleFreshSmpRecovery(reason: string): boolean {
+    if (!this.isFreshSmpProfile() || this.isExplicitlyStopped || !this.config.settings?.autoReconnect || !this.client || this.reconnectTimer) return false;
+
+    this.freshSmpRecoveryCount = Math.min(this.freshSmpRecoveryCount + 1, 4);
+    const baseDelay = Math.min(120_000, 20_000 * (2 ** Math.min(this.freshSmpRecoveryCount - 1, 3)));
+    const localDelay = baseDelay + Math.floor(Math.random() * 8000);
+    const now = Date.now();
+    const reconnectAt = Math.max(now + localDelay, PebbleBotInstance.nextFreshSmpRecoveryAt);
+    // Space FreshSMP re-logins across this daemon so a group of unstable
+    // accounts does not all hit the gateway at the same time.
+    PebbleBotInstance.nextFreshSmpRecoveryAt = reconnectAt + 12_000;
+    const delay = reconnectAt - now;
+    const recoveryNote = `FreshSMP recovery cycle ${this.freshSmpRecoveryCount}/4: disconnecting from the lobby and reconnecting in ${Math.ceil(delay / 1000)}s. ${reason}`;
+
+    this.recordFreshSmpEvent('connection', 'warning', recoveryNote);
+    this.logActivity('warning', recoveryNote);
+    this.setFreshSmpPhase('reconnecting');
+    this.updateState('RECONNECTING', `FreshSMP recovery; reconnecting in ${Math.ceil(delay / 1000)}s`);
+
+    this.isInSubserver = false;
+    this.isSubserverQueueActive = false;
+    this.isTransferring = false;
+    this.hasTransferredToFreshSmpSubserver = false;
+    this.hasTransferredToSubserver = false;
+    this.lastLifestealCommandAt = 0;
+    this.lastAlreadyConnectedAt = 0;
+    this.shortLifestealReturnCount = 0;
+    this.subserverQueueTimeoutCount = 0;
+    this.config.host = this.originalHost;
+    this.config.port = this.originalPort;
+    this.finishLifestealAttempt('FreshSMP recovery cycle started', 'warning');
+    this.cleanup();
+
+    const oldClient = this.client;
+    this.client = null;
+    try { oldClient.close(); } catch (_) {}
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.isExplicitlyStopped) this.start();
+    }, delay);
+    return true;
   }
 
   public async start() {
@@ -1732,18 +1798,23 @@ export class PebbleBotInstance {
         this.setFreshSmpPhase('lobby');
         this.subserverQueueTimeoutCount += 1;
 
-        // A short retry loop just re-enters the same overloaded queue. Apply
-        // bounded exponential backoff with jitter so multiple accounts spread
-        // out and the server has time to clear its transfer slot.
-        const baseRetryDelay = Math.min(120_000, 20_000 * (2 ** Math.min(this.subserverQueueTimeoutCount - 1, 3)));
-        const retryDelay = Math.min(120_000, baseRetryDelay + Math.floor(Math.random() * 5000));
-        const retrySeconds = Math.ceil(retryDelay / 1000);
-        console.log(chalk.yellow(`[PebbleAFK] FreshSMP queue notice for @${this.config.username}: "${cleanText}". (Queue attempt ended; retrying /lifesteal in ${retrySeconds}s, attempt ${this.subserverQueueTimeoutCount})...`));
-        this.logActivity(
-          'warning',
-          `FreshSMP queue notice from ${cleanSender}: "${cleanText}". The server ended the Lifesteal queue attempt; retrying /lifesteal in ${retrySeconds}s (attempt ${this.subserverQueueTimeoutCount}).`
-        );
-        this.triggerJoinCommandRetry(retryDelay);
+        if (this.subserverQueueTimeoutCount >= 4 && this.scheduleFreshSmpRecovery(`FreshSMP ended ${this.subserverQueueTimeoutCount} consecutive /lifesteal queue attempts.`)) {
+          // A full reconnect can clear a stale lobby/queue session; another
+          // command on the same connection would repeat the current failure.
+        } else {
+          // A short retry loop just re-enters the same overloaded queue. Apply
+          // bounded exponential backoff with jitter so multiple accounts spread
+          // out and the server has time to clear its transfer slot.
+          const baseRetryDelay = Math.min(120_000, 20_000 * (2 ** Math.min(this.subserverQueueTimeoutCount - 1, 3)));
+          const retryDelay = Math.min(120_000, baseRetryDelay + Math.floor(Math.random() * 5000));
+          const retrySeconds = Math.ceil(retryDelay / 1000);
+          console.log(chalk.yellow(`[PebbleAFK] FreshSMP queue notice for @${this.config.username}: "${cleanText}". (Queue attempt ended; retrying /lifesteal in ${retrySeconds}s, attempt ${this.subserverQueueTimeoutCount})...`));
+          this.logActivity(
+            'warning',
+            `FreshSMP queue notice from ${cleanSender}: "${cleanText}". The server ended the Lifesteal queue attempt; retrying /lifesteal in ${retrySeconds}s (attempt ${this.subserverQueueTimeoutCount}).`
+          );
+          this.triggerJoinCommandRetry(retryDelay);
+        }
       }
     }
 
@@ -1756,6 +1827,7 @@ export class PebbleBotInstance {
         this.setFreshSmpPhase('lifesteal');
         const attemptDuration = this.lifestealAttemptStartedAt ? Date.now() - this.lifestealAttemptStartedAt : undefined;
         this.recordFreshSmpEvent('subserver', 'success', `FreshSMP confirmed entry into the AFK zone / Lifesteal subserver${attemptDuration !== undefined ? ` after ${(attemptDuration / 1000).toFixed(1)}s` : ''}.`, attemptDuration);
+        this.armLifestealStabilityTimer();
       }
       if (this.lifestealThresholdTimer) clearTimeout(this.lifestealThresholdTimer);
       this.lifestealThresholdTimer = null;
@@ -1775,22 +1847,35 @@ export class PebbleBotInstance {
       this.setFreshSmpPhase('lobby');
       const alreadyConnectedThenReturnedToLobby = Date.now() - this.lastAlreadyConnectedAt <= 30_000;
       this.lastAlreadyConnectedAt = 0;
-      if (priorSessionDuration >= 60_000) this.shortLifestealReturnCount = 0;
+      const wasStableSession = priorSessionDuration >= 60_000;
+      if (wasStableSession) {
+        this.shortLifestealReturnCount = 0;
+        this.freshSmpRecoveryCount = 0;
+      }
+      const countsAsShortReturn = !wasStableSession && (
+        (priorSessionDuration > 0 && priorSessionDuration < 60_000)
+        || alreadyConnectedThenReturnedToLobby
+        || hasRecentLifestealRequest
+      );
       const shouldRejoinLifesteal = priorSessionDuration > 0 || alreadyConnectedThenReturnedToLobby || hasRecentLifestealRequest;
       if (shouldRejoinLifesteal && !this.joinCommandTimer) {
-        this.shortLifestealReturnCount += 1;
-        const baseRetryDelay = Math.min(120_000, 20_000 * (2 ** Math.min(this.shortLifestealReturnCount - 1, 3)));
-        const retryDelay = baseRetryDelay + Math.floor(Math.random() * 5000);
-        const retrySeconds = Math.ceil(retryDelay / 1000);
+        if (countsAsShortReturn) this.shortLifestealReturnCount = Math.min(this.shortLifestealReturnCount + 1, 3);
         const cause = alreadyConnectedThenReturnedToLobby
           ? 'after an already-connected response'
           : priorSessionDuration
             ? `${priorSessionDuration < 60_000 ? 'after only' : 'after'} ${(priorSessionDuration / 1000).toFixed(1)}s in Lifesteal`
             : 'before Lifesteal entry was confirmed';
-        const retryNote = `FreshSMP returned this account to its lobby ${cause}; scheduling a cautious /lifesteal retry in ${retrySeconds}s (return ${this.shortLifestealReturnCount}).`;
-        this.recordFreshSmpEvent('queue', 'warning', retryNote, priorSessionDuration || undefined);
-        this.logActivity('warning', retryNote);
-        this.triggerJoinCommandRetry(retryDelay);
+        if (countsAsShortReturn && this.shortLifestealReturnCount >= 3) {
+          this.scheduleFreshSmpRecovery(`FreshSMP returned this account to its lobby ${cause}; three consecutive attempts failed to reach the 60-second stability mark.`);
+        } else {
+          const baseRetryDelay = Math.min(120_000, 20_000 * (2 ** Math.min(Math.max(1, this.shortLifestealReturnCount) - 1, 3)));
+          const retryDelay = baseRetryDelay + Math.floor(Math.random() * 5000);
+          const retrySeconds = Math.ceil(retryDelay / 1000);
+          const retryNote = `FreshSMP returned this account to its lobby ${cause}; scheduling a cautious /lifesteal retry in ${retrySeconds}s${countsAsShortReturn ? ` (short-return ${this.shortLifestealReturnCount}/3)` : ''}.`;
+          this.recordFreshSmpEvent('queue', 'warning', retryNote, priorSessionDuration || undefined);
+          this.logActivity('warning', retryNote);
+          this.triggerJoinCommandRetry(retryDelay);
+        }
       }
     }
     if (isSystem || cleanSender.toLowerCase().includes('server') || cleanText.toLowerCase().includes('kick') || cleanText.toLowerCase().includes('afk') || isLifestealTimeout) {
