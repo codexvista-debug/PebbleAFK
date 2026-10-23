@@ -269,6 +269,7 @@ export class PebbleBotInstance {
   private reconnectAttemptCount: number = 0;
   private reconnectFailureCount: number = 0;
   private loginThrottleCount: number = 0;
+  private duplicateLoginCount: number = 0;
   private endpointAttemptCursor: number = 0;
   private hasAttemptedEndpoint: boolean = false;
   private currentVersionCandidate: string | null = null;
@@ -800,6 +801,7 @@ export class PebbleBotInstance {
         this.reconnectAttemptCount = 0;
         this.reconnectFailureCount = 0;
         this.loginThrottleCount = 0;
+        this.duplicateLoginCount = 0;
         if (ipv4Addresses.includes(connectHost)) {
           SERVER_WORKING_ENDPOINTS.set(cleanHost.toLowerCase(), connectHost);
         }
@@ -2057,11 +2059,17 @@ export class PebbleBotInstance {
 
     const baseDelay = Math.max(3000, this.config.settings.autoReconnectDelay || 5000);
     const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit/i.test(reason);
+    const isDuplicateLogin = /already logged in|duplicate login|logged in from elsewhere/i.test(reason);
     const isTransportTimeout = /no reply to RakNet UDP packets|Connect timed out|filtering UDP|network path did not answer/i.test(reason);
     const isEncryptedPacketFailure = /checksum mismatch|bad encrypted packet|badPacket/i.test(reason);
     const isUnexplainedSessionEnd = /server closed connection\s*\/\s*session ended/i.test(reason);
     let delay: number;
-    if (isLoginThrottled) {
+    if (isDuplicateLogin) {
+      // A gateway can keep the previous player session alive briefly after a
+      // disconnect. Back off long enough for it to expire instead of racing it.
+      this.duplicateLoginCount++;
+      delay = Math.min(30_000 * (2 ** Math.min(this.duplicateLoginCount - 1, 3)), 240_000);
+    } else if (isLoginThrottled) {
       this.loginThrottleCount++;
       delay = Math.max(12_000, Math.min(15_000 * (2 ** Math.min(this.loginThrottleCount - 1, 3)), 120_000));
     } else {
@@ -2078,7 +2086,9 @@ export class PebbleBotInstance {
     // Add jitter so multiple concurrent bots stagger connection handshakes and avoid gateway rate-limiting
     const jitter = Math.floor(Math.random() * 4000);
     delay += jitter;
-    const reconnectDescription = isLoginThrottled
+    const reconnectDescription = isDuplicateLogin
+      ? `Server still sees this account logged in; waiting ${Math.ceil(delay / 1000)}s for the old session to clear`
+      : isLoginThrottled
       ? `Server login throttle; backing off for ${Math.ceil(delay / 1000)}s`
       : isEncryptedPacketFailure
         ? `Encrypted packet rejected; backing off for ${Math.ceil(delay / 1000)}s before reconnect`
@@ -2087,7 +2097,12 @@ export class PebbleBotInstance {
       : isTransportTimeout
         ? `RakNet endpoint did not reply; retrying in ${Math.ceil(delay / 1000)}s`
         : `Reconnecting in ${Math.ceil(delay / 1000)}s`;
-    console.log(chalk.yellow(`[PebbleAFK] ${reconnectDescription} for ${this.config.username} (failure ${isLoginThrottled ? this.loginThrottleCount : this.reconnectFailureCount}).`));
+    const reconnectFailureNumber = isDuplicateLogin
+      ? this.duplicateLoginCount
+      : isLoginThrottled
+        ? this.loginThrottleCount
+        : this.reconnectFailureCount;
+    console.log(chalk.yellow(`[PebbleAFK] ${reconnectDescription} for ${this.config.username} (failure ${reconnectFailureNumber}).`));
     this.updateState('RECONNECTING', reconnectDescription);
 
     this.reconnectTimer = setTimeout(() => {

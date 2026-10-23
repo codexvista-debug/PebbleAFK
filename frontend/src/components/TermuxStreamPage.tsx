@@ -13,6 +13,7 @@ interface TermuxStreamPageProps {
   onUpdateDaemon?: () => void;
   onShutdownDaemon?: () => boolean;
   termuxCommand?: string;
+  serverName?: string;
 }
 
 export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
@@ -23,6 +24,7 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
   onRestartDaemon,
   onUpdateDaemon,
   onShutdownDaemon,
+  serverName,
 }) => {
   const [copied, setCopied] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
@@ -77,19 +79,19 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
     const isTunnel = /trycloudflare\.com|wss:\/\/|tunnel/i.test(line);
     const isSys = /\[PebbleAFK\]|===|╔|║|╚|██/i.test(line);
 
-    let textColor = 'text-slate-700';
+    let textColor = 'text-slate-200';
     let bgStyle = '';
     if (isError) {
-      textColor = 'text-rose-700 font-semibold';
-      bgStyle = 'bg-rose-50/80 px-1 py-0.5 rounded';
+      textColor = 'text-rose-200 font-semibold';
+      bgStyle = 'bg-rose-950/50 px-1 py-0.5 rounded';
     } else if (isSuccess) {
-      textColor = 'text-emerald-700 font-semibold';
+      textColor = 'text-emerald-300 font-semibold';
     } else if (isWarn) {
-      textColor = 'text-amber-800';
+      textColor = 'text-amber-200';
     } else if (isTunnel) {
-      textColor = 'text-sky-700 font-bold';
+      textColor = 'text-sky-300 font-bold';
     } else if (isSys) {
-      textColor = 'text-indigo-800 font-bold';
+      textColor = 'text-indigo-300 font-bold';
     }
 
     return (
@@ -110,11 +112,11 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
               &gt;_
             </div>
             <div>
-              <h2 className="font-bold text-sm text-slate-900 font-mono">
-                Termux Android Console
+              <h2 className="font-extrabold text-base sm:text-lg text-slate-900 font-mono tracking-tight">
+                Termux Stream
               </h2>
-              <p className="text-[11px] text-slate-500 mt-0.5 hidden sm:block">
-                Real-time continuous terminal stream from Android background daemon
+              <p className="text-xs text-slate-300 mt-0.5 font-medium hidden sm:block">
+                Live daemon output <span className="text-emerald-300">·</span> Bedrock connections, server transfers, and recovery
               </p>
             </div>
           </div>
@@ -192,7 +194,11 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
           style={{ WebkitOverflowScrolling: 'touch' }}
         >
           <div className="text-slate-400 pb-2 text-[10px] border-b border-slate-200 mb-2 flex items-center justify-between font-bold">
-            <span>PebbleAFK • Android Termux Bedrock Core Stream</span>
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="text-slate-300">PebbleAFK Stream</span>
+              <span className="text-slate-500">/</span>
+              <span className="truncate rounded-md border border-emerald-500/40 bg-emerald-950/50 px-1.5 py-0.5 text-emerald-200">{serverName || 'Active server'}</span>
+            </span>
             <span>Total Log Lines: {logs.length}</span>
           </div>
 

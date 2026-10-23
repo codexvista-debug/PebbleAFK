@@ -2477,6 +2477,7 @@ export default function Home() {
                 onUpdateDaemon={updateDaemon}
                 onShutdownDaemon={shutdownDaemon}
                 termuxCommand={termux1ClickCmd}
+                serverName={activeServer?.name}
               />
             )}
 
@@ -2528,13 +2529,13 @@ export default function Home() {
                         {smartAdjustNotices.length > 0 && (
                           <div className="space-y-2" aria-live="polite" aria-label="FreshSMP smart recovery updates">
                             {smartAdjustNotices.map((notice) => (
-                              <div key={notice.id} className="flex items-start gap-3 rounded-2xl border border-sky-200 bg-sky-50/90 px-4 py-3 shadow-2xs animate-in fade-in slide-in-from-top-1 duration-200">
-                                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-sky-200 bg-white text-sky-700">
+                              <div key={notice.id} className="flex items-start gap-3 rounded-2xl border border-sky-400/50 bg-slate-900/90 px-4 py-3 shadow-lg shadow-black/20 animate-in fade-in slide-in-from-top-1 duration-200">
+                                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-sky-400/40 bg-sky-950/70 text-sky-200">
                                   <RotateCw className="h-4 w-4" />
                                 </div>
                                 <div className="min-w-0 flex-1">
-                                  <div className="text-xs font-extrabold text-slate-900">FreshSMP recovery is adjusting @{notice.username}</div>
-                                  <p className="mt-0.5 truncate text-[11px] leading-relaxed text-slate-600" title={notice.message}>{notice.message}</p>
+                                  <div className="text-sm font-extrabold text-sky-100">FreshSMP recovery is adjusting @{notice.username}</div>
+                                  <p className="mt-0.5 text-xs leading-relaxed text-slate-200 sm:truncate" title={notice.message}>{notice.message}</p>
                                 </div>
                                 <button
                                   type="button"

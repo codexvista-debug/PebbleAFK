@@ -98,6 +98,18 @@ export class BotManager {
 
   public startBot(config: BotConfig): PebbleBotInstance {
     const cleanUser = (config.username || '').toLowerCase().trim();
+    const currentById = this.bots.get(config.id);
+    if (
+      currentById &&
+      (currentById.config.username || '').toLowerCase().trim() === cleanUser &&
+      ['CONNECTING', 'LOGGED_IN', 'SPAWNED', 'RECONNECTING'].includes(currentById.state)
+    ) {
+      // WebSocket reconnects or repeated UI actions may replay START_BOT while
+      // this account is already connecting. Keep its live client/retry timer;
+      // closing it here can provoke FreshSMP's duplicate-login protection.
+      console.log(chalk.gray(`[BotManager] Ignoring duplicate start for ${config.username}; existing session is ${currentById.state}.`));
+      return currentById;
+    }
 
     // 1. Ensure any existing bot with the same ID OR the same Minecraft username is terminated first
     for (const [bId, existing] of Array.from(this.bots.entries())) {
