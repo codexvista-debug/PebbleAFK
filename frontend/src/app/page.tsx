@@ -906,6 +906,9 @@ export default function Home() {
     const diagnostic = rawDiagnostic && (!connectedAt || rawDiagnostic.phaseSince >= connectedAt - 1_000)
       ? rawDiagnostic
       : undefined;
+    const diagnosticSessionSince = diagnostic?.phase === 'lifesteal'
+      ? diagnostic.lifestealSessionStartedAt ?? diagnostic.phaseSince
+      : undefined;
     const bossBar = bossBarsByBot[botId];
     const observedAt = freshSmpBossbarSinceRef.current[botId];
     const bossBarConfirmed = Boolean(bossBar?.visible && /\b(?:afk|reward)\b/i.test((bossBar.title || '').replace(/§[0-9a-fk-or]/gi, '')));
@@ -916,20 +919,19 @@ export default function Home() {
         (/\blifesteal\b/i.test(message.sender || '') && /\btimed\s*out\b|\btimeout\b/i.test(text));
       return isTimeout ? Math.max(latest, message.timestamp) : latest;
     }, 0);
-    const diagnosticStable = diagnostic?.phase === 'lifesteal' && typeof diagnostic.lifestealSessionStartedAt === 'number' &&
-      nowTick - diagnostic.lifestealSessionStartedAt >= 60_000;
+    const diagnosticStable = typeof diagnosticSessionSince === 'number' && nowTick - diagnosticSessionSince >= 60_000;
     const bossBarStable = bossBarConfirmed && typeof observedAt === 'number' && nowTick - observedAt >= 60_000;
     // Either signal can confirm the current subserver session. In particular,
     // a live AFK/reward bar supersedes an out-of-date "lobby" diagnostic.
     const stableSince = diagnosticStable && bossBarStable
-      ? Math.min(diagnostic!.lifestealSessionStartedAt!, observedAt!)
+      ? Math.min(diagnosticSessionSince!, observedAt!)
       : diagnosticStable
-        ? diagnostic!.lifestealSessionStartedAt
+        ? diagnosticSessionSince
         : bossBarStable
           ? observedAt
           : undefined;
     const recentTimeout = recentTimeoutAt > 0 && (!stableSince || recentTimeoutAt >= stableSince);
-    const sessionConfirmed = diagnostic?.phase === 'lifesteal' || bossBarConfirmed;
+    const sessionConfirmed = typeof diagnosticSessionSince === 'number' || bossBarConfirmed;
     const stable = Boolean(isConnected && !recentTimeout && typeof stableSince === 'number');
     const label = !isConnected
       ? 'OFFLINE'
@@ -2100,6 +2102,16 @@ export default function Home() {
                       {daemonStatus === 'AUTHENTICATED' ? `${deviceSessions.filter((session) => session.connected).length} online · ${deviceSessions.length} known` : 'Daemon reconnecting'}
                     </span>
                   </div>
+                  {deviceSessions.some((session) => session.label === 'Browser session') && (
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-5 py-3 border-b border-amber-100 bg-amber-50 text-amber-950">
+                      <p className="min-w-0 flex-1 text-[11px] leading-relaxed">
+                        “Browser session” entries are anonymous records created by an older daemon when admin sockets reconnected. They are not eleven live sockets or evidence of cross-account access; only {deviceSessions.filter((session) => session.connected).length} registered session(s) are online. Update the Termux daemon once to purge the old records; admin reconnects now reuse one stable ID.
+                      </p>
+                      <button type="button" onClick={() => setActiveTab('termux_stream')} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 py-2 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100">
+                        <Terminal className="h-3.5 w-3.5" /> Open Termux Stream
+                      </button>
+                    </div>
+                  )}
                   {daemonStatus !== 'AUTHENTICATED' && (
                     <div className="px-5 py-3 flex items-center justify-between gap-3 border-b border-slate-100">
                       <p className="text-xs text-slate-500">Session controls are unavailable until the daemon socket reconnects.</p>

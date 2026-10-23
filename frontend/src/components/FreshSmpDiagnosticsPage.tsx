@@ -52,8 +52,11 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
           const botId = `${profile.id}__${account.id}`;
           const detail = diagnostics[botId];
           const state = botStates[botId];
-          return detail?.phase === 'lifesteal' && typeof detail.lifestealSessionStartedAt === 'number' &&
-            now - detail.lifestealSessionStartedAt >= 60_000 && (state === 'SPAWNED' || state === 'LOGGED_IN');
+          const sessionStartedAt = detail?.phase === 'lifesteal'
+            ? detail.lifestealSessionStartedAt ?? detail.phaseSince
+            : undefined;
+          return typeof sessionStartedAt === 'number' && now - sessionStartedAt >= 60_000 &&
+            (state === 'SPAWNED' || state === 'LOGGED_IN');
         };
         const unstable = assigned.filter((account) => !isStableInLifesteal(account));
         const stableCount = assigned.length - unstable.length;

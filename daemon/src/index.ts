@@ -270,9 +270,9 @@ wss.on('connection', (ws: WebSocket, req) => {
         const sessionId = typeof parsed.payload.sessionId === 'string' && /^[\w-]{8,100}$/.test(parsed.payload.sessionId)
           ? parsed.payload.sessionId
           : undefined;
-        // Admin and server-to-server sockets do not have a browser session ID;
-        // never invent one here or they pollute the user's known-device list.
-        if (sessionId) {
+        // Admin monitors can send a stable ID for compatibility with older
+        // daemons, but should not appear as a user's browser device here.
+        if (sessionId && parsed.payload.clientType !== 'admin-monitor') {
           registerDeviceSession(
             ws,
             sessionId,

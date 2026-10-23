@@ -165,7 +165,28 @@ export default function ChiefAdminPage() {
   const desiredDaemonsRef = useRef<Map<string, { url: string; owner: string; secret?: string }>>(new Map());
   const daemonRetryTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const daemonRetryAttemptsRef = useRef<Map<string, number>>(new Map());
+  const adminMonitorSessionIdsRef = useRef<Record<string, string>>({});
   const connectDaemonRef = useRef<((info: { url: string; owner: string; secret?: string }) => void) | null>(null);
+
+  const getAdminMonitorSessionId = (owner: string) => {
+    const ownerKey = owner.trim().toLowerCase();
+    if (adminMonitorSessionIdsRef.current[ownerKey]) return adminMonitorSessionIdsRef.current[ownerKey];
+    const storageKey = `pebbleafk_admin_monitor_session_${ownerKey}`;
+    let sessionId = '';
+    try {
+      sessionId = localStorage.getItem(storageKey) || sessionStorage.getItem(storageKey) || '';
+    } catch {}
+    if (!sessionId) {
+      sessionId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    }
+    try { localStorage.setItem(storageKey, sessionId); } catch {
+      try { sessionStorage.setItem(storageKey, sessionId); } catch {}
+    }
+    adminMonitorSessionIdsRef.current[ownerKey] = sessionId;
+    return sessionId;
+  };
 
   // Keep one authenticated, reconnecting admin socket per daemon. All bot and
   // chat updates are keyed by the exact daemon bot ID (server profile + account).
@@ -184,7 +205,7 @@ export default function ChiefAdminPage() {
     const targetTunnels = new Map<string, { url: string; owner: string; secret?: string }>();
 
     tunnels.forEach((t) => {
-      const url = (t.url || '').trim();
+      const url = (t.url || '').trim().replace(/\/+$/, '');
       const owner = (t.username || '').trim().toLowerCase();
       if (url && (url.startsWith('ws://') || url.startsWith('wss://'))) {
         targetTunnels.set(url, {
@@ -196,7 +217,7 @@ export default function ChiefAdminPage() {
     });
 
     accounts.forEach((a) => {
-      const url = (a.daemonUrl || a.registeredTunnel || '').trim();
+      const url = (a.daemonUrl || a.registeredTunnel || '').trim().replace(/\/+$/, '');
       const owner = (a.owner || '').trim().toLowerCase();
       if (url && (url.startsWith('ws://') || url.startsWith('wss://'))) {
         if (!targetTunnels.has(url)) {
@@ -232,6 +253,11 @@ export default function ChiefAdminPage() {
     const connectDaemon = (info: { url: string; owner: string; secret?: string }) => {
       const { url } = info;
       if (!desiredDaemonsRef.current.has(url)) return;
+      const pendingRetry = daemonRetryTimersRef.current.get(url);
+      if (pendingRetry) {
+        clearTimeout(pendingRetry);
+        daemonRetryTimersRef.current.delete(url);
+      }
       const existing = daemonSocketsRef.current.get(url);
       if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
         return;
@@ -247,12 +273,22 @@ export default function ChiefAdminPage() {
         setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'connecting' } }));
 
         ws.onopen = () => {
+          if (daemonSocketsRef.current.get(url) !== ws || !desiredDaemonsRef.current.has(url)) {
+            try { ws.close(); } catch {}
+            return;
+          }
           setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'authenticating' } }));
           ws.send(JSON.stringify({
             type: 'AUTH',
-            payload: { username: info.owner, token: info.secret || '' }
+            payload: {
+              username: info.owner,
+              token: info.secret || '',
+              sessionId: getAdminMonitorSessionId(info.owner),
+              clientType: 'admin-monitor',
+            }
           }));
           authTimer = setTimeout(() => {
+            if (daemonSocketsRef.current.get(url) !== ws) return;
             authFailed = true;
             setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'auth-error', error: 'Daemon did not confirm authentication.' } }));
             try { ws.close(); } catch {}
@@ -266,6 +302,7 @@ export default function ChiefAdminPage() {
         };
 
         ws.onmessage = (event) => {
+          if (daemonSocketsRef.current.get(url) !== ws) return;
           try {
             const data = JSON.parse(event.data);
             if (data.type === 'AUTH_RESULT') {
@@ -419,7 +456,8 @@ export default function ChiefAdminPage() {
         ws.onclose = () => {
           if (pingTimer) clearInterval(pingTimer);
           if (authTimer) clearTimeout(authTimer);
-          if (daemonSocketsRef.current.get(url) === ws) daemonSocketsRef.current.delete(url);
+          if (daemonSocketsRef.current.get(url) !== ws) return;
+          daemonSocketsRef.current.delete(url);
           setDaemonConnections((prev) => ({ ...prev, [url]: authFailed ? { state: 'auth-error', error: prev[url]?.error || 'Daemon authentication failed.' } : { state: 'offline' } }));
           setAccounts((prev) => prev.map((acc) => acc.owner.toLowerCase() === info.owner.toLowerCase() && acc.daemonUrl === url
             ? { ...acc, isConnected: false, connectedAt: undefined, runtimeState: 'UNKNOWN', runtimeReason: 'Daemon connection lost; waiting for the next live sync.' }
@@ -438,7 +476,9 @@ export default function ChiefAdminPage() {
         };
 
         ws.onerror = () => {
-          try { ws.close(); } catch {}
+          if (daemonSocketsRef.current.get(url) === ws) {
+            try { ws.close(); } catch {}
+          }
         };
       } catch {
         setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'offline' } }));
@@ -1765,7 +1805,9 @@ export default function ChiefAdminPage() {
                                   : undefined;
                                 const fallbackAfkSince = freshSmpBossbarSince[`${a.owner.toLowerCase()}::${(a.botId || '').toLowerCase()}`];
                                 const fallbackAfkStable = typeof fallbackAfkSince === 'number' && nowTick - fallbackAfkSince >= 60_000;
-                                const diagnosticSessionSince = diagnostic?.phase === 'lifesteal' ? diagnostic.lifestealSessionStartedAt : undefined;
+                                const diagnosticSessionSince = diagnostic?.phase === 'lifesteal'
+                                  ? diagnostic.lifestealSessionStartedAt ?? diagnostic.phaseSince
+                                  : undefined;
                                 const stableSince = typeof diagnosticSessionSince === 'number' && typeof fallbackAfkSince === 'number'
                                   ? Math.min(diagnosticSessionSince, fallbackAfkSince)
                                   : typeof diagnosticSessionSince === 'number'
