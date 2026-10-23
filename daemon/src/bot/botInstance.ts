@@ -270,6 +270,8 @@ export class PebbleBotInstance {
   private shouldProbeVersionOnReconnect: boolean = false;
   private joinCommandTimer: NodeJS.Timeout | null = null;
   private joinCommandClient: any = null;
+  private subserverJoinCommandTimer: NodeJS.Timeout | null = null;
+  private subserverJoinCommandClient: any = null;
   private isInSubserver: boolean = false;
   private isSubserverQueueActive: boolean = false;
   private lastQueueStatusLogAt: number = 0;
@@ -287,6 +289,7 @@ export class PebbleBotInstance {
   private originalPort: number;
   private isTransferring: boolean = false;
   private hasTransferredToFreshSmpSubserver: boolean = false;
+  private hasTransferredToSubserver: boolean = false;
   private hasSpawnedPosition: boolean = false;
   private runtimeEntityId: bigint | null = null;
   private lastServerNotice: string = '';
@@ -347,7 +350,13 @@ export class PebbleBotInstance {
   }
 
   private setFreshSmpPhase(phase: FreshSmpDiagnosticPhase) {
-    if (!this.isFreshSmpProfile() || this.freshSmpPhase === phase) return;
+    if (!this.isFreshSmpProfile()) return;
+    if (phase === 'lobby') {
+      this.hasTransferredToFreshSmpSubserver = false;
+      this.hasTransferredToSubserver = false;
+      this.cancelSubserverJoinCommand();
+    }
+    if (this.freshSmpPhase === phase) return;
     this.freshSmpPhase = phase;
     this.freshSmpPhaseSince = Date.now();
     this.publishFreshSmpDiagnostics();
@@ -706,6 +715,7 @@ export class PebbleBotInstance {
         this.currentVersionCandidate = null;
         SERVER_VERSION_CACHE.set(cleanHost, targetVersion);
         this.scheduleJoinCommand(client);
+        this.scheduleSubserverJoinCommand(client);
 
         // Start Bedrock authoritative input keepalive loops
         this.clientTick = 0n;
@@ -891,6 +901,7 @@ export class PebbleBotInstance {
         this.handleSystemMessage(`🔄 Server transferring to subserver ${targetHost}:${targetPort}...`);
 
         this.isTransferring = true;
+        this.hasTransferredToSubserver = true;
         if (this.isFreshSmpProfile()) this.hasTransferredToFreshSmpSubserver = true;
         this.cleanup();
         this.client = null;
@@ -1214,6 +1225,39 @@ export class PebbleBotInstance {
     this.triggerJoinCommandRetry(delaySeconds * 1000);
   }
 
+  private cancelSubserverJoinCommand() {
+    if (this.subserverJoinCommandTimer) {
+      clearTimeout(this.subserverJoinCommandTimer);
+      this.subserverJoinCommandTimer = null;
+    }
+    this.subserverJoinCommandClient = null;
+  }
+
+  private scheduleSubserverJoinCommand(client: any) {
+    if (!this.hasTransferredToSubserver || this.subserverJoinCommandClient === client) return;
+    this.cancelSubserverJoinCommand();
+
+    const settings = this.config.settings;
+    const configuredCommand = settings?.subserverJoinCommand?.trim().slice(0, 256) || '';
+    if (settings?.subserverJoinCommandEnabled !== true || !configuredCommand) return;
+
+    const command = configuredCommand.startsWith('/') ? configuredCommand : `/${configuredCommand}`;
+    const delaySeconds = Math.min(300, Math.max(0, Number(settings.subserverJoinCommandDelay ?? 5) || 0));
+    this.subserverJoinCommandClient = client;
+    this.logActivity('status', `Subserver command (${command}) scheduled ${delaySeconds}s after transfer spawn.`);
+
+    this.subserverJoinCommandTimer = setTimeout(() => {
+      this.subserverJoinCommandTimer = null;
+      this.subserverJoinCommandClient = null;
+      if (this.client !== client || !this.hasTransferredToSubserver) return;
+      if (this.isFreshSmpProfile() && this.freshSmpPhase === 'lobby') return;
+      if (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN') return;
+
+      this.logActivity('command', `Running subserver join command: ${command}`);
+      this.sendChat(command);
+    }, delaySeconds * 1000);
+  }
+
   private startTickSyncLoop(client: any) {
     if (this.tickSyncInterval) clearInterval(this.tickSyncInterval);
     // Modern Bedrock protocols (1.20.80+) do not use client tick_sync; bedrock-protocol manages this internally when needed.
@@ -1332,6 +1376,12 @@ export class PebbleBotInstance {
       type: 'TELEMETRY',
       payload,
     });
+  }
+
+  public syncTelemetry() {
+    if (this.state === 'SPAWNED' || this.state === 'LOGGED_IN') {
+      this.emitTelemetry();
+    }
   }
 
   public pushChat(chatMsg: any) {
@@ -1955,6 +2005,7 @@ export class PebbleBotInstance {
       clearTimeout(this.joinCommandTimer);
       this.joinCommandTimer = null;
     }
+    this.cancelSubserverJoinCommand();
     this.joinCommandClient = null;
     this.isSubserverQueueActive = false;
     this.runtimeEntityId = null;

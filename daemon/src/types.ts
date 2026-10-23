@@ -14,6 +14,9 @@ export interface BotSettings {
   joinCommandEnabled?: boolean;
   joinCommand?: string;
   joinCommandDelay?: number;
+  subserverJoinCommandEnabled?: boolean;
+  subserverJoinCommand?: string;
+  subserverJoinCommandDelay?: number;
 }
 
 export interface BotConfig {

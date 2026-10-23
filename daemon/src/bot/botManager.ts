@@ -243,6 +243,7 @@ export class BotManager {
               port: instance.config.port,
             },
           });
+          instance.syncTelemetry();
 
           const freshSmpDiagnostics = instance.getFreshSmpDiagnostics();
           if (freshSmpDiagnostics) {

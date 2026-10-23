@@ -298,6 +298,19 @@ export default function Home() {
     }
   };
 
+  const getFreshSmpStatusBadge = (stable: boolean, phase?: string) => {
+    const label = stable ? 'STABLE' : phase === 'lobby' ? 'IN LOBBY' : 'UNSTABLE';
+    const stableClass = 'bg-emerald-100 text-emerald-800 border-emerald-300 shadow-2xs group-hover:bg-emerald-200';
+    const lobbyClass = 'bg-slate-100 text-slate-600 border-slate-300/80 shadow-2xs group-hover:bg-slate-200';
+    const unstableClass = 'bg-rose-100 text-rose-700 border-rose-200 shadow-2xs group-hover:bg-rose-200';
+    return (
+      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border transition ${stable ? stableClass : phase === 'lobby' ? lobbyClass : unstableClass}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${stable ? 'bg-emerald-500' : phase === 'lobby' ? 'bg-slate-400' : 'bg-rose-500'}`} />
+        {label}
+      </span>
+    );
+  };
+
   // Daemon Account Verification Callback
   const handleAccountVerified = useCallback(
     (payload: { botId: string; email: string; ign: string; uuid?: string; avatarUrl?: string }) => {
@@ -531,8 +544,8 @@ export default function Home() {
       if (Array.isArray(remoteAccs)) {
         const cleanAccs = remoteAccs.filter((a) => !a.ign?.startsWith('bedrock_user_') && !a.username?.startsWith('bedrock_user_'));
         setAccounts((prev) => {
-          const prevKey = prev.map((a) => `${a.id}:${a.ign}:${a.verified}`).join('|');
-          const newKey = cleanAccs.map((a) => `${a.id}:${a.ign}:${a.verified}`).join('|');
+          const prevKey = JSON.stringify(prev);
+          const newKey = JSON.stringify(cleanAccs);
           if (prevKey !== newKey) {
             if (typeof window !== 'undefined') {
               localStorage.setItem(`pebbleafk_accounts_${user.toLowerCase()}`, JSON.stringify(cleanAccs));
@@ -547,8 +560,8 @@ export default function Home() {
       const remoteServers = await loadServersFromSupabase(user);
       if (Array.isArray(remoteServers) && remoteServers.length > 0) {
         setServers((prev) => {
-          const prevKey = prev.map((s) => `${s.id}:${(s.assignedAccountIds || []).join(',')}:${s.name}`).join('|');
-          const newKey = remoteServers.map((s) => `${s.id}:${(s.assignedAccountIds || []).join(',')}:${s.name}`).join('|');
+          const prevKey = JSON.stringify(prev);
+          const newKey = JSON.stringify(remoteServers);
           if (prevKey !== newKey) {
             if (typeof window !== 'undefined') {
               localStorage.setItem(`pebbleafk_servers_${user.toLowerCase()}`, JSON.stringify(remoteServers));
@@ -574,7 +587,7 @@ export default function Home() {
       if (typeof document === 'undefined' || document.visibilityState === 'visible') {
         syncRemoteState(currentUser);
       }
-    }, 6000);
+    }, 3000);
 
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -813,6 +826,10 @@ export default function Home() {
 
   // Active selected server profile
   const activeServer = servers.find((s) => s.id === activeServerId) || servers[0] || null;
+  const activeServerIsFreshSmp = Boolean(activeServer && /freshsmp/i.test(`${activeServer.name} ${activeServer.serverHost}`));
+  const subserverJoinCommandEnabled = activeServer?.settings?.subserverJoinCommandEnabled ?? activeServerIsFreshSmp;
+  const subserverJoinCommand = activeServer?.settings?.subserverJoinCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommand : DEFAULT_BOT_SETTINGS.subserverJoinCommand);
+  const subserverJoinCommandDelay = activeServer?.settings?.subserverJoinCommandDelay ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay : DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay);
 
   const [gatewayStatus, setGatewayStatus] = useState<{ online: boolean; checking: boolean; version?: string } | null>(null);
 
@@ -2506,7 +2523,13 @@ export default function Home() {
                                     : srvTel && typeof srvTel.connectedAt === 'number' && srvTel.connectedAt > 0
                                     ? Math.max(0, Math.floor((nowTick - srvTel.connectedAt) / 1000))
                                     : 0;
-                                const accountUptime = (daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0;
+                                const freshSmpDiagnostic = activeServerIsFreshSmp ? freshSmpDiagnostics[botId] : undefined;
+                                const lifestealStartedAt = freshSmpDiagnostic?.lifestealSessionStartedAt;
+                                const isFreshSmpStable = Boolean(isConnected && freshSmpDiagnostic?.phase === 'lifesteal' &&
+                                  typeof lifestealStartedAt === 'number' && nowTick - lifestealStartedAt >= 60_000);
+                                const accountUptime = activeServerIsFreshSmp
+                                  ? (isFreshSmpStable && typeof lifestealStartedAt === 'number' ? Math.floor((nowTick - lifestealStartedAt - 60_000) / 1000) : 0)
+                                  : ((daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0);
 
                                 return (
                                   <div
@@ -2594,11 +2617,13 @@ export default function Home() {
                                           className="inline-flex items-center cursor-pointer active:scale-95 transition"
                                           title={isConnected ? 'Click to disconnect' : 'Click to connect'}
                                         >
-                                          {getStatusBadge(botState as BotLifecycleState)}
+                                          {activeServerIsFreshSmp && isConnected
+                                            ? getFreshSmpStatusBadge(isFreshSmpStable, freshSmpDiagnostic?.phase)
+                                            : getStatusBadge(botState as BotLifecycleState)}
                                         </button>
 
                                         {/* Live Uptime */}
-                                        {isConnected ? (
+                                        {isConnected && (!activeServerIsFreshSmp || isFreshSmpStable) ? (
                                           <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-mono text-[11px] font-bold">
                                             <Clock className="w-3 h-3 text-emerald-600 shrink-0" />
                                             <span>{formatUptime(accountUptime)}</span>
@@ -2685,7 +2710,13 @@ export default function Home() {
                                         : srvTel && typeof srvTel.connectedAt === 'number' && srvTel.connectedAt > 0
                                         ? Math.max(0, Math.floor((nowTick - srvTel.connectedAt) / 1000))
                                         : 0;
-                                    const accountUptime = (daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0;
+                                    const freshSmpDiagnostic = activeServerIsFreshSmp ? freshSmpDiagnostics[botId] : undefined;
+                                    const lifestealStartedAt = freshSmpDiagnostic?.lifestealSessionStartedAt;
+                                    const isFreshSmpStable = Boolean(isConnected && freshSmpDiagnostic?.phase === 'lifesteal' &&
+                                      typeof lifestealStartedAt === 'number' && nowTick - lifestealStartedAt >= 60_000);
+                                    const accountUptime = activeServerIsFreshSmp
+                                      ? (isFreshSmpStable && typeof lifestealStartedAt === 'number' ? Math.floor((nowTick - lifestealStartedAt - 60_000) / 1000) : 0)
+                                      : ((daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0);
 
                                     return (
                                       <tr
@@ -2767,11 +2798,13 @@ export default function Home() {
                                                 : `Offline • Click to connect @${acc.ign || acc.username}`
                                             }
                                           >
-                                            {getStatusBadge(botState as BotLifecycleState)}
+                                            {activeServerIsFreshSmp && isConnected
+                                              ? getFreshSmpStatusBadge(isFreshSmpStable, freshSmpDiagnostic?.phase)
+                                              : getStatusBadge(botState as BotLifecycleState)}
                                           </button>
                                         </td>
                                         <td className="p-3">
-                                          {isConnected ? (
+                                          {isConnected && (!activeServerIsFreshSmp || isFreshSmpStable) ? (
                                             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-mono text-xs font-bold shadow-2xs">
                                               <Clock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                                               <span>{formatUptime(accountUptime)}</span>
@@ -3742,6 +3775,53 @@ export default function Home() {
                                 </button>
                               </div>
                             </div>
+
+                            {activeServerIsFreshSmp && (
+                              <div className="flex flex-col gap-3 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                                <div className="flex-1 pr-4">
+                                  <label className="text-xs font-bold text-slate-800 block">Command on subserver join</label>
+                                  <span className="text-[11px] text-slate-400 block mt-0.5">
+                                    Optional command after FreshSMP transfers the bot into Lifesteal. Delay starts after the subserver spawn.
+                                  </span>
+                                </div>
+                                <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
+                                  <input
+                                    type="text"
+                                    value={subserverJoinCommand}
+                                    onChange={(e) => handleUpdateServerSetting('subserverJoinCommand', e.target.value)}
+                                    disabled={!subserverJoinCommandEnabled}
+                                    placeholder="/warp afk"
+                                    aria-label="Command to run after joining a subserver"
+                                    className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400"
+                                  />
+                                  <div className="flex shrink-0 items-center bg-slate-50 border border-slate-200 rounded-xl px-2 py-1" title="Delay after subserver spawn">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      max={300}
+                                      value={subserverJoinCommandDelay}
+                                      onChange={(e) => {
+                                        const seconds = Math.min(300, Math.max(0, parseInt(e.target.value, 10) || 0));
+                                        handleUpdateServerSetting('subserverJoinCommandDelay', seconds);
+                                      }}
+                                      className="w-8 bg-transparent text-xs font-mono font-bold text-slate-900 text-center focus:outline-none"
+                                      aria-label="Delay before running subserver join command in seconds"
+                                    />
+                                    <span className="text-[11px] font-bold text-slate-400 select-none ml-1">sec</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={subserverJoinCommandEnabled}
+                                    aria-label="Enable command on subserver join"
+                                    onClick={() => handleUpdateServerSetting('subserverJoinCommandEnabled', !subserverJoinCommandEnabled)}
+                                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${subserverJoinCommandEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
+                                  >
+                                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${subserverJoinCommandEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
 
                             {/* Auto reconnect delay */}
                             <div className="flex items-center justify-between pt-3">

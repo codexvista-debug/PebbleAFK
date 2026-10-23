@@ -19,11 +19,34 @@ export function updateTermuxNotification(botManager: BotManager) {
   try {
     const bots = botManager.getAllBots();
     const onlineBots = bots.filter((b) => b.state === 'SPAWNED' || b.state === 'LOGGED_IN');
+    const freshSmpBots = bots.flatMap((bot) => {
+      const diagnostics = bot.getFreshSmpDiagnostics();
+      return diagnostics ? [{ bot, diagnostics }] : [];
+    });
+    const freshSmpOnline = freshSmpBots.filter(({ bot }) => bot.state === 'SPAWNED' || bot.state === 'LOGGED_IN');
+    const stableFreshSmp = freshSmpOnline.filter(({ diagnostics }) =>
+      diagnostics.phase === 'lifesteal' &&
+      typeof diagnostics.lifestealSessionStartedAt === 'number' &&
+      Date.now() - diagnostics.lifestealSessionStartedAt >= 60_000
+    );
 
     let title = 'PebbleAFK • Standby';
     let content = '💤 0 bots online | Standby for server connection';
 
-    if (onlineBots.length > 0) {
+    if (freshSmpBots.length > 0 && freshSmpOnline.length > 0) {
+      const inLobby = freshSmpOnline.filter(({ diagnostics }) => diagnostics.phase === 'lobby').length;
+      const unstable = freshSmpOnline.length - stableFreshSmp.length - inLobby;
+      const highestUptime = stableFreshSmp.reduce((longest, { diagnostics }) => {
+        const startedAt = diagnostics.lifestealSessionStartedAt || Date.now();
+        return Math.max(longest, Math.floor((Date.now() - startedAt - 60_000) / 1000));
+      }, 0);
+      const statusParts = [`${stableFreshSmp.length} stable`];
+      if (inLobby > 0) statusParts.push(`${inLobby} in lobby`);
+      if (unstable > 0) statusParts.push(`${unstable} unstable`);
+
+      title = 'PebbleAFK • FreshSMP';
+      content = `🟢 ${statusParts.join(' · ')}${stableFreshSmp.length > 0 ? ` | Uptime: ${formatUptime(highestUptime)}` : ''}`;
+    } else if (onlineBots.length > 0) {
       // Find server with connected bots & find highest uptime
       let bestHost = onlineBots[0].config.host || 'Bedrock Server';
       let highestUptime = 0;

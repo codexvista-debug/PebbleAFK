@@ -225,6 +225,13 @@ wss.on('connection', (ws: WebSocket, req) => {
 
   ws.on('pong', () => {
     missedHeartbeats = 0;
+    const sessionId = socketSessions.get(ws);
+    const session = sessionId ? deviceSessions.get(sessionId) : undefined;
+    if (session) {
+      session.lastSeenAt = Date.now();
+      session.connected = true;
+      publishDeviceSessions();
+    }
   });
 
   ws.on('message', (data: Buffer | string) => {

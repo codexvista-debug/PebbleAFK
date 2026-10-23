@@ -14,6 +14,9 @@ export interface BotSettings {
   joinCommandEnabled?: boolean;
   joinCommand?: string;
   joinCommandDelay?: number;
+  subserverJoinCommandEnabled?: boolean;
+  subserverJoinCommand?: string;
+  subserverJoinCommandDelay?: number;
 }
 
 /** Defaults applied to newly created server profiles. FreshSMP profiles also
@@ -34,6 +37,9 @@ export const DEFAULT_BOT_SETTINGS: BotSettings = {
   joinCommandEnabled: false,
   joinCommand: '',
   joinCommandDelay: 3,
+  subserverJoinCommandEnabled: false,
+  subserverJoinCommand: '',
+  subserverJoinCommandDelay: 5,
 };
 
 export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
@@ -43,6 +49,9 @@ export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
   joinCommandEnabled: true,
   joinCommand: '/lifesteal',
   joinCommandDelay: 10,
+  subserverJoinCommandEnabled: true,
+  subserverJoinCommand: '/warp afk',
+  subserverJoinCommandDelay: 5,
 };
 
 export const MAX_BEDROCK_ACCOUNTS = 50;
