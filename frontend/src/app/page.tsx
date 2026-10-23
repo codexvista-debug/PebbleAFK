@@ -4042,9 +4042,9 @@ export default function Home() {
 
                                 <div className="flex flex-col gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
                                   <div className="flex-1 pr-4">
-                                    <label className="text-xs font-bold text-slate-800 block">Pay main account when balance reaches 40k</label>
+                                    <label className="text-xs font-bold text-slate-800 block">Pay main account when balance reaches 10k</label>
                                     <span className="text-[11px] text-slate-400 block mt-0.5">
-                                      Checks /bal every 10 minutes while stable. At 40k+, sends /pay 40k twice, 1–10 seconds apart. Off until enabled.
+                                      Checks /bal every 2 minutes while stable. At 10k+, sends /pay 10k twice, 1–10 seconds apart. Off until enabled.
                                     </span>
                                   </div>
                                   <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">

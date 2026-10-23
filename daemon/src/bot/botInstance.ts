@@ -70,7 +70,8 @@ const SERVER_VERSION_CACHE: Map<string, string> = new Map([
   ['freshsmp.fun', '1.26.51'],
   ['play.freshsmp.fun', '1.26.51'],
 ]);
-const FRESH_SMP_PAYOUT_THRESHOLD = 40_000;
+const FRESH_SMP_BALANCE_CHECK_INTERVAL_MS = 2 * 60_000;
+const FRESH_SMP_PAYOUT_THRESHOLD = 10_000;
 const FRESH_SMP_PAYOUT_AMOUNT = `${FRESH_SMP_PAYOUT_THRESHOLD / 1_000}k`;
 const SERVER_ENDPOINT_CURSORS = new Map<string, number>();
 // Once a Bedrock edge has completed the full game handshake, prefer that edge
@@ -474,7 +475,7 @@ export class PebbleBotInstance {
 
     const now = Date.now();
     this.freshSmpNextHourlyCommandAt = this.hasFreshSmpHourlyCommand() ? now + 60 * 60_000 : 0;
-    this.freshSmpNextBalanceCheckAt = this.hasFreshSmpBalancePay() ? now + 10 * 60_000 : 0;
+    this.freshSmpNextBalanceCheckAt = this.hasFreshSmpBalancePay() ? now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS : 0;
     this.freshSmpAutomationInterval = setInterval(() => this.tickFreshSmpAutomations(), 5_000);
     this.freshSmpAutomationInterval.unref?.();
   }
@@ -518,9 +519,9 @@ export class PebbleBotInstance {
       return;
     }
 
-    if (!this.freshSmpNextBalanceCheckAt) this.freshSmpNextBalanceCheckAt = now + 10 * 60_000;
+    if (!this.freshSmpNextBalanceCheckAt) this.freshSmpNextBalanceCheckAt = now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS;
     if (now >= this.freshSmpNextBalanceCheckAt) {
-      this.freshSmpNextBalanceCheckAt = now + 10 * 60_000;
+      this.freshSmpNextBalanceCheckAt = now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS;
       this.freshSmpBalanceCheckPendingUntil = now + 60_000;
       this.logActivity('command', 'FreshSMP balance automation: checking balance with /bal.');
       this.sendChat('/bal');
@@ -542,7 +543,7 @@ export class PebbleBotInstance {
       this.freshSmpNextHourlyCommandAt = this.hasFreshSmpHourlyCommand() ? now + 60 * 60_000 : 0;
     }
     if (balanceChanged) {
-      this.freshSmpNextBalanceCheckAt = this.hasFreshSmpBalancePay() ? now + 10 * 60_000 : 0;
+      this.freshSmpNextBalanceCheckAt = this.hasFreshSmpBalancePay() ? now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS : 0;
       this.freshSmpBalanceCheckPendingUntil = 0;
       if (previous.freshSmpBalancePayUsername !== this.config.settings.freshSmpBalancePayUsername) {
         this.freshSmpPaidForCurrentThreshold = false;
