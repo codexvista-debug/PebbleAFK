@@ -159,6 +159,7 @@ export default function ChiefAdminPage() {
   // Live Chat Map for Connected Bots: key -> array of up to 25 ChatMessage items
   const [liveChats, setLiveChats] = useState<Record<string, Array<{ text: string; raw?: string; message?: string; formatted?: string; formattedText?: string; sender?: string; id?: string; type?: string; timestamp: number }>>>({});
   const [freshSmpDiagnostics, setFreshSmpDiagnostics] = useState<Record<string, FreshSmpDiagnosticState>>({});
+  const [freshSmpBossbarSince, setFreshSmpBossbarSince] = useState<Record<string, number>>({});
   const [daemonConnections, setDaemonConnections] = useState<Record<string, { state: 'connecting' | 'authenticating' | 'connected' | 'offline' | 'auth-error'; lastSeenAt?: number; error?: string }>>({});
   const daemonSocketsRef = useRef<Map<string, WebSocket>>(new Map());
   const desiredDaemonsRef = useRef<Map<string, { url: string; owner: string; secret?: string }>>(new Map());
@@ -363,6 +364,21 @@ export default function ChiefAdminPage() {
               if (diagnostic?.botId) {
                 const diagnosticKey = `${info.owner.toLowerCase()}::${diagnostic.botId.toLowerCase()}`;
                 setFreshSmpDiagnostics((prev) => ({ ...prev, [diagnosticKey]: diagnostic }));
+              }
+            } else if (data.type === 'BOSS_BAR') {
+              const bossBar = data.payload;
+              if (bossBar?.botId) {
+                const botId = String(bossBar.botId).toLowerCase();
+                const bossBarKey = `${info.owner.toLowerCase()}::${botId}`;
+                const title = String(bossBar.title || '').replace(/§[0-9a-fk-or]/gi, '');
+                const confirmsAfkZone = Boolean(bossBar.visible && /\b(?:afk|reward)\b/i.test(title));
+                setFreshSmpBossbarSince((prev) => {
+                  if (confirmsAfkZone) return prev[bossBarKey] ? prev : { ...prev, [bossBarKey]: Date.now() };
+                  if (!prev[bossBarKey]) return prev;
+                  const next = { ...prev };
+                  delete next[bossBarKey];
+                  return next;
+                });
               }
             } else if (data.type === 'CHAT_MESSAGE') {
               const msg = data.payload;
@@ -1714,6 +1730,13 @@ export default function ChiefAdminPage() {
                                 const cleanIgn = a.ign.replace(/^@/, '').trim();
                                 const chatKey = `${a.owner.toLowerCase()}::${(a.botId || '').toLowerCase()}`;
                                 const botChats = liveChats[chatKey] || [];
+                                const recentLifestealTimeoutAt = botChats.reduce<number>((latest, message) => {
+                                  if (!message.timestamp || nowTick - message.timestamp > 120_000 || nowTick < message.timestamp) return latest;
+                                  const text = `${message.text || ''} ${message.raw || ''} ${message.formattedText || ''}`;
+                                  const isTimeout = (/\blifesteal\b/i.test(message.sender || '') && /\btimed\s*out\b|\btimeout\b/i.test(text)) ||
+                                    /(?:<\s*lifesteal\s*>|\blifesteal\b).{0,100}\b(?:timed\s*out|timeout)\b/i.test(text);
+                                  return isTimeout ? Math.max(latest, message.timestamp) : latest;
+                                }, 0);
                                 const runtimeState = (a.runtimeState || (a.isConnected ? 'SPAWNED' : 'DISCONNECTED')).toUpperCase();
                                 const stateLabel = runtimeState === 'SPAWNED' || runtimeState === 'LOGGED_IN'
                                   ? 'Connected'
@@ -1736,24 +1759,45 @@ export default function ChiefAdminPage() {
                                       ? 'bg-rose-100 text-rose-700 border-rose-200'
                                       : 'bg-slate-100 text-slate-600 border-slate-200';
                                 const isFreshSmp = /freshsmp/i.test(`${a.serverName || ''} ${a.serverHost || ''}`);
-                                const diagnostic = freshSmpDiagnostics[`${a.owner.toLowerCase()}::${(a.botId || '').toLowerCase()}`];
-                                const lifestealStartedAt = diagnostic?.lifestealSessionStartedAt;
+                                const rawDiagnostic = freshSmpDiagnostics[`${a.owner.toLowerCase()}::${(a.botId || '').toLowerCase()}`];
+                                const diagnostic = rawDiagnostic && (!a.connectedAt || rawDiagnostic.phaseSince >= a.connectedAt - 1_000)
+                                  ? rawDiagnostic
+                                  : undefined;
+                                const fallbackAfkSince = freshSmpBossbarSince[`${a.owner.toLowerCase()}::${(a.botId || '').toLowerCase()}`];
+                                const fallbackAfkStable = typeof fallbackAfkSince === 'number' && nowTick - fallbackAfkSince >= 60_000;
+                                const diagnosticSessionSince = diagnostic?.phase === 'lifesteal' ? diagnostic.lifestealSessionStartedAt : undefined;
+                                const stableSince = typeof diagnosticSessionSince === 'number' && typeof fallbackAfkSince === 'number'
+                                  ? Math.min(diagnosticSessionSince, fallbackAfkSince)
+                                  : typeof diagnosticSessionSince === 'number'
+                                    ? diagnosticSessionSince
+                                    : fallbackAfkSince;
+                                const isRecentLifestealTimeout = recentLifestealTimeoutAt > 0 &&
+                                  (!stableSince || recentLifestealTimeoutAt >= stableSince);
                                 const freshSmpStable = Boolean(
                                   a.isConnected &&
-                                  diagnostic?.phase === 'lifesteal' &&
-                                  typeof lifestealStartedAt === 'number' &&
-                                  nowTick - lifestealStartedAt >= 60_000
+                                  !isRecentLifestealTimeout &&
+                                  ((typeof diagnosticSessionSince === 'number' && nowTick - diagnosticSessionSince >= 60_000) || fallbackAfkStable)
                                 );
-                                const freshSmpLabel = freshSmpStable
-                                  ? 'STABLE'
-                                  : diagnostic?.phase === 'lobby'
-                                    ? 'IN LOBBY'
-                                    : 'UNSTABLE';
+                                const freshSmpLabel = !a.isConnected
+                                  ? 'OFFLINE'
+                                  : freshSmpStable
+                                    ? 'STABLE'
+                                    : isRecentLifestealTimeout
+                                      ? 'UNSTABLE'
+                                    : typeof diagnosticSessionSince === 'number' || typeof fallbackAfkSince === 'number' || diagnostic?.phase === 'lifesteal'
+                                        ? 'CHECKING'
+                                        : diagnostic?.phase === 'lobby'
+                                          ? 'IN LOBBY'
+                                          : diagnostic?.phase === 'queue'
+                                            ? typeof diagnostic.lifestealAttemptStartedAt === 'number' && nowTick - diagnostic.lifestealAttemptStartedAt >= 60_000 ? 'UNSTABLE' : 'CHECKING'
+                                            : 'NO DATA';
                                 const freshSmpStyle = freshSmpStable
                                   ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                  : freshSmpLabel === 'IN LOBBY'
+                                  : freshSmpLabel === 'IN LOBBY' || freshSmpLabel === 'OFFLINE' || freshSmpLabel === 'NO DATA'
                                     ? 'bg-slate-100 text-slate-600 border-slate-200'
-                                    : 'bg-rose-100 text-rose-700 border-rose-200';
+                                    : freshSmpLabel === 'CHECKING'
+                                      ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                      : 'bg-rose-100 text-rose-700 border-rose-200';
 
                                 return (
                                   <div
@@ -1798,7 +1842,15 @@ export default function ChiefAdminPage() {
                                         {isFreshSmp && (
                                           <span
                                             className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[9px] font-black border ${freshSmpStyle}`}
-                                            title={diagnostic ? `FreshSMP phase: ${diagnostic.phase}. Stability requires 60 seconds in /lifesteal.` : 'Waiting for live FreshSMP diagnostics.'}
+                                            title={diagnostic
+                                              ? `FreshSMP phase: ${diagnostic.phase}. Stability requires 60 seconds in /lifesteal.`
+                                              : freshSmpLabel === 'NO DATA'
+                                                ? 'No current FreshSMP subserver signal or confirmed AFK reward boss bar is available. Update the user’s Termux daemon for precise status.'
+                                                : freshSmpLabel === 'CHECKING'
+                                                  ? 'FreshSMP subserver evidence detected; waiting 60 seconds to confirm stability.'
+                                                  : isRecentLifestealTimeout
+                                                    ? 'This account recently received a Lifesteal timeout message.'
+                                                    : 'Stability requires a confirmed 60-second FreshSMP /lifesteal session.'}
                                           >
                                             {freshSmpLabel}
                                           </span>
