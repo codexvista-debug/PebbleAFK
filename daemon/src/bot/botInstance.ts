@@ -73,6 +73,7 @@ const SERVER_VERSION_CACHE: Map<string, string> = new Map([
 const FRESH_SMP_BALANCE_CHECK_INTERVAL_MS = 2 * 60_000;
 const FRESH_SMP_PAYOUT_THRESHOLD = 10_000;
 const FRESH_SMP_PAYOUT_AMOUNT = `${FRESH_SMP_PAYOUT_THRESHOLD / 1_000}k`;
+const FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS = 7 * 60_000;
 const SERVER_ENDPOINT_CURSORS = new Map<string, number>();
 // Once a Bedrock edge has completed the full game handshake, prefer that edge
 // for other accounts on the same daemon/host. Ping responses alone do not
@@ -254,6 +255,7 @@ export class PebbleBotInstance {
   private client: any = null;
   private startInProgress: boolean = false;
   private startGeneration: number = 0;
+  private hasAppliedInitialJoinDelay: boolean = false;
   private connectStartTime: number = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private tickSyncInterval: NodeJS.Timeout | null = null;
@@ -476,7 +478,7 @@ export class PebbleBotInstance {
     if (!this.hasFreshSmpHourlyCommand() && !this.hasFreshSmpBalancePay()) return;
 
     const now = Date.now();
-    this.freshSmpNextHourlyCommandAt = this.hasFreshSmpHourlyCommand() ? now + 60 * 60_000 : 0;
+    this.freshSmpNextHourlyCommandAt = this.hasFreshSmpHourlyCommand() ? now + FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS : 0;
     this.freshSmpNextBalanceCheckAt = this.hasFreshSmpBalancePay() ? now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS : 0;
     this.freshSmpAutomationInterval = setInterval(() => this.tickFreshSmpAutomations(), 5_000);
     this.freshSmpAutomationInterval.unref?.();
@@ -511,11 +513,11 @@ export class PebbleBotInstance {
     }
 
     if (this.hasFreshSmpHourlyCommand()) {
-      if (!this.freshSmpNextHourlyCommandAt) this.freshSmpNextHourlyCommandAt = now + 60 * 60_000;
+      if (!this.freshSmpNextHourlyCommandAt) this.freshSmpNextHourlyCommandAt = now + FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS;
       if (now >= this.freshSmpNextHourlyCommandAt) {
-        this.freshSmpNextHourlyCommandAt = now + 60 * 60_000;
+        this.freshSmpNextHourlyCommandAt = now + FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS;
         const command = this.config.settings.freshSmpHourlyCommand!.trim();
-        this.logActivity('command', `FreshSMP hourly automation: running ${command}.`);
+        this.logActivity('command', `FreshSMP scheduled automation: running ${command}.`);
         this.sendChat(command.startsWith('/') ? command : `/${command}`);
       }
     } else {
@@ -549,7 +551,7 @@ export class PebbleBotInstance {
       previous.freshSmpBalancePayUsername !== this.config.settings.freshSmpBalancePayUsername;
 
     if (hourlyChanged) {
-      this.freshSmpNextHourlyCommandAt = this.hasFreshSmpHourlyCommand() ? now + 60 * 60_000 : 0;
+      this.freshSmpNextHourlyCommandAt = this.hasFreshSmpHourlyCommand() ? now + FRESH_SMP_HOURLY_COMMAND_INTERVAL_MS : 0;
     }
     if (balanceChanged) {
       this.freshSmpNextBalanceCheckAt = this.hasFreshSmpBalancePay() ? now + FRESH_SMP_BALANCE_CHECK_INTERVAL_MS : 0;
@@ -721,6 +723,19 @@ export class PebbleBotInstance {
     this.logActivity('connect', `Connecting to Bedrock server ${this.config.host}:${this.config.port}...`);
 
     try {
+      if (!this.hasAppliedInitialJoinDelay) {
+        this.hasAppliedInitialJoinDelay = true;
+        const configuredDelay = Number(this.config.settings?.joinDelay);
+        const joinDelaySeconds = this.config.settings?.joinDelayConfigured === true
+          ? (Number.isFinite(configuredDelay) ? Math.max(0, configuredDelay) : 0)
+          : (Number.isFinite(configuredDelay) && configuredDelay > 0 ? configuredDelay : 5);
+        if (joinDelaySeconds > 0) {
+          this.logActivity('connect', `Waiting ${joinDelaySeconds}s before the initial server connection.`);
+          await new Promise((resolve) => setTimeout(resolve, joinDelaySeconds * 1000));
+          if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
+        }
+      }
+
       const profilesFolder = getAndSyncTokenFolder();
       const isOffline = this.config.authType === 'offline';
       const cleanHost = (this.config.host || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');

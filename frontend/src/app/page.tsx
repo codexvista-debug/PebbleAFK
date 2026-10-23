@@ -885,6 +885,14 @@ export default function Home() {
   const freshSmpHourlyCommand = activeServer?.settings?.freshSmpHourlyCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.freshSmpHourlyCommand ?? '/afkrewards spin' : DEFAULT_BOT_SETTINGS.freshSmpHourlyCommand ?? '');
   const freshSmpBalancePayEnabled = activeServer?.settings?.freshSmpBalancePayEnabled ?? false;
   const freshSmpBalancePayUsername = activeServer?.settings?.freshSmpBalancePayUsername ?? '';
+  const activeServerJoinDelay = activeServer?.settings?.joinDelayConfigured === true
+    ? activeServer.settings.joinDelay ?? 0
+    : (activeServer?.settings?.joinDelay || DEFAULT_BOT_SETTINGS.joinDelay || 5);
+  const [freshSmpBalancePayUsernameDraft, setFreshSmpBalancePayUsernameDraft] = useState(freshSmpBalancePayUsername);
+
+  useEffect(() => {
+    setFreshSmpBalancePayUsernameDraft(freshSmpBalancePayUsername);
+  }, [activeServer?.id, freshSmpBalancePayUsername]);
 
   const [gatewayStatus, setGatewayStatus] = useState<{ online: boolean; checking: boolean; version?: string } | null>(null);
 
@@ -967,13 +975,13 @@ export default function Home() {
   };
 
   // Update specific setting (physics, resource packs, delays) on active server
-  const handleUpdateServerSetting = (key: keyof BotSettings, value: any) => {
+  const handleUpdateServerSettings = (partialSettings: Partial<BotSettings>) => {
     if (!activeServer) return;
     const isFreshSmp = /freshsmp/i.test(activeServer.name) || /(?:^|\.)freshsmp\.fun$/i.test(activeServer.serverHost);
     const updatedSettings: BotSettings = {
       ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
       ...(activeServer.settings || {}),
-      [key]: value,
+      ...partialSettings,
     };
     handleUpdateActiveServer({ settings: updatedSettings });
     const accountIds = Array.isArray(activeServer.assignedAccountIds)
@@ -982,6 +990,10 @@ export default function Home() {
     accountIds.forEach((accountId) => {
       updateBotSettings(`${activeServer.id}__${accountId}`, updatedSettings);
     });
+  };
+
+  const handleUpdateServerSetting = (key: keyof BotSettings, value: any) => {
+    handleUpdateServerSettings({ [key]: value } as Partial<BotSettings>);
   };
 
   // Accounts assigned to current Server Profile (strictly filtered to existing accounts, plus active bots reported by daemon)
@@ -1243,6 +1255,9 @@ export default function Home() {
       ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
       ...(srv.settings || {}),
     };
+    if (srv.settings?.joinDelayConfigured !== true && !(Number(srv.settings?.joinDelay) > 0)) {
+      effectiveSettings.joinDelay = DEFAULT_BOT_SETTINGS.joinDelay ?? 5;
+    }
     if (isFreshSmp) {
       effectiveSettings.joinCommandEnabled = true;
       if (!effectiveSettings.joinCommand) effectiveSettings.joinCommand = '/lifesteal';
@@ -3878,10 +3893,10 @@ export default function Home() {
                                     type="number"
                                     min={0}
                                     max={300}
-                                    value={activeServer.settings?.joinDelay ?? 0}
+                                    value={activeServerJoinDelay}
                                     onChange={(e) => {
                                       const val = Math.max(0, parseInt(e.target.value, 10) || 0);
-                                      handleUpdateServerSetting('joinDelay', val);
+                                      handleUpdateServerSettings({ joinDelay: val, joinDelayConfigured: true });
                                     }}
                                     className="w-10 bg-transparent text-xs font-mono font-bold text-slate-900 text-center focus:outline-none"
                                   />
@@ -3891,17 +3906,17 @@ export default function Home() {
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const currentVal = (activeServer.settings?.joinDelay ?? 0) > 0;
-                                    const newVal = currentVal ? 0 : 3;
-                                    handleUpdateServerSetting('joinDelay', newVal);
+                                    const currentVal = activeServerJoinDelay > 0;
+                                    const newVal = currentVal ? 0 : 5;
+                                    handleUpdateServerSettings({ joinDelay: newVal, joinDelayConfigured: true });
                                   }}
                                   className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                                    (activeServer.settings?.joinDelay ?? 0) > 0 ? 'bg-emerald-600' : 'bg-slate-200'
+                                    activeServerJoinDelay > 0 ? 'bg-emerald-600' : 'bg-slate-200'
                                   }`}
                                 >
                                   <span
                                     className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                                      (activeServer.settings?.joinDelay ?? 0) > 0 ? 'translate-x-5' : 'translate-x-0'
+                                      activeServerJoinDelay > 0 ? 'translate-x-5' : 'translate-x-0'
                                     }`}
                                   />
                                 </button>
@@ -4011,9 +4026,9 @@ export default function Home() {
                               <>
                                 <div className="flex flex-col gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
                                   <div className="flex-1 pr-4">
-                                    <label className="text-xs font-bold text-slate-800 block">Hourly command for stable accounts</label>
+                                    <label className="text-xs font-bold text-slate-800 block">Scheduled command for stable accounts</label>
                                     <span className="text-[11px] text-slate-400 block mt-0.5">
-                                      Runs every hour only while this account is stable in /lifesteal. Enabled by default.
+                                      Runs every 7 minutes only while this account is stable in /lifesteal. Enabled by default.
                                     </span>
                                   </div>
                                   <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
@@ -4023,15 +4038,15 @@ export default function Home() {
                                       onChange={(e) => handleUpdateServerSetting('freshSmpHourlyCommand', e.target.value)}
                                       disabled={!freshSmpHourlyCommandEnabled}
                                       placeholder="/afkrewards spin"
-                                      aria-label="FreshSMP hourly stable-account command"
+                                      aria-label="FreshSMP scheduled stable-account command"
                                       className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400"
                                     />
-                                    <span className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-[11px] font-bold text-slate-500">60 min</span>
+                                    <span className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-[11px] font-bold text-slate-500">7 min</span>
                                     <button
                                       type="button"
                                       role="switch"
                                       aria-checked={freshSmpHourlyCommandEnabled}
-                                      aria-label="Enable hourly FreshSMP command for stable accounts"
+                                      aria-label="Enable scheduled FreshSMP command for stable accounts"
                                       onClick={() => handleUpdateServerSetting('freshSmpHourlyCommandEnabled', !freshSmpHourlyCommandEnabled)}
                                       className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${freshSmpHourlyCommandEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
                                     >
@@ -4050,8 +4065,13 @@ export default function Home() {
                                   <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
                                     <input
                                       type="text"
-                                      value={freshSmpBalancePayUsername}
-                                      onChange={(e) => handleUpdateServerSetting('freshSmpBalancePayUsername', e.target.value)}
+                                      value={freshSmpBalancePayUsernameDraft}
+                                      onChange={(e) => setFreshSmpBalancePayUsernameDraft(e.target.value)}
+                                      onBlur={() => {
+                                        if (freshSmpBalancePayUsernameDraft !== freshSmpBalancePayUsername) {
+                                          handleUpdateServerSetting('freshSmpBalancePayUsername', freshSmpBalancePayUsernameDraft);
+                                        }
+                                      }}
                                       placeholder="Main account username"
                                       aria-label="Main account username to pay"
                                       className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500"
@@ -4062,12 +4082,15 @@ export default function Home() {
                                       aria-checked={freshSmpBalancePayEnabled}
                                       aria-label="Enable FreshSMP balance payout"
                                       onClick={() => {
-                                        const recipient = freshSmpBalancePayUsername.trim().replace(/^@/, '');
+                                        const recipient = freshSmpBalancePayUsernameDraft.trim().replace(/^@/, '');
                                         if (!freshSmpBalancePayEnabled && !/^[A-Za-z0-9_]{3,16}$/.test(recipient)) {
                                           showToast('Enter a valid Minecraft username before enabling automatic payments.', 'error');
                                           return;
                                         }
-                                        handleUpdateServerSetting('freshSmpBalancePayEnabled', !freshSmpBalancePayEnabled);
+                                        handleUpdateServerSettings({
+                                          freshSmpBalancePayUsername: freshSmpBalancePayUsernameDraft,
+                                          freshSmpBalancePayEnabled: !freshSmpBalancePayEnabled,
+                                        });
                                       }}
                                       className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${freshSmpBalancePayEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
                                     >
