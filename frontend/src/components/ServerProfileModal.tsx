@@ -1,14 +1,14 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ServerProfile, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS } from '../types';
+import { ServerProfile, BedrockAccount, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS } from '../types';
 import { X, Info, ChevronDown, Check } from 'lucide-react';
 import { ConfirmModal } from './ConfirmModal';
 
 interface ServerProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
-  serverProfiles: ServerProfile[];
+  accounts: BedrockAccount[];
   initialProfile?: ServerProfile | null;
   currentUser?: string | null;
   onSaveProfile: (profile: ServerProfile) => Promise<void>;
@@ -38,25 +38,30 @@ const BEDROCK_VERSIONS = [
 const POPULAR_BEDROCK_SETUPS = [
   { name: 'FreshSMP', host: 'play.freshsmp.fun', port: 19132, version: 'auto' },
   { name: 'DonutSMP', host: 'bedrock.donutsmp.net', port: 19132, version: 'auto' },
+  { name: 'CubeCraft', host: 'play.cubecraft.net', port: 19132, version: 'auto' },
+  { name: 'NetherGames', host: 'play.nethergames.org', port: 19132, version: 'auto' },
+  { name: 'Lifeboat', host: 'play.lbsg.net', port: 19132, version: 'auto' },
+  { name: 'The Hive', host: 'geo.hivebedrock.network', port: 19132, version: 'auto' },
+  { name: 'Mineville', host: 'play.inpvp.net', port: 19132, version: 'auto' },
+  { name: 'Galaxite', host: 'play.galaxite.net', port: 19132, version: 'auto' },
 ];
-
-const normalizeHost = (host: string) => host.trim().toLowerCase().replace(/\.$/, '');
 
 export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
   isOpen,
   onClose,
-  serverProfiles,
+  accounts,
   initialProfile,
   currentUser,
   onSaveProfile,
   onDeleteProfile,
 }) => {
+  const [name, setName] = useState('');
   const [serverHost, setServerHost] = useState('');
+  const [serverPort, setServerPort] = useState<string | number>(19132);
   const [serverVersion, setServerVersion] = useState('auto');
   const [loading, setLoading] = useState(false);
   const [showBrowseSetups, setShowBrowseSetups] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [formError, setFormError] = useState('');
 
   const wasOpenRef = useRef(false);
   const activeProfileIdRef = useRef<string | null | undefined>(undefined);
@@ -67,12 +72,15 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
 
     if (isOpen && (justOpened || profileChanged)) {
       setShowBrowseSetups(false);
-      setFormError('');
       if (initialProfile) {
+        setName(initialProfile.name || '');
         setServerHost(initialProfile.serverHost || '');
+        setServerPort(initialProfile.serverPort || 19132);
         setServerVersion(initialProfile.serverVersion || 'auto');
       } else {
+        setName('');
         setServerHost('');
+        setServerPort(19132);
         setServerVersion('auto');
       }
     }
@@ -83,30 +91,12 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
 
   if (!isOpen) return null;
 
-  const selectedSetup = POPULAR_BEDROCK_SETUPS.find((setup) => normalizeHost(setup.host) === normalizeHost(serverHost));
-  const legacyProfile = Boolean(initialProfile && !selectedSetup);
-  const isSetupAlreadyAdded = (setup: typeof POPULAR_BEDROCK_SETUPS[number]) => serverProfiles.some((profile) =>
-    profile.id !== initialProfile?.id && (
-      normalizeHost(profile.serverHost) === normalizeHost(setup.host) ||
-      (profile.name || '').trim().toLowerCase() === setup.name.toLowerCase()
-    )
-  );
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setFormError('');
-    if (!selectedSetup) {
-      setFormError('Only FreshSMP and DonutSMP profiles are supported right now.');
-      return;
-    }
+    if (!serverHost.trim()) return;
 
-    if (isSetupAlreadyAdded(selectedSetup)) {
-      setFormError(`${selectedSetup.name} already has a profile on this account.`);
-      return;
-    }
-
-    const effectiveName = selectedSetup.name;
-    const isFreshSmp = selectedSetup.name === 'FreshSMP';
+    const effectiveName = name.trim() || serverHost.trim();
+    const isFreshSmp = /freshsmp/i.test(effectiveName) || /(?:^|\.)freshsmp\.fun$/i.test(serverHost.trim());
     const effectiveAccountId = initialProfile ? (initialProfile.accountId || '') : '';
     const effectiveAssignedAccountIds = initialProfile
       ? (initialProfile.assignedAccountIds || (initialProfile.accountId ? [initialProfile.accountId] : []))
@@ -120,9 +110,9 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
         pebbleUser: currentUser || initialProfile?.pebbleUser,
         accountId: effectiveAccountId,
         assignedAccountIds: effectiveAssignedAccountIds,
-        serverHost: selectedSetup.host,
-        serverPort: selectedSetup.port,
-        serverVersion: serverVersion || selectedSetup.version,
+        serverHost: serverHost.trim(),
+        serverPort: Number(serverPort) || 19132,
+        serverVersion: serverVersion || 'auto',
         authType: 'microsoft',
         autoReconnect: initialProfile?.autoReconnect ?? true,
         settings: initialProfile?.settings || {
@@ -132,16 +122,17 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
 
       await onSaveProfile(profile);
       onClose();
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Could not save this server profile.');
     } finally {
       setLoading(false);
     }
   };
 
   const handleSelectSetup = (setup: typeof POPULAR_BEDROCK_SETUPS[0]) => {
-    if (isSetupAlreadyAdded(setup)) return;
     setServerHost(setup.host);
+    setServerPort(setup.port);
+    if (!name.trim() || name === 'My Server Profile') {
+      setName(setup.name);
+    }
     setServerVersion(setup.version);
     setShowBrowseSetups(false);
   };
@@ -158,7 +149,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
               {isEditing ? 'Edit Server Profile' : 'Add a server'}
             </h2>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              For now, profiles are limited to FreshSMP and DonutSMP, with one profile per server.
+              Create a profile for the Minecraft server you want to keep accounts online on.
             </p>
           </div>
           <button
@@ -182,8 +173,8 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
                 type="text"
                 required
                 value={serverHost}
-                readOnly
-                placeholder="Choose FreshSMP or DonutSMP"
+                onChange={(e) => setServerHost(e.target.value)}
+                placeholder="Enter a server IP"
                 className="flex-1 bg-white border border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/10 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 font-medium focus:outline-none transition shadow-2xs"
               />
               <button
@@ -199,18 +190,17 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
               {showBrowseSetups && (
                 <div className="absolute right-0 top-12 z-20 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl p-2 space-y-1 animate-in fade-in zoom-in-95 duration-100 max-h-60 overflow-y-auto">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2 py-1">
-                    Supported Servers
+                    Popular Bedrock Setups
                   </div>
                   {POPULAR_BEDROCK_SETUPS.map((s) => (
                     <button
                       key={s.name}
                       type="button"
                       onClick={() => handleSelectSetup(s)}
-                      disabled={isSetupAlreadyAdded(s)}
-                      className="w-full text-left px-2.5 py-2 rounded-xl hover:bg-emerald-50 hover:text-emerald-800 transition flex items-center justify-between text-xs cursor-pointer group disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+                      className="w-full text-left px-2.5 py-2 rounded-xl hover:bg-emerald-50 hover:text-emerald-800 transition flex items-center justify-between text-xs cursor-pointer group"
                     >
                       <span className="font-bold text-slate-800 group-hover:text-emerald-700">{s.name}</span>
-                      <span className="text-[10px] text-slate-400 font-mono">{isSetupAlreadyAdded(s) ? 'Already added' : s.host}</span>
+                      <span className="text-[10px] text-slate-400 font-mono">{s.host}</span>
                     </button>
                   ))}
                 </div>
@@ -220,16 +210,19 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
 
           {/* Profile Name */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-slate-700">Profile name</label>
-            <div className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-700">
-              {selectedSetup?.name || (legacyProfile ? `${initialProfile?.name} (unsupported legacy profile)` : 'Select a supported server above')}
-            </div>
+            <label className="block text-xs font-bold text-slate-700">
+              Profile name
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="My Server Profile"
+              className="w-full bg-white border border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/10 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 font-medium focus:outline-none transition shadow-2xs"
+            />
           </div>
 
-          {legacyProfile && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">This existing profile is outside the current FreshSMP/DonutSMP test scope. Delete it before creating a supported profile.</p>}
-          {formError && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-700">{formError}</p>}
-
-          {/* 2-Column: Bedrock Version & Fixed Bedrock Port */}
+          {/* 2-Column: Bedrock Version & Bedrock Port */}
           <div className="grid grid-cols-2 gap-3 pt-1">
             {/* Bedrock version */}
             <div className="space-y-1.5">
@@ -261,13 +254,20 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
               )}
             </div>
 
-            {/* Supported profiles use the standard Bedrock port. */}
+            {/* Bedrock port */}
             <div className="space-y-1.5">
               <label className="flex items-center gap-1 text-xs font-bold text-slate-700">
                 <span>Bedrock port</span>
                 <Info className="w-3.5 h-3.5 text-slate-400" />
               </label>
-              <div className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-mono font-bold text-slate-700">19132</div>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={serverPort}
+                onChange={(e) => setServerPort(e.target.value)}
+                placeholder="19132"
+                className="w-full bg-white border border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/10 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 font-mono font-bold focus:outline-none transition shadow-2xs"
+              />
             </div>
           </div>
 
@@ -283,7 +283,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
 
             <button
               type="submit"
-              disabled={loading || !selectedSetup || legacyProfile || isSetupAlreadyAdded(selectedSetup)}
+              disabled={loading || !serverHost.trim()}
               className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 disabled:opacity-50 text-white font-bold text-xs transition shadow-xs cursor-pointer flex items-center gap-1.5 ml-auto"
             >
               <Check className="w-4 h-4" />
@@ -297,7 +297,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
       <ConfirmModal
         isOpen={showDeleteConfirm}
         title="Delete Server Profile"
-        message={`Are you sure you want to delete server profile "${initialProfile?.name || selectedSetup?.name || 'this profile'}"? This action cannot be undone.`}
+        message={`Are you sure you want to delete server profile "${name}"? This action cannot be undone.`}
         confirmText="Delete Profile"
         cancelText="Cancel"
         isDestructive

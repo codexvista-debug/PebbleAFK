@@ -70,7 +70,6 @@ export function useDaemonSocket(
   const shutdownRequestedRef = useRef(false);
   const sessionRemovedRef = useRef(false);
   const shutdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const browserSessionIdsRef = useRef<Record<string, string>>({});
 
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
@@ -284,23 +283,18 @@ export function useDaemonSocket(
         try {
           const userKey = user.trim().toLowerCase();
           const sessionStorageKey = `pebbleafk_ws_session_${userKey}`;
-          let sessionId = browserSessionIdsRef.current[userKey] || '';
+          let sessionId = '';
           try {
-            sessionId = sessionId || localStorage.getItem(sessionStorageKey) || '';
+            sessionId = localStorage.getItem(sessionStorageKey) || '';
             if (!sessionId) {
               sessionId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
                 ? crypto.randomUUID()
                 : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+              localStorage.setItem(sessionStorageKey, sessionId);
             }
-            localStorage.setItem(sessionStorageKey, sessionId);
           } catch (_) {
-            if (!sessionId) {
-              sessionId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-                ? crypto.randomUUID()
-                : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-            }
+            sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
           }
-          browserSessionIdsRef.current[userKey] = sessionId;
           const deviceLabel = /android|iphone|ipad|mobile/i.test(navigator.userAgent) ? 'Mobile browser' : 'Desktop browser';
           ws.send(JSON.stringify({
             type: 'AUTH',

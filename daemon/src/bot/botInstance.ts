@@ -328,14 +328,6 @@ export class PebbleBotInstance {
     return Math.floor((Date.now() - this.connectStartTime) / 1000);
   }
 
-  public getConnectedAt(): number | undefined {
-    return this.connectStartTime || undefined;
-  }
-
-  public getLastDisconnectReason(): string {
-    return this.lastDisconnectReason;
-  }
-
   private isFreshSmpProfile(): boolean {
     return `${this.originalHost} ${this.config.host}`.toLowerCase().includes('freshsmp');
   }

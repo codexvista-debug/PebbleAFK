@@ -104,12 +104,7 @@ export default function Home() {
   const pendingMicrosoftSignInUrlRef = useRef<string | null>(null);
   const microsoftSignOutReadyRef = useRef(false);
   const microsoftSignOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const freshSmpBossbarSinceRef = useRef<Record<string, number>>({});
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
-  const [smartAdjustNotices, setSmartAdjustNotices] = useState<Array<{ id: string; username: string; message: string }>>([]);
-  const smartAdjustNoticeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const seenSmartAdjustEventsRef = useRef<Set<string>>(new Set());
-  const seededSmartAdjustBotsRef = useRef<Set<string>>(new Set());
 
   // Live 1-second ticker for precise uptime formatting
   useEffect(() => {
@@ -303,19 +298,15 @@ export default function Home() {
     }
   };
 
-  const getFreshSmpStatusBadge = (status: { label: string; title: string }) => {
-    const style = status.label === 'STABLE'
-      ? 'bg-emerald-100 text-emerald-800 border-emerald-300 shadow-2xs group-hover:bg-emerald-200'
-      : status.label === 'UNSTABLE'
-        ? 'bg-rose-100 text-rose-700 border-rose-200 shadow-2xs group-hover:bg-rose-200'
-        : status.label === 'CHECKING'
-          ? 'bg-amber-100 text-amber-800 border-amber-200 shadow-2xs group-hover:bg-amber-200'
-          : 'bg-slate-100 text-slate-600 border-slate-300/80 shadow-2xs group-hover:bg-slate-200';
-    const dot = status.label === 'STABLE' ? 'bg-emerald-500' : status.label === 'UNSTABLE' ? 'bg-rose-500' : status.label === 'CHECKING' ? 'bg-amber-500 animate-pulse' : 'bg-slate-400';
+  const getFreshSmpStatusBadge = (stable: boolean, phase?: string) => {
+    const label = stable ? 'STABLE' : phase === 'lobby' ? 'IN LOBBY' : 'UNSTABLE';
+    const stableClass = 'bg-emerald-100 text-emerald-800 border-emerald-300 shadow-2xs group-hover:bg-emerald-200';
+    const lobbyClass = 'bg-slate-100 text-slate-600 border-slate-300/80 shadow-2xs group-hover:bg-slate-200';
+    const unstableClass = 'bg-rose-100 text-rose-700 border-rose-200 shadow-2xs group-hover:bg-rose-200';
     return (
-      <span title={status.title} className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border transition ${style}`}>
-        <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-        {status.label}
+      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border transition ${stable ? stableClass : phase === 'lobby' ? lobbyClass : unstableClass}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${stable ? 'bg-emerald-500' : phase === 'lobby' ? 'bg-slate-400' : 'bg-rose-500'}`} />
+        {label}
       </span>
     );
   };
@@ -413,68 +404,6 @@ export default function Home() {
     updateBotSettings,
     stopBot,
   } = useDaemonSocket(currentUser, handleAccountVerified);
-
-  // Some older daemon builds report the FreshSMP reward boss bar but not the
-  // newer Lifesteal diagnostics. Keep a conservative first-seen timer as a
-  // compatibility signal; never call an unreported account unstable by default.
-  useEffect(() => {
-    const activeBossBars = new Set<string>();
-    Object.entries(bossBarsByBot).forEach(([botId, bossBar]) => {
-      const title = (bossBar.title || '').replace(/§[0-9a-fk-or]/gi, '');
-      if (!bossBar.visible || !/\b(?:afk|reward)\b/i.test(title)) return;
-      activeBossBars.add(botId);
-      if (!freshSmpBossbarSinceRef.current[botId]) freshSmpBossbarSinceRef.current[botId] = Date.now();
-    });
-    Object.keys(freshSmpBossbarSinceRef.current).forEach((botId) => {
-      if (!activeBossBars.has(botId)) delete freshSmpBossbarSinceRef.current[botId];
-    });
-  }, [bossBarsByBot]);
-
-  useEffect(() => {
-    const diagnostics = Object.values(freshSmpDiagnostics);
-    if (diagnostics.length === 0) return;
-
-    diagnostics.forEach((diagnostic) => {
-      const botKey = diagnostic.botId.toLowerCase();
-      // Each bot's first snapshot is historical sync data, not a new action.
-      if (!seededSmartAdjustBotsRef.current.has(botKey)) {
-        diagnostic.events.forEach((event) => seenSmartAdjustEventsRef.current.add(`${botKey}:${event.id}`));
-        seededSmartAdjustBotsRef.current.add(botKey);
-        return;
-      }
-
-      diagnostic.events.forEach((event) => {
-        const eventKey = `${botKey}:${event.id}`;
-        if (seenSmartAdjustEventsRef.current.has(eventKey)) return;
-        seenSmartAdjustEventsRef.current.add(eventKey);
-
-        const message = event.message || '';
-        const normalized = message.toLowerCase();
-        const isSmartAdjustment =
-          normalized.includes('recovery cycle') ||
-          normalized.includes('scheduling a cautious /lifesteal retry') ||
-          normalized.includes('retrying /lifesteal in');
-        if (!isSmartAdjustment) return;
-
-        const noticeId = `${eventKey}:${event.timestamp}`;
-        setSmartAdjustNotices((previous) => [...previous.filter((notice) => notice.id !== noticeId), {
-          id: noticeId,
-          username: diagnostic.username,
-          message,
-        }].slice(-3));
-        const timer = setTimeout(() => {
-          setSmartAdjustNotices((previous) => previous.filter((notice) => notice.id !== noticeId));
-          smartAdjustNoticeTimersRef.current.delete(noticeId);
-        }, 8_000);
-        smartAdjustNoticeTimersRef.current.set(noticeId, timer);
-      });
-    });
-  }, [freshSmpDiagnostics]);
-
-  useEffect(() => () => {
-    smartAdjustNoticeTimersRef.current.forEach((timer) => clearTimeout(timer));
-    smartAdjustNoticeTimersRef.current.clear();
-  }, []);
 
   // Load saved session, secretCode, and Supabase accounts
   useEffect(() => {
@@ -898,67 +827,6 @@ export default function Home() {
   // Active selected server profile
   const activeServer = servers.find((s) => s.id === activeServerId) || servers[0] || null;
   const activeServerIsFreshSmp = Boolean(activeServer && /freshsmp/i.test(`${activeServer.name} ${activeServer.serverHost}`));
-  const getFreshSmpAccountStatus = (botId: string, isConnected: boolean) => {
-    const rawDiagnostic = freshSmpDiagnostics[botId];
-    const connectedAt = telemetries[botId]?.connectedAt;
-    // Ignore a diagnostic snapshot left over from a previous connection. The
-    // current connection's spawn phase should be newer than its connectedAt.
-    const diagnostic = rawDiagnostic && (!connectedAt || rawDiagnostic.phaseSince >= connectedAt - 1_000)
-      ? rawDiagnostic
-      : undefined;
-    const diagnosticSessionSince = diagnostic?.phase === 'lifesteal'
-      ? diagnostic.lifestealSessionStartedAt ?? diagnostic.phaseSince
-      : undefined;
-    const bossBar = bossBarsByBot[botId];
-    const observedAt = freshSmpBossbarSinceRef.current[botId];
-    const bossBarConfirmed = Boolean(bossBar?.visible && /\b(?:afk|reward)\b/i.test((bossBar.title || '').replace(/§[0-9a-fk-or]/gi, '')));
-    const recentTimeoutAt = (messagesByBot[botId] || []).reduce<number>((latest, message) => {
-      if (!message.timestamp || nowTick - message.timestamp > 120_000 || nowTick < message.timestamp) return latest;
-      const text = `${message.sender || ''} ${message.raw || ''} ${message.formattedText || ''}`;
-      const isTimeout = /(?:<\s*lifesteal\s*>|\blifesteal\b).{0,100}\b(?:timed\s*out|timeout)\b/i.test(text) ||
-        (/\blifesteal\b/i.test(message.sender || '') && /\btimed\s*out\b|\btimeout\b/i.test(text));
-      return isTimeout ? Math.max(latest, message.timestamp) : latest;
-    }, 0);
-    const diagnosticStable = typeof diagnosticSessionSince === 'number' && nowTick - diagnosticSessionSince >= 60_000;
-    const bossBarStable = bossBarConfirmed && typeof observedAt === 'number' && nowTick - observedAt >= 60_000;
-    // Either signal can confirm the current subserver session. In particular,
-    // a live AFK/reward bar supersedes an out-of-date "lobby" diagnostic.
-    const stableSince = diagnosticStable && bossBarStable
-      ? Math.min(diagnosticSessionSince!, observedAt!)
-      : diagnosticStable
-        ? diagnosticSessionSince
-        : bossBarStable
-          ? observedAt
-          : undefined;
-    const recentTimeout = recentTimeoutAt > 0 && (!stableSince || recentTimeoutAt >= stableSince);
-    const sessionConfirmed = typeof diagnosticSessionSince === 'number' || bossBarConfirmed;
-    const stable = Boolean(isConnected && !recentTimeout && typeof stableSince === 'number');
-    const label = !isConnected
-      ? 'OFFLINE'
-      : stable
-        ? 'STABLE'
-        : recentTimeout
-          ? 'UNSTABLE'
-          : sessionConfirmed
-            ? 'CHECKING'
-            : diagnostic?.phase === 'lobby'
-              ? 'IN LOBBY'
-              : diagnostic?.phase === 'queue'
-                ? typeof diagnostic.lifestealAttemptStartedAt === 'number' && nowTick - diagnostic.lifestealAttemptStartedAt >= 60_000 ? 'UNSTABLE' : 'CHECKING'
-                : 'NO DATA';
-    const title = label === 'STABLE'
-      ? 'Confirmed in FreshSMP /lifesteal (AFK reward zone) for at least 60 seconds.'
-      : label === 'NO DATA'
-        ? 'This daemon has not provided FreshSMP diagnostics or an AFK reward boss bar. Update the Termux daemon to enable accurate status.'
-        : label === 'CHECKING'
-          ? 'FreshSMP subserver evidence detected; waiting 60 seconds to confirm stability.'
-          : label === 'UNSTABLE'
-            ? 'FreshSMP has not confirmed a stable /lifesteal session.'
-            : label === 'IN LOBBY'
-              ? 'FreshSMP diagnostics report this account in the lobby.'
-              : 'Account is not currently connected.';
-    return { stable, stableSince, label, title, diagnosticAvailable: Boolean(diagnostic), bossBarConfirmed, recentTimeout };
-  };
   const subserverJoinCommandEnabled = activeServer?.settings?.subserverJoinCommandEnabled ?? activeServerIsFreshSmp;
   const subserverJoinCommand = activeServer?.settings?.subserverJoinCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommand : DEFAULT_BOT_SETTINGS.subserverJoinCommand);
   const subserverJoinCommandDelay = activeServer?.settings?.subserverJoinCommandDelay ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay : DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay);
@@ -985,20 +853,6 @@ export default function Home() {
 
   // Save server profile to state & Supabase
   const handleSaveServer = async (profile: ServerProfile) => {
-    const existingProfile = servers.find((server) => server.id === profile.id);
-    const normalizedHost = (host: string) => host.trim().toLowerCase().replace(/\.$/, '');
-    const supportedHosts = new Set(['play.freshsmp.fun', 'bedrock.donutsmp.net']);
-    if (!existingProfile && !supportedHosts.has(normalizedHost(profile.serverHost))) {
-      throw new Error('Only FreshSMP and DonutSMP profiles can be created right now.');
-    }
-    const duplicate = servers.find((server) => server.id !== profile.id && (
-      normalizedHost(server.serverHost) === normalizedHost(profile.serverHost) ||
-      (server.name || '').trim().toLowerCase() === profile.name.trim().toLowerCase()
-    ));
-    if (duplicate) {
-      throw new Error(`${profile.name} already has a server profile on this account.`);
-    }
-
     setServers((prev) => {
       const idx = prev.findIndex((s) => s.id === profile.id);
       let updated: ServerProfile[];
@@ -1095,13 +949,6 @@ export default function Home() {
       return ign.includes(q);
     });
   }, [accounts, profileAccountIds, accountFilter]);
-
-  const hasConnectedFreshSmpWithoutStatus = Boolean(activeServerIsFreshSmp && activeServer && daemonStatus === 'AUTHENTICATED' && assignedAccounts.some((account) => {
-    const botId = `${activeServer.id}__${account.id}`;
-    const state = botStates[botId] || botStates[account.id];
-    const connected = state === 'SPAWNED' || state === 'LOGGED_IN';
-    return getFreshSmpAccountStatus(botId, connected).label === 'NO DATA';
-  }));
 
   useEffect(() => {
     const chatAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
@@ -2102,16 +1949,6 @@ export default function Home() {
                       {daemonStatus === 'AUTHENTICATED' ? `${deviceSessions.filter((session) => session.connected).length} online · ${deviceSessions.length} known` : 'Daemon reconnecting'}
                     </span>
                   </div>
-                  {deviceSessions.some((session) => session.label === 'Browser session') && (
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-5 py-3 border-b border-amber-100 bg-amber-50 text-amber-950">
-                      <p className="min-w-0 flex-1 text-[11px] leading-relaxed">
-                        “Browser session” entries are anonymous records created by an older daemon when admin sockets reconnected. They are not eleven live sockets or evidence of cross-account access; only {deviceSessions.filter((session) => session.connected).length} registered session(s) are online. Update the Termux daemon once to purge the old records; admin reconnects now reuse one stable ID.
-                      </p>
-                      <button type="button" onClick={() => setActiveTab('termux_stream')} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 py-2 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100">
-                        <Terminal className="h-3.5 w-3.5" /> Open Termux Stream
-                      </button>
-                    </div>
-                  )}
                   {daemonStatus !== 'AUTHENTICATED' && (
                     <div className="px-5 py-3 flex items-center justify-between gap-3 border-b border-slate-100">
                       <p className="text-xs text-slate-500">Session controls are unavailable until the daemon socket reconnects.</p>
@@ -2570,45 +2407,6 @@ export default function Home() {
                     {/* SUBTAB 1: CONNECT */}
                     {activeSubTab === 'connect' && (
                       <div className="space-y-4">
-                        {hasConnectedFreshSmpWithoutStatus && (
-                          <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-950 shadow-2xs">
-                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-white text-amber-700"><Info className="h-4 w-4" /></div>
-                            <p className="min-w-0 flex-1 text-[11px] leading-relaxed">
-                              Some connected FreshSMP accounts have no current Lifesteal signal. They’re marked <span className="font-extrabold">NO DATA</span>, not unstable. If this persists, update the Termux daemon to enable diagnostics; observed AFK reward bars will still confirm stability after one minute.
-                            </p>
-                            <button type="button" onClick={() => setActiveTab('termux_stream')} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 py-2 text-[11px] font-bold text-amber-800 transition hover:bg-amber-100">
-                              <Terminal className="h-3.5 w-3.5" /> Open Termux Stream
-                            </button>
-                          </div>
-                        )}
-                        {smartAdjustNotices.length > 0 && (
-                          <div className="space-y-2" aria-live="polite" aria-label="FreshSMP smart recovery updates">
-                            {smartAdjustNotices.map((notice) => (
-                              <div key={notice.id} className="flex items-start gap-3 rounded-2xl border border-sky-200 bg-sky-50/90 px-4 py-3 shadow-2xs animate-in fade-in slide-in-from-top-1 duration-200">
-                                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-sky-200 bg-white text-sky-700">
-                                  <RotateCw className="h-4 w-4" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-xs font-extrabold text-slate-900">FreshSMP recovery is adjusting @{notice.username}</div>
-                                  <p className="mt-0.5 truncate text-[11px] leading-relaxed text-slate-600" title={notice.message}>{notice.message}</p>
-                                </div>
-                                <button
-                                  type="button"
-                                  aria-label={`Dismiss recovery notice for ${notice.username}`}
-                                  onClick={() => {
-                                    const timer = smartAdjustNoticeTimersRef.current.get(notice.id);
-                                    if (timer) clearTimeout(timer);
-                                    smartAdjustNoticeTimersRef.current.delete(notice.id);
-                                    setSmartAdjustNotices((previous) => previous.filter((item) => item.id !== notice.id));
-                                  }}
-                                  className="rounded-lg p-1 text-slate-400 transition hover:bg-white hover:text-slate-700"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
                         {/* Top Action Bar */}
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-2.5">
@@ -2725,9 +2523,10 @@ export default function Home() {
                                     : srvTel && typeof srvTel.connectedAt === 'number' && srvTel.connectedAt > 0
                                     ? Math.max(0, Math.floor((nowTick - srvTel.connectedAt) / 1000))
                                     : 0;
-                                const freshSmpStatus = activeServerIsFreshSmp ? getFreshSmpAccountStatus(botId, isConnected) : undefined;
-                                const lifestealStartedAt = freshSmpStatus?.stableSince;
-                                const isFreshSmpStable = Boolean(freshSmpStatus?.stable);
+                                const freshSmpDiagnostic = activeServerIsFreshSmp ? freshSmpDiagnostics[botId] : undefined;
+                                const lifestealStartedAt = freshSmpDiagnostic?.lifestealSessionStartedAt;
+                                const isFreshSmpStable = Boolean(isConnected && freshSmpDiagnostic?.phase === 'lifesteal' &&
+                                  typeof lifestealStartedAt === 'number' && nowTick - lifestealStartedAt >= 60_000);
                                 const accountUptime = activeServerIsFreshSmp
                                   ? (isFreshSmpStable && typeof lifestealStartedAt === 'number' ? Math.floor((nowTick - lifestealStartedAt - 60_000) / 1000) : 0)
                                   : ((daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0);
@@ -2819,7 +2618,7 @@ export default function Home() {
                                           title={isConnected ? 'Click to disconnect' : 'Click to connect'}
                                         >
                                           {activeServerIsFreshSmp && isConnected
-                                            ? getFreshSmpStatusBadge(freshSmpStatus!)
+                                            ? getFreshSmpStatusBadge(isFreshSmpStable, freshSmpDiagnostic?.phase)
                                             : getStatusBadge(botState as BotLifecycleState)}
                                         </button>
 
@@ -2911,9 +2710,10 @@ export default function Home() {
                                         : srvTel && typeof srvTel.connectedAt === 'number' && srvTel.connectedAt > 0
                                         ? Math.max(0, Math.floor((nowTick - srvTel.connectedAt) / 1000))
                                         : 0;
-                                    const freshSmpStatus = activeServerIsFreshSmp ? getFreshSmpAccountStatus(botId, isConnected) : undefined;
-                                    const lifestealStartedAt = freshSmpStatus?.stableSince;
-                                    const isFreshSmpStable = Boolean(freshSmpStatus?.stable);
+                                    const freshSmpDiagnostic = activeServerIsFreshSmp ? freshSmpDiagnostics[botId] : undefined;
+                                    const lifestealStartedAt = freshSmpDiagnostic?.lifestealSessionStartedAt;
+                                    const isFreshSmpStable = Boolean(isConnected && freshSmpDiagnostic?.phase === 'lifesteal' &&
+                                      typeof lifestealStartedAt === 'number' && nowTick - lifestealStartedAt >= 60_000);
                                     const accountUptime = activeServerIsFreshSmp
                                       ? (isFreshSmpStable && typeof lifestealStartedAt === 'number' ? Math.floor((nowTick - lifestealStartedAt - 60_000) / 1000) : 0)
                                       : ((daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0);
@@ -2999,7 +2799,7 @@ export default function Home() {
                                             }
                                           >
                                             {activeServerIsFreshSmp && isConnected
-                                              ? getFreshSmpStatusBadge(freshSmpStatus!)
+                                              ? getFreshSmpStatusBadge(isFreshSmpStable, freshSmpDiagnostic?.phase)
                                               : getStatusBadge(botState as BotLifecycleState)}
                                           </button>
                                         </td>
@@ -3183,11 +2983,12 @@ export default function Home() {
                     {activeSubTab === 'chat' && (() => {
                       const targetAccounts = assignedAccounts.length > 0 ? assignedAccounts : accounts;
                       const isFreshSmpProfile = `${activeServer.name} ${activeServer.serverHost}`.toLowerCase().includes('freshsmp');
-                      const getAccountStability = (account: BedrockAccount) => {
-                        const botId = `${activeServer.id}__${account.id}`;
-                        const state = botStates[botId] || botStates[account.id];
-                        const connected = daemonStatus === 'AUTHENTICATED' && (state === 'SPAWNED' || state === 'LOGGED_IN');
-                        return getFreshSmpAccountStatus(botId, connected);
+                      const isAccountStable = (account: BedrockAccount) => {
+                        if (!isFreshSmpProfile) return false;
+                        const diagnostic = freshSmpDiagnostics[`${activeServer.id}__${account.id}`];
+                        const sessionStartedAt = diagnostic?.lifestealSessionStartedAt;
+                        return diagnostic?.phase === 'lifesteal' && typeof sessionStartedAt === 'number' &&
+                          nowTick - sessionStartedAt >= 60_000;
                       };
                       const isAllSelected = selectedChatAccountId === '__ALL__';
                       const selectedAccountId = isAllSelected
@@ -3395,17 +3196,18 @@ export default function Home() {
                                         )}
                                         <span className="text-slate-300">•</span>
                                         {isFreshSmpProfile ? (
-                                          (() => {
-                                            const stability = getAccountStability(selectedAccount);
-                                            const tone = stability.label === 'STABLE'
-                                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                              : stability.label === 'UNSTABLE'
-                                                ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                                : stability.label === 'CHECKING'
-                                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                                  : 'bg-slate-50 text-slate-600 border-slate-200';
-                                            return <span title={stability.title} className={`inline-flex items-center px-1.5 py-0.5 rounded-full border text-[9px] font-extrabold tracking-wide ${tone}`}>{stability.label}</span>;
-                                          })()
+                                          <span
+                                            title={isAccountStable(selectedAccount)
+                                              ? 'Connected in FreshSMP Lifesteal for at least one minute'
+                                              : 'Not yet confirmed in FreshSMP Lifesteal for one continuous minute'}
+                                            className={`inline-flex items-center px-1.5 py-0.5 rounded-full border text-[9px] font-extrabold tracking-wide ${
+                                              isAccountStable(selectedAccount)
+                                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                : 'bg-rose-50 text-rose-700 border-rose-200'
+                                            }`}
+                                          >
+                                            {isAccountStable(selectedAccount) ? 'STABLE' : 'UNSTABLE'}
+                                          </span>
                                         ) : (
                                           <span className="text-slate-400">Bedrock Edition</span>
                                         )}
@@ -3717,14 +3519,7 @@ export default function Home() {
                                       const st = botStates[bId];
                                       const isLive = daemonStatus === 'AUTHENTICATED' && (st === 'SPAWNED' || st === 'LOGGED_IN');
                                       const isSel = selectedAccountId === acc.id;
-                                      const stability = getAccountStability(acc);
-                                      const stabilityTone = stability.label === 'STABLE'
-                                        ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                        : stability.label === 'UNSTABLE'
-                                          ? 'bg-rose-100 text-rose-700 border-rose-200'
-                                          : stability.label === 'CHECKING'
-                                            ? 'bg-amber-100 text-amber-800 border-amber-200'
-                                            : 'bg-slate-100 text-slate-600 border-slate-200';
+                                      const isStable = isAccountStable(acc);
 
                                       return (
                                         <button
@@ -3736,13 +3531,10 @@ export default function Home() {
                                             setSelectedChatAccountId(acc.id);
                                             setIsChatAccountDropdownOpen(false);
                                           }}
-                                          title={isFreshSmpProfile ? stability.title : undefined}
                                           className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-bold transition cursor-pointer ${
-                                            isFreshSmpProfile && stability.label === 'UNSTABLE'
+                                            isFreshSmpProfile && !isStable
                                               ? (isSel ? 'bg-rose-100 text-rose-800' : 'bg-rose-50/70 text-rose-800 hover:bg-rose-100')
-                                              : isFreshSmpProfile && stability.label === 'STABLE'
-                                                ? (isSel ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50')
-                                                : (isSel ? 'bg-slate-100 text-slate-700' : 'text-slate-700 hover:bg-slate-50')
+                                              : (isSel ? 'bg-emerald-50 text-emerald-800' : 'text-slate-700 hover:bg-slate-50')
                                           }`}
                                         >
                                           <div className="flex items-center gap-2.5 min-w-0">
@@ -3765,7 +3557,13 @@ export default function Home() {
                                             <span className="font-mono truncate">@{acc.ign || acc.username}</span>
                                           </div>
                                           {isFreshSmpProfile ? (
-                                            <span className={`shrink-0 px-1.5 py-0.5 rounded-full border text-[9px] font-extrabold tracking-wide ${stabilityTone}`}>{stability.label}</span>
+                                            <span className={`shrink-0 px-1.5 py-0.5 rounded-full border text-[9px] font-extrabold tracking-wide ${
+                                              isStable
+                                                ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                                : 'bg-rose-100 text-rose-700 border-rose-200'
+                                            }`}>
+                                              {isStable ? 'STABLE' : 'UNSTABLE'}
+                                            </span>
                                           ) : (
                                             <span className={`w-2 h-2 rounded-full shrink-0 ${isLive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
                                           )}
@@ -4175,7 +3973,7 @@ export default function Home() {
           setIsServerModalOpen(false);
           setEditingServer(null);
         }}
-        serverProfiles={servers}
+        accounts={accounts}
         initialProfile={editingServer}
         currentUser={currentUser}
         onSaveProfile={handleSaveServer}

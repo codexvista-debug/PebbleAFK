@@ -151,7 +151,7 @@ export interface FreshSmpDiagnosticState {
 
 // Client to Daemon Messages
 export type ClientMessage =
-  | { type: 'AUTH'; payload: { token: string; username?: string; sessionId?: string; deviceLabel?: string; clientType?: string } }
+  | { type: 'AUTH'; payload: { token: string; username?: string; sessionId?: string; deviceLabel?: string } }
   | { type: 'DISCONNECT_DEVICE_SESSION'; payload: { sessionId: string } }
   | { type: 'START_BOT'; payload: BotConfig }
   | { type: 'STOP_BOT'; payload: { botId: string; accountId?: string; username?: string } }
