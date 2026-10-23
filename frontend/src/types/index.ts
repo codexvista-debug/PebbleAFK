@@ -39,7 +39,7 @@ export const DEFAULT_BOT_SETTINGS: BotSettings = {
   mobFarmIntervalMs: 650,
   autoReconnect: true,
   autoReconnectDelay: 5000,
-  joinDelay: 5,
+  joinDelay: 0,
   joinDelayConfigured: false,
   joinCommandEnabled: false,
   joinCommand: '',

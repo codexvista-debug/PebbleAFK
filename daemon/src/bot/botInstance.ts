@@ -726,9 +726,11 @@ export class PebbleBotInstance {
       if (!this.hasAppliedInitialJoinDelay) {
         this.hasAppliedInitialJoinDelay = true;
         const configuredDelay = Number(this.config.settings?.joinDelay);
-        const joinDelaySeconds = this.config.settings?.joinDelayConfigured === true
+        const hasLegacyConfiguredJoinDelay = this.config.settings?.joinDelayConfigured === undefined &&
+          Number.isFinite(configuredDelay) && configuredDelay > 0;
+        const joinDelaySeconds = this.config.settings?.joinDelayConfigured === true || hasLegacyConfiguredJoinDelay
           ? (Number.isFinite(configuredDelay) ? Math.max(0, configuredDelay) : 0)
-          : (Number.isFinite(configuredDelay) && configuredDelay > 0 ? configuredDelay : 5);
+          : 0;
         if (joinDelaySeconds > 0) {
           this.logActivity('connect', `Waiting ${joinDelaySeconds}s before the initial server connection.`);
           await new Promise((resolve) => setTimeout(resolve, joinDelaySeconds * 1000));

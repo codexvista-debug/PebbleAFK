@@ -894,9 +894,11 @@ export default function Home() {
   const freshSmpHourlyCommand = activeServer?.settings?.freshSmpHourlyCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.freshSmpHourlyCommand ?? '/afkrewards spin' : DEFAULT_BOT_SETTINGS.freshSmpHourlyCommand ?? '');
   const freshSmpBalancePayEnabled = activeServer?.settings?.freshSmpBalancePayEnabled ?? false;
   const freshSmpBalancePayUsername = activeServer?.settings?.freshSmpBalancePayUsername ?? '';
-  const activeServerJoinDelay = activeServer?.settings?.joinDelayConfigured === true
-    ? activeServer.settings.joinDelay ?? 0
-    : (activeServer?.settings?.joinDelay || DEFAULT_BOT_SETTINGS.joinDelay || 5);
+  const hasLegacyConfiguredJoinDelay = activeServer?.settings?.joinDelayConfigured === undefined &&
+    Number(activeServer?.settings?.joinDelay) > 0;
+  const activeServerJoinDelay = activeServer?.settings?.joinDelayConfigured === true || hasLegacyConfiguredJoinDelay
+    ? activeServer?.settings?.joinDelay ?? 0
+    : DEFAULT_BOT_SETTINGS.joinDelay ?? 0;
   const [freshSmpBalancePayUsernameDraft, setFreshSmpBalancePayUsernameDraft] = useState(freshSmpBalancePayUsername);
 
   useEffect(() => {
@@ -1264,8 +1266,9 @@ export default function Home() {
       ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
       ...(srv.settings || {}),
     };
-    if (srv.settings?.joinDelayConfigured !== true && !(Number(srv.settings?.joinDelay) > 0)) {
-      effectiveSettings.joinDelay = DEFAULT_BOT_SETTINGS.joinDelay ?? 5;
+    const hasLegacyConfiguredJoinDelay = srv.settings?.joinDelayConfigured === undefined && Number(srv.settings?.joinDelay) > 0;
+    if (srv.settings?.joinDelayConfigured !== true && !hasLegacyConfiguredJoinDelay) {
+      effectiveSettings.joinDelay = DEFAULT_BOT_SETTINGS.joinDelay ?? 0;
     }
     if (isFreshSmp) {
       effectiveSettings.joinCommandEnabled = true;
