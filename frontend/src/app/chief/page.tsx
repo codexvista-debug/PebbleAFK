@@ -43,6 +43,7 @@ import {
   Menu,
 } from 'lucide-react';
 import { MinecraftChatMessage } from '@/components/MinecraftChatMessage';
+import { FreshSmpDiagnosticState } from '@/types';
 
 interface UserItem {
   id: string;
@@ -157,6 +158,7 @@ export default function ChiefAdminPage() {
 
   // Live Chat Map for Connected Bots: key -> array of up to 25 ChatMessage items
   const [liveChats, setLiveChats] = useState<Record<string, Array<{ text: string; raw?: string; message?: string; formatted?: string; formattedText?: string; sender?: string; id?: string; type?: string; timestamp: number }>>>({});
+  const [freshSmpDiagnostics, setFreshSmpDiagnostics] = useState<Record<string, FreshSmpDiagnosticState>>({});
   const [daemonConnections, setDaemonConnections] = useState<Record<string, { state: 'connecting' | 'authenticating' | 'connected' | 'offline' | 'auth-error'; lastSeenAt?: number; error?: string }>>({});
   const daemonSocketsRef = useRef<Map<string, WebSocket>>(new Map());
   const desiredDaemonsRef = useRef<Map<string, { url: string; owner: string; secret?: string }>>(new Map());
@@ -356,6 +358,12 @@ export default function ChiefAdminPage() {
 
                 return next;
               });
+            } else if (data.type === 'FRESHSMP_DIAGNOSTICS') {
+              const diagnostic = data.payload as FreshSmpDiagnosticState | undefined;
+              if (diagnostic?.botId) {
+                const diagnosticKey = `${info.owner.toLowerCase()}::${diagnostic.botId.toLowerCase()}`;
+                setFreshSmpDiagnostics((prev) => ({ ...prev, [diagnosticKey]: diagnostic }));
+              }
             } else if (data.type === 'CHAT_MESSAGE') {
               const msg = data.payload;
               let botKey = String(msg.botId || '').toLowerCase().trim();
@@ -1727,6 +1735,25 @@ export default function ChiefAdminPage() {
                                     : runtimeState === 'ERROR' || runtimeState === 'KICKED'
                                       ? 'bg-rose-100 text-rose-700 border-rose-200'
                                       : 'bg-slate-100 text-slate-600 border-slate-200';
+                                const isFreshSmp = /freshsmp/i.test(`${a.serverName || ''} ${a.serverHost || ''}`);
+                                const diagnostic = freshSmpDiagnostics[`${a.owner.toLowerCase()}::${(a.botId || '').toLowerCase()}`];
+                                const lifestealStartedAt = diagnostic?.lifestealSessionStartedAt;
+                                const freshSmpStable = Boolean(
+                                  a.isConnected &&
+                                  diagnostic?.phase === 'lifesteal' &&
+                                  typeof lifestealStartedAt === 'number' &&
+                                  nowTick - lifestealStartedAt >= 60_000
+                                );
+                                const freshSmpLabel = freshSmpStable
+                                  ? 'STABLE'
+                                  : diagnostic?.phase === 'lobby'
+                                    ? 'IN LOBBY'
+                                    : 'UNSTABLE';
+                                const freshSmpStyle = freshSmpStable
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  : freshSmpLabel === 'IN LOBBY'
+                                    ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                    : 'bg-rose-100 text-rose-700 border-rose-200';
 
                                 return (
                                   <div
@@ -1767,6 +1794,15 @@ export default function ChiefAdminPage() {
                                           <span className={`w-2 h-2 rounded-full ${a.isConnected ? 'bg-emerald-500 animate-pulse' : runtimeState === 'ERROR' || runtimeState === 'KICKED' ? 'bg-rose-500' : runtimeState === 'CONNECTING' || runtimeState === 'RECONNECTING' ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`} />
                                           {stateLabel}
                                         </span>
+
+                                        {isFreshSmp && (
+                                          <span
+                                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[9px] font-black border ${freshSmpStyle}`}
+                                            title={diagnostic ? `FreshSMP phase: ${diagnostic.phase}. Stability requires 60 seconds in /lifesteal.` : 'Waiting for live FreshSMP diagnostics.'}
+                                          >
+                                            {freshSmpLabel}
+                                          </span>
+                                        )}
 
                                         {a.isConnected && (
                                           <button
