@@ -53,6 +53,8 @@ interface UserItem {
   createdAt: string;
   tunnelUrl?: string;
   isTunnelActive?: boolean;
+  daemonReachable?: boolean;
+  daemonProbeAt?: number;
 }
 
 interface AdminTunnelItem {
@@ -62,10 +64,15 @@ interface AdminTunnelItem {
   updatedAt: number;
   isRecent: boolean;
   activeBots: number;
+  daemonReachable?: boolean;
+  probeAt?: number;
+  authError?: string;
 }
 
 interface AccountItem {
   id: string;
+  botId: string;
+  serverId?: string;
   owner: string;
   ign: string;
   serverHost: string;
@@ -73,6 +80,11 @@ interface AccountItem {
   serverName?: string;
   isConnected: boolean;
   connectedAt?: number;
+  runtimeState?: string;
+  runtimeReason?: string;
+  runtimeHost?: string;
+  runtimePort?: number;
+  runtimeUpdatedAt?: number;
   updatedAt?: string;
   createdAt?: string;
   settings?: any;
@@ -105,6 +117,7 @@ export default function ChiefAdminPage() {
   const [tunnels, setTunnels] = useState<AdminTunnelItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const fetchInFlightRef = useRef(false);
   const [activeTab, setActiveTab] = useState<'stats' | 'users' | 'accounts'>('accounts');
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
@@ -144,9 +157,15 @@ export default function ChiefAdminPage() {
 
   // Live Chat Map for Connected Bots: key -> array of up to 25 ChatMessage items
   const [liveChats, setLiveChats] = useState<Record<string, Array<{ text: string; raw?: string; message?: string; formatted?: string; formattedText?: string; sender?: string; id?: string; type?: string; timestamp: number }>>>({});
+  const [daemonConnections, setDaemonConnections] = useState<Record<string, { state: 'connecting' | 'authenticating' | 'connected' | 'offline' | 'auth-error'; lastSeenAt?: number; error?: string }>>({});
   const daemonSocketsRef = useRef<Map<string, WebSocket>>(new Map());
+  const desiredDaemonsRef = useRef<Map<string, { url: string; owner: string; secret?: string }>>(new Map());
+  const daemonRetryTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const daemonRetryAttemptsRef = useRef<Map<string, number>>(new Map());
+  const connectDaemonRef = useRef<((info: { url: string; owner: string; secret?: string }) => void) | null>(null);
 
-  // Connect WebSockets to all active phone daemon tunnels to discover bots & receive live chat
+  // Keep one authenticated, reconnecting admin socket per daemon. All bot and
+  // chat updates are keyed by the exact daemon bot ID (server profile + account).
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -187,16 +206,29 @@ export default function ChiefAdminPage() {
       }
     });
 
-    // Close sockets no longer active
+    desiredDaemonsRef.current = targetTunnels;
+
+    // Close sockets and cancel retries for tunnels that were removed.
     daemonSocketsRef.current.forEach((ws, url) => {
       if (!targetTunnels.has(url)) {
         try { ws.close(); } catch {}
         daemonSocketsRef.current.delete(url);
+        const retry = daemonRetryTimersRef.current.get(url);
+        if (retry) clearTimeout(retry);
+        daemonRetryTimersRef.current.delete(url);
+        daemonRetryAttemptsRef.current.delete(url);
+      }
+    });
+    daemonRetryTimersRef.current.forEach((retry, url) => {
+      if (!targetTunnels.has(url)) {
+        clearTimeout(retry);
+        daemonRetryTimersRef.current.delete(url);
       }
     });
 
-    // Connect to each target tunnel
-    targetTunnels.forEach((info, url) => {
+    const connectDaemon = (info: { url: string; owner: string; secret?: string }) => {
+      const { url } = info;
+      if (!desiredDaemonsRef.current.has(url)) return;
       const existing = daemonSocketsRef.current.get(url);
       if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
         return;
@@ -206,19 +238,22 @@ export default function ChiefAdminPage() {
         const ws = new WebSocket(url);
         daemonSocketsRef.current.set(url, ws);
         let pingTimer: NodeJS.Timeout | null = null;
+        let authTimer: ReturnType<typeof setTimeout> | null = null;
+        let hasSynced = false;
+        let authFailed = false;
+        setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'connecting' } }));
 
         ws.onopen = () => {
+          setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'authenticating' } }));
           ws.send(JSON.stringify({
             type: 'AUTH',
             payload: { username: info.owner, token: info.secret || '' }
           }));
-
-          // Send REQUEST_SYNC immediately and again after auth handshakes
-          setTimeout(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
-            }
-          }, 350);
+          authTimer = setTimeout(() => {
+            authFailed = true;
+            setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'auth-error', error: 'Daemon did not confirm authentication.' } }));
+            try { ws.close(); } catch {}
+          }, 8000);
 
           pingTimer = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
@@ -230,49 +265,59 @@ export default function ChiefAdminPage() {
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.type === 'AUTH_RESULT' && data.payload?.success) {
-              // Immediately request sync of all bots running on this daemon
-              ws.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+            if (data.type === 'AUTH_RESULT') {
+              if (authTimer) clearTimeout(authTimer);
+              if (data.payload?.success) {
+                daemonRetryAttemptsRef.current.delete(url);
+                setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'connected', lastSeenAt: Date.now() } }));
+                if (!hasSynced && ws.readyState === WebSocket.OPEN) {
+                  hasSynced = true;
+                  ws.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+                }
+              } else {
+                authFailed = true;
+                setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'auth-error', error: data.payload?.message || 'Daemon authentication failed.' } }));
+                try { ws.close(); } catch {}
+              }
+            } else if (data.type === 'PONG') {
+              setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'connected', lastSeenAt: Date.now() } }));
             } else if (data.type === 'BOT_STATE') {
               const p = data.payload;
-              const isOnline = p?.state === 'SPAWNED' || p?.state === 'LOGGED_IN';
-              const botUser = (p?.username || '').toLowerCase().trim();
-              const botId = (p?.botId || '').toLowerCase().trim();
-              const accId = (p?.accountId || '').toLowerCase().trim();
+              const accountId = String(p.accountId || '').toLowerCase().trim();
+              const serverId = String(p.serverId || '').toLowerCase().trim();
+              const reportedBotId = String(p.botId || (p.serverId && p.accountId ? `${p.serverId}__${p.accountId}` : '')).trim();
+              if (!reportedBotId) return;
+              const botId = reportedBotId.toLowerCase();
+              const runtimeState = String(p.state || 'UNKNOWN').toUpperCase();
+              const isOnline = runtimeState === 'SPAWNED' || runtimeState === 'LOGGED_IN';
 
-              // Mark account online in state with fallback matching
               setAccounts((prev) => {
                 let matched = false;
                 const next = prev.map((acc) => {
-                  const accIgn = acc.ign.replace(/^@/, '').toLowerCase().trim();
-                  const accIdStr = String(acc.id).replace(/^acc_/, '').toLowerCase().trim();
-                  const matchOwner = acc.owner.toLowerCase().trim() === info.owner.toLowerCase();
-
-                  const matchBot =
-                    accIgn === botUser ||
-                    accIgn === botId ||
-                    acc.ign.toLowerCase() === botUser ||
-                    acc.id.toLowerCase() === accId ||
-                    accIdStr === accId ||
-                    (botId && botId.includes(accIdStr)) ||
-                    (botUser && accIgn.includes(botUser)) ||
-                    (accIgn && botUser.includes(accIgn));
-
-                  // If owner matches and either bot matches or this user only has 1 account, update
-                  const ownerAccCount = prev.filter((x) => x.owner.toLowerCase() === info.owner.toLowerCase()).length;
-                  if (matchOwner && (matchBot || ownerAccCount === 1)) {
+                  const matchOwner = acc.owner.toLowerCase().trim() === info.owner.toLowerCase().trim();
+                  const accountMatches = Boolean(accountId) && (acc.id.toLowerCase() === accountId.replace(/^acc_/, '') || `acc_${acc.id}`.toLowerCase() === accountId);
+                  const exactBot = (acc.botId || '').toLowerCase() === botId;
+                  const exactServerAccount = accountMatches && (!serverId || !acc.serverId || acc.serverId.toLowerCase() === serverId);
+                  if (matchOwner && (exactBot || exactServerAccount)) {
                     matched = true;
                     return {
                       ...acc,
                       isConnected: isOnline,
+                      botId: reportedBotId,
+                      serverId: p.serverId || acc.serverId,
+                      runtimeState,
+                      runtimeReason: p.reason,
+                      runtimeHost: p.host,
+                      runtimePort: p.port,
+                      runtimeUpdatedAt: Date.now(),
                       daemonUrl: url,
-                      connectedAt: isOnline ? (acc.connectedAt || Date.now()) : undefined,
+                      connectedAt: isOnline ? (Number(p.connectedAt) || acc.connectedAt || Date.now()) : undefined,
                       legitimacy: {
                         status: isOnline ? ('legit' as const) : ('offline' as const),
                         badge: isOnline ? 'Verified Legit Owner' : 'Standby / Offline',
                         description: isOnline
-                          ? `Legitimate connection: Running live on @${acc.owner}'s Termux phone daemon.`
-                          : `Bot offline on @${acc.owner}'s Termux phone daemon.`,
+                          ? `Live ${runtimeState.toLowerCase()} state confirmed by @${acc.owner}'s daemon.`
+                          : p.reason || `Bot is ${runtimeState.toLowerCase()} on @${acc.owner}'s daemon.`,
                         isLegit: true,
                       },
                     };
@@ -280,57 +325,50 @@ export default function ChiefAdminPage() {
                   return acc;
                 });
 
-                // Fallback: If online bot detected for this owner but didn't match specific account:
-                // 1) If user has accounts, attach to first account
-                // 2) If user has no accounts, create synthetic account entry so it is visible
-                if (isOnline && !matched) {
-                  const ownerIdx = next.findIndex((x) => x.owner.toLowerCase() === info.owner.toLowerCase());
-                  if (ownerIdx >= 0) {
-                    next[ownerIdx] = {
-                      ...next[ownerIdx],
-                      isConnected: true,
-                      daemonUrl: url,
-                      connectedAt: next[ownerIdx].connectedAt || Date.now(),
-                      legitimacy: {
-                        status: 'legit' as const,
-                        badge: 'Verified Legit Owner',
-                        description: `Legitimate connection: Running live on @${next[ownerIdx].owner}'s Termux phone daemon.`,
-                        isLegit: true,
-                      },
-                    };
-                  } else {
-                    next.push({
-                      id: `live_${botId || Date.now()}`,
-                      owner: info.owner,
-                      ign: p?.username || botId || `@${info.owner}'s Bot`,
-                      serverHost: p?.serverId || 'Bedrock Server',
-                      serverPort: 19132,
-                      isConnected: true,
-                      connectedAt: Date.now(),
-                      daemonUrl: url,
-                      registeredTunnel: url,
-                      legitimacy: {
-                        status: 'legit' as const,
-                        badge: 'Live Daemon Bot',
-                        description: `Running live on @${info.owner}'s Termux phone daemon.`,
-                        isLegit: true,
-                      },
-                    });
-                  }
+                // Keep unconfigured daemon bots visible, but never attach them
+                // to an unrelated account just because the owner matches.
+                if (!matched) {
+                  const syntheticId = `runtime:${info.owner}:${botId}`;
+                  const synthetic: AccountItem = {
+                    id: syntheticId,
+                    botId: reportedBotId,
+                    serverId: p.serverId,
+                    owner: info.owner,
+                    ign: p.username || botId,
+                    serverHost: p.host || 'Unknown server',
+                    serverPort: Number(p.port) || 19132,
+                    serverName: p.serverId || 'Unconfigured bot',
+                    isConnected: isOnline,
+                    connectedAt: isOnline ? (Number(p.connectedAt) || Date.now()) : undefined,
+                    runtimeState,
+                    runtimeReason: p.reason,
+                    runtimeHost: p.host,
+                    runtimePort: p.port,
+                    runtimeUpdatedAt: Date.now(),
+                    daemonUrl: url,
+                    registeredTunnel: url,
+                    legitimacy: { status: 'legit', badge: 'Live Daemon Bot', description: `Reported by @${info.owner}'s Termux daemon.`, isLegit: true },
+                  };
+                  const existingIndex = next.findIndex((item) => item.id === syntheticId);
+                  if (existingIndex >= 0) next[existingIndex] = synthetic;
+                  else next.push(synthetic);
                 }
 
                 return next;
               });
-
-              // Dynamically re-evaluate totalConnected
-              setStats((prev) => ({
-                ...prev,
-                totalConnected: Math.max(prev.totalConnected, isOnline ? 1 : 0),
-              }));
             } else if (data.type === 'CHAT_MESSAGE') {
               const msg = data.payload;
-              const ignKey = (msg.accountUsername || '').toLowerCase().trim();
-              const botKey = (msg.botId || '').toLowerCase().trim();
+              let botKey = String(msg.botId || '').toLowerCase().trim();
+              if (!botKey && msg.serverId && msg.accountUsername) {
+                const exactFallback = accounts.filter((acc) =>
+                  acc.owner.toLowerCase() === info.owner.toLowerCase() &&
+                  acc.serverId?.toLowerCase() === String(msg.serverId).toLowerCase() &&
+                  acc.ign.replace(/^@/, '').toLowerCase() === String(msg.accountUsername).replace(/^@/, '').toLowerCase()
+                );
+                if (exactFallback.length === 1) botKey = (exactFallback[0].botId || '').toLowerCase();
+              }
+              if (!botKey) return;
+              const chatKey = `${info.owner.toLowerCase()}::${botKey}`;
               const entry = {
                 id: msg.id || `${Date.now()}-${Math.random()}`,
                 text: msg.raw || msg.text || msg.message || '',
@@ -345,12 +383,9 @@ export default function ChiefAdminPage() {
 
               setLiveChats((prev) => {
                 const next = { ...prev };
-                if (ignKey) {
-                  next[ignKey] = [...(next[ignKey] || []).slice(-25), entry];
-                }
-                if (botKey && botKey !== ignKey) {
-                  next[botKey] = [...(next[botKey] || []).slice(-25), entry];
-                }
+                const existing = next[chatKey] || [];
+                if (existing.some((item) => item.id === entry.id)) return prev;
+                next[chatKey] = [...existing.slice(-24), entry];
                 return next;
               });
             }
@@ -359,24 +394,46 @@ export default function ChiefAdminPage() {
 
         ws.onclose = () => {
           if (pingTimer) clearInterval(pingTimer);
-          daemonSocketsRef.current.delete(url);
+          if (authTimer) clearTimeout(authTimer);
+          if (daemonSocketsRef.current.get(url) === ws) daemonSocketsRef.current.delete(url);
+          setDaemonConnections((prev) => ({ ...prev, [url]: authFailed ? { state: 'auth-error', error: prev[url]?.error || 'Daemon authentication failed.' } : { state: 'offline' } }));
+          setAccounts((prev) => prev.map((acc) => acc.owner.toLowerCase() === info.owner.toLowerCase() && acc.daemonUrl === url
+            ? { ...acc, isConnected: false, connectedAt: undefined, runtimeState: 'UNKNOWN', runtimeReason: 'Daemon connection lost; waiting for the next live sync.' }
+            : acc));
+          if (!authFailed && desiredDaemonsRef.current.has(url) && !daemonRetryTimersRef.current.has(url)) {
+            const attempt = daemonRetryAttemptsRef.current.get(url) || 0;
+            daemonRetryAttemptsRef.current.set(url, attempt + 1);
+            const delay = Math.min(30_000, 2_000 * (2 ** Math.min(attempt, 4)));
+            const retry = setTimeout(() => {
+              daemonRetryTimersRef.current.delete(url);
+              const latestInfo = desiredDaemonsRef.current.get(url);
+              if (latestInfo) connectDaemonRef.current?.(latestInfo);
+            }, delay);
+            daemonRetryTimersRef.current.set(url, retry);
+          }
         };
 
         ws.onerror = () => {
-          if (pingTimer) clearInterval(pingTimer);
           try { ws.close(); } catch {}
-          daemonSocketsRef.current.delete(url);
         };
-      } catch (e) {}
-    });
+      } catch {
+        setDaemonConnections((prev) => ({ ...prev, [url]: { state: 'offline' } }));
+      }
+    };
+
+    connectDaemonRef.current = connectDaemon;
+    targetTunnels.forEach((info) => connectDaemon(info));
   }, [accounts, users, tunnels]);
 
   useEffect(() => {
     return () => {
+      desiredDaemonsRef.current.clear();
       daemonSocketsRef.current.forEach((ws) => {
         try { ws.close(); } catch {}
       });
       daemonSocketsRef.current.clear();
+      daemonRetryTimersRef.current.forEach((timer) => clearTimeout(timer));
+      daemonRetryTimersRef.current.clear();
     };
   }, []);
 
@@ -389,6 +446,8 @@ export default function ChiefAdminPage() {
 
   // Fetch all admin data
   const fetchData = useCallback(async (isSilent = false) => {
+    if (fetchInFlightRef.current) return;
+    fetchInFlightRef.current = true;
     if (!isSilent) setLoading(true);
     setRefreshing(true);
     try {
@@ -412,6 +471,7 @@ export default function ChiefAdminPage() {
     } catch (err: any) {
       showToast(err.message || 'Error fetching data', 'error');
     } finally {
+      fetchInFlightRef.current = false;
       setLoading(false);
       setRefreshing(false);
     }
@@ -419,6 +479,8 @@ export default function ChiefAdminPage() {
 
   useEffect(() => {
     fetchData();
+    const refreshTimer = setInterval(() => fetchData(true), 30_000);
+    return () => clearInterval(refreshTimer);
   }, [fetchData]);
 
   // Handle Toggle Registrations (Pause / Resume)
@@ -536,14 +598,14 @@ export default function ChiefAdminPage() {
   };
 
   // Handle Disconnect Account
-  const handleDisconnectAccount = async (accountId: string, ign: string) => {
+  const handleDisconnectAccount = async (accountId: string, ign: string, botId: string) => {
     // 1. Immediately send STOP_BOT via any connected daemon WebSockets
     try {
       daemonSocketsRef.current.forEach((ws) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'STOP_BOT',
-            payload: { botId: ign, id: ign, username: ign }
+            payload: { botId, id: botId, username: ign }
           }));
         }
       });
@@ -554,7 +616,7 @@ export default function ChiefAdminPage() {
       const res = await fetch('/api/admin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'disconnect_account', accountId, ign }),
+        body: JSON.stringify({ action: 'disconnect_account', accountId, ign, botId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to disconnect account');
@@ -590,19 +652,13 @@ export default function ChiefAdminPage() {
     return Array.from(set).sort();
   }, [accounts]);
 
-  // Filtered and Sorted Accounts (with deduplication)
+  // Deduplicate only identical deployments; one account assigned to two server
+  // profiles must remain visible as two distinct bot deployments.
   const filteredAccounts = useMemo(() => {
-    // Deduplicate by owner + cleanIgn so duplicate DB rows never show twice
     const dedupeMap = new Map<string, AccountItem>();
     accounts.forEach((a) => {
-      const cleanIgn = a.ign.replace(/^@/, '').trim().toLowerCase();
-      const key = `${a.owner.toLowerCase().trim()}::${cleanIgn}`;
-      const existing = dedupeMap.get(key);
-      if (!existing) {
-        dedupeMap.set(key, a);
-      } else if (!existing.isConnected && a.isConnected) {
-        dedupeMap.set(key, a);
-      }
+      const key = `${a.owner.toLowerCase().trim()}::${(a.botId || `${a.serverId || 'unassigned'}__${a.id}`).toLowerCase()}`;
+      dedupeMap.set(key, a);
     });
 
     return Array.from(dedupeMap.values())
@@ -676,6 +732,7 @@ export default function ChiefAdminPage() {
     connectedCount: number;
     tunnelUrl?: string;
     isTunnelActive?: boolean;
+    daemonState?: string;
     servers: ServerGroup[];
   }
 
@@ -690,7 +747,7 @@ export default function ChiefAdminPage() {
         userMap.set(owner, serverMap);
       }
 
-      const sKey = `${acc.serverHost}:${acc.serverPort}`;
+      const sKey = acc.serverId || `${acc.serverHost}:${acc.serverPort}`;
       let list = serverMap.get(sKey);
       if (!list) {
         list = [];
@@ -705,17 +762,15 @@ export default function ChiefAdminPage() {
       const userItem = users.find((u) => u.username.toLowerCase() === owner.toLowerCase());
       const tunnel = tunnels.find((t) => t.username.toLowerCase() === owner.toLowerCase());
       const tunnelUrl = userItem?.tunnelUrl || tunnel?.url;
-      const isTunnelActive = userItem?.isTunnelActive || (tunnel?.isRecent ?? false);
+      const liveSocketState = tunnel?.url ? daemonConnections[tunnel.url]?.state : undefined;
+      const isTunnelActive = liveSocketState === 'connected' || (liveSocketState === undefined && (tunnel?.daemonReachable || userItem?.daemonReachable));
+      const daemonState = liveSocketState || (tunnel?.daemonReachable || userItem?.daemonReachable ? 'probe-live' : userItem?.isTunnelActive ? 'heartbeat-only' : 'offline');
 
       const servers: ServerGroup[] = [];
-      let userTotal = 0;
-      let userConnected = 0;
 
       serverMap.forEach((accList, sKey) => {
         const first = accList[0];
         const connectedCount = accList.filter((a) => a.isConnected).length;
-        userTotal += accList.length;
-        userConnected += connectedCount;
 
         const displayName = first?.serverName || (first?.serverHost ? `${first.serverHost}:${first.serverPort}` : 'Bedrock Server');
 
@@ -731,6 +786,9 @@ export default function ChiefAdminPage() {
 
       // Sort servers by name/host
       servers.sort((a, b) => a.serverName.localeCompare(b.serverName));
+      const ownerDeployments = Array.from(serverMap.values()).flat();
+      const userTotal = new Set(ownerDeployments.map((a) => a.id)).size;
+      const userConnected = new Set(ownerDeployments.filter((a) => a.isConnected).map((a) => a.id)).size;
 
       groups.push({
         owner,
@@ -738,6 +796,7 @@ export default function ChiefAdminPage() {
         connectedCount: userConnected,
         tunnelUrl,
         isTunnelActive,
+        daemonState,
         servers,
       });
     });
@@ -750,7 +809,7 @@ export default function ChiefAdminPage() {
     }
 
     return groups;
-  }, [filteredAccounts, users, tunnels, accountSortBy]);
+  }, [filteredAccounts, users, tunnels, accountSortBy, daemonConnections]);
 
     // Format seconds into uptime
   const formatUptime = (seconds: number): string => {
@@ -1006,7 +1065,7 @@ export default function ChiefAdminPage() {
                   Termux Daemons
                 </span>
                 <span className="font-mono font-bold text-purple-600">
-                  {tunnels.filter((t) => t.isRecent).length}
+                  {tunnels.filter((t) => daemonConnections[t.url]?.state === 'connected').length}
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -1174,10 +1233,10 @@ export default function ChiefAdminPage() {
                   </div>
                   <div className="mt-3 flex items-baseline gap-2">
                     <span className="text-2xl font-black text-purple-600 flex items-center gap-1.5">
-                      {tunnels.filter((t) => t.isRecent).length}
+                      {tunnels.filter((t) => daemonConnections[t.url]?.state === 'connected').length}
                     </span>
                     <span className="text-xs text-slate-400 font-medium">
-                      active {tunnels.filter((t) => t.isRecent).length === 1 ? 'daemon' : 'daemons'}
+                      active {tunnels.filter((t) => daemonConnections[t.url]?.state === 'connected').length === 1 ? 'daemon' : 'daemons'}
                     </span>
                   </div>
                 </div>
@@ -1193,7 +1252,7 @@ export default function ChiefAdminPage() {
                       <p className="text-[11px] text-slate-500">Phone daemons paired and reporting heartbeats</p>
                     </div>
                     <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-purple-100 text-purple-800 font-mono">
-                      {tunnels.filter((t) => t.isRecent).length} LIVE
+                      {tunnels.filter((t) => daemonConnections[t.url]?.state === 'connected').length} LIVE
                     </span>
                   </div>
                   <div className="space-y-2.5">
@@ -1203,7 +1262,9 @@ export default function ChiefAdminPage() {
                       </div>
                     ) : (
                       tunnels.map((tun) => {
-                        const isLive = tun.isRecent;
+                        const daemonConnection = daemonConnections[tun.url];
+                        const isLive = daemonConnection?.state === 'connected';
+                        const isConnecting = daemonConnection?.state === 'connecting' || daemonConnection?.state === 'authenticating';
                         const ageMin = Math.max(1, Math.round((Date.now() - tun.updatedAt) / 60000));
                         return (
                           <div key={tun.username} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200/80">
@@ -1224,11 +1285,15 @@ export default function ChiefAdminPage() {
                               {isLive ? (
                                 <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
                                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                  Live
+                                  Socket live
                                 </span>
+                              ) : isConnecting ? (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">Connecting…</span>
+                              ) : daemonConnection?.state === 'auth-error' ? (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={daemonConnection.error || tun.authError}>Auth error</span>
                               ) : (
                                 <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-500">
-                                  {ageMin}m ago
+                                  Socket offline · heartbeat {ageMin}m ago
                                 </span>
                               )}
                             </div>
@@ -1368,6 +1433,9 @@ export default function ChiefAdminPage() {
                         </tr>
                       ) : (
                         filteredUsers.map((u) => {
+                          const currentOnlineCount = new Set(accounts
+                            .filter((account) => account.owner.toLowerCase() === u.username.toLowerCase() && account.isConnected)
+                            .map((account) => account.id)).size;
                           return (
                             <tr key={u.id} className="hover:bg-slate-50/80 transition">
                               {/* User details */}
@@ -1381,13 +1449,17 @@ export default function ChiefAdminPage() {
                                     <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
                                       <span className="font-mono">ID: {u.id.substring(0, 8)}...</span>
                                       <span>•</span>
-                                      {u.isTunnelActive ? (
+                                      {(u.tunnelUrl && (daemonConnections[u.tunnelUrl]?.state === 'connected' || (!daemonConnections[u.tunnelUrl] && u.daemonReachable))) || (!u.tunnelUrl && u.isTunnelActive) ? (
                                         <span className="inline-flex items-center gap-1 text-emerald-600 font-semibold" title={u.tunnelUrl}>
                                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                          Daemon Live
+                                          Daemon socket live
                                         </span>
+                                      ) : u.tunnelUrl && ['connecting', 'authenticating'].includes(daemonConnections[u.tunnelUrl]?.state || '') ? (
+                                        <span className="text-amber-600 font-semibold">Daemon connecting</span>
+                                      ) : u.tunnelUrl && daemonConnections[u.tunnelUrl]?.state === 'auth-error' ? (
+                                        <span className="text-rose-600 font-semibold" title={daemonConnections[u.tunnelUrl]?.error}>Daemon auth error</span>
                                       ) : (
-                                        <span className="text-slate-400">No Daemon</span>
+                                        <span className="text-slate-400">Daemon unreachable</span>
                                       )}
                                     </div>
                                   </div>
@@ -1400,10 +1472,10 @@ export default function ChiefAdminPage() {
                                   <span className="font-bold text-slate-900">
                                     {u.accountCount} {u.accountCount === 1 ? 'account' : 'accounts'}
                                   </span>
-                                  {u.connectedCount > 0 && (
+                                  {currentOnlineCount > 0 && (
                                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1">
                                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                      {u.connectedCount} online
+                                      {currentOnlineCount} online
                                     </span>
                                   )}
                                 </div>
@@ -1580,7 +1652,7 @@ export default function ChiefAdminPage() {
                               </span>
                             </div>
                             <p className="text-[11px] text-slate-400 mt-0.5">
-                              {userGroup.servers.length} configured server{userGroup.servers.length === 1 ? '' : 's'} &bull; {userGroup.totalAccounts} linked Bedrock account{userGroup.totalAccounts === 1 ? '' : 's'}
+                              {userGroup.servers.length} configured server{userGroup.servers.length === 1 ? '' : 's'} &bull; {userGroup.totalAccounts} unique linked Bedrock account{userGroup.totalAccounts === 1 ? '' : 's'}
                             </p>
                           </div>
                         </div>
@@ -1590,6 +1662,9 @@ export default function ChiefAdminPage() {
                             <span className={`w-2 h-2 rounded-full shrink-0 ${userGroup.isTunnelActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
                             <span className="font-mono text-[11px] truncate max-w-[240px]" title={userGroup.tunnelUrl}>
                               {userGroup.tunnelUrl}
+                            </span>
+                            <span className={`text-[10px] font-bold uppercase ${userGroup.daemonState === 'connected' ? 'text-emerald-700' : userGroup.daemonState === 'connecting' || userGroup.daemonState === 'authenticating' ? 'text-amber-700' : userGroup.daemonState === 'auth-error' ? 'text-rose-700' : 'text-slate-500'}`}>
+                              {userGroup.daemonState === 'heartbeat-only' ? 'Heartbeat only' : userGroup.daemonState === 'probe-live' ? 'Probe live' : userGroup.daemonState || 'Unknown'}
                             </span>
                           </div>
                         )}
@@ -1629,15 +1704,33 @@ export default function ChiefAdminPage() {
 
                                 const displayTunnel = a.daemonUrl || a.registeredTunnel || '';
                                 const cleanIgn = a.ign.replace(/^@/, '').trim();
-                                const botChats =
-                                  liveChats[a.ign.toLowerCase()] ||
-                                  liveChats[cleanIgn.toLowerCase()] ||
-                                  liveChats[(a.settings?.last_bot_id || '').toLowerCase()] ||
-                                  [];
+                                const chatKey = `${a.owner.toLowerCase()}::${(a.botId || '').toLowerCase()}`;
+                                const botChats = liveChats[chatKey] || [];
+                                const runtimeState = (a.runtimeState || (a.isConnected ? 'SPAWNED' : 'DISCONNECTED')).toUpperCase();
+                                const stateLabel = runtimeState === 'SPAWNED' || runtimeState === 'LOGGED_IN'
+                                  ? 'Connected'
+                                  : runtimeState === 'UNKNOWN'
+                                    ? 'Unknown'
+                                    : runtimeState === 'CONNECTING'
+                                      ? 'Connecting'
+                                      : runtimeState === 'RECONNECTING'
+                                        ? 'Reconnecting'
+                                        : runtimeState === 'KICKED'
+                                          ? 'Kicked'
+                                          : runtimeState === 'ERROR'
+                                            ? 'Error'
+                                            : 'Offline';
+                                const stateStyle = a.isConnected
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  : runtimeState === 'CONNECTING' || runtimeState === 'RECONNECTING'
+                                    ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                    : runtimeState === 'ERROR' || runtimeState === 'KICKED'
+                                      ? 'bg-rose-100 text-rose-700 border-rose-200'
+                                      : 'bg-slate-100 text-slate-600 border-slate-200';
 
                                 return (
                                   <div
-                                    key={a.id}
+                                    key={a.botId || `${a.id}:${a.serverId || 'unassigned'}`}
                                     className="bg-white border border-slate-200 rounded-3xl p-5 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-4"
                                   >
                                     {/* Top Header: Head Skin, IGN, Owner, Status & Actions */}
@@ -1670,21 +1763,14 @@ export default function ChiefAdminPage() {
 
                                       {/* Status & Actions */}
                                       <div className="flex items-center gap-1.5 shrink-0">
-                                        {a.isConnected ? (
-                                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-2xs">
-                                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                                            Connected
-                                          </span>
-                                        ) : (
-                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
-                                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                                            Offline
-                                          </span>
-                                        )}
+                                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black border shadow-2xs ${stateStyle}`} title={a.runtimeReason || `Daemon reported ${runtimeState.toLowerCase()}`}>
+                                          <span className={`w-2 h-2 rounded-full ${a.isConnected ? 'bg-emerald-500 animate-pulse' : runtimeState === 'ERROR' || runtimeState === 'KICKED' ? 'bg-rose-500' : runtimeState === 'CONNECTING' || runtimeState === 'RECONNECTING' ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`} />
+                                          {stateLabel}
+                                        </span>
 
                                         {a.isConnected && (
                                           <button
-                                            onClick={() => handleDisconnectAccount(a.id, a.ign)}
+                                            onClick={() => handleDisconnectAccount(a.id, a.ign, a.botId)}
                                             className="p-1.5 rounded-xl border border-slate-200 hover:border-amber-300 hover:bg-amber-50 text-slate-500 hover:text-amber-700 transition cursor-pointer"
                                             title="Disconnect bot from server"
                                           >
