@@ -979,12 +979,36 @@ button:hover .mc-nav-mini-block,
 }
 
 @media (max-width: 640px) {
-  .mc-signet-notifications { top: 10px; width: calc(100vw - 20px); }
-  .mc-signet-notification { gap: 9px; padding: 11px 10px; }
-  .mc-signet-notification__icon { width: 32px; height: 32px; }
-  .mc-signet-notification__title { font-size: 12px; }
-  .mc-signet-notification__details { font-size: 11px; }
-  .mc-signet-notification__dismiss { width: 25px; height: 25px; }
+  .mc-signet-notifications {
+    top: max(8px, env(safe-area-inset-top));
+    width: min(420px, calc(100vw - 16px));
+    max-height: min(32vh, 250px);
+    gap: 5px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+  .mc-signet-notification { gap: 7px; padding: 8px 8px 7px; border-width: 1px; }
+  .mc-signet-notification::before { height: 2px; }
+  .mc-signet-notification__icon {
+    width: 25px;
+    height: 25px;
+    margin-top: 1px;
+    border-width: 1px;
+  }
+  .mc-signet-notification__icon svg { width: 14px; height: 14px; }
+  .mc-signet-notification__eyebrow { margin-bottom: 1px; font-size: 7px; letter-spacing: .1em; }
+  .mc-signet-notification__title { font-size: 10px; line-height: 1.25; }
+  .mc-signet-notification__details {
+    display: -webkit-box;
+    margin-top: 2px;
+    overflow: hidden;
+    font-size: 9px;
+    line-height: 1.25;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .mc-signet-notification__dismiss { width: 20px; height: 20px; margin-top: 0; }
 }
 
 @media (max-width: 640px) {
