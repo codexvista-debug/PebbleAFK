@@ -24,6 +24,7 @@ process.on('unhandledRejection', (reason: any) => {
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const AUTH_TOKEN = (process.env.DAEMON_AUTH_TOKEN || '').trim();
+const DAEMON_OWNER = (process.env.PEBBLEAFK_OWNER || '').trim().toLowerCase();
 const path = require('path');
 const childProcess = require('child_process');
 const crypto = require('crypto');
@@ -66,7 +67,9 @@ try {
   const saved = JSON.parse(require('fs').readFileSync(sessionStorePath, 'utf8'));
   if (Array.isArray(saved)) {
     for (const entry of saved) {
-      if (entry && typeof entry.sessionId === 'string' && /^[\w-]{8,100}$/.test(entry.sessionId)) {
+      const isLegacyAnonymousMonitor = entry?.label === 'Browser session';
+      const isRecent = Number(entry?.lastSeenAt) > Date.now() - 30 * 24 * 60 * 60 * 1000;
+      if (!isLegacyAnonymousMonitor && isRecent && entry && typeof entry.sessionId === 'string' && /^[\w-]{8,100}$/.test(entry.sessionId)) {
         deviceSessions.set(entry.sessionId, { ...entry, connected: false });
       }
     }
@@ -242,6 +245,7 @@ wss.on('connection', (ws: WebSocket, req) => {
       // Authentication
       if (parsed.type === 'AUTH') {
         const clientToken = (parsed.payload.token || '').trim();
+        const requestedOwner = String(parsed.payload.username || '').trim().toLowerCase();
 
         if (AUTH_TOKEN && clientToken !== AUTH_TOKEN) {
           console.warn(chalk.red(`[Security] Blocked unauthorized connection attempt`));
@@ -253,17 +257,30 @@ wss.on('connection', (ws: WebSocket, req) => {
           return;
         }
 
+        if (DAEMON_OWNER && requestedOwner && requestedOwner !== DAEMON_OWNER) {
+          ws.send(JSON.stringify({
+            type: 'AUTH_RESULT',
+            payload: { success: false, message: 'This daemon belongs to a different PebbleAFK account.' },
+          }));
+          ws.close();
+          return;
+        }
+
         authenticatedClients.add(ws);
         const sessionId = typeof parsed.payload.sessionId === 'string' && /^[\w-]{8,100}$/.test(parsed.payload.sessionId)
           ? parsed.payload.sessionId
-          : crypto.randomUUID();
-        registerDeviceSession(
-          ws,
-          sessionId,
-          typeof parsed.payload.deviceLabel === 'string' ? parsed.payload.deviceLabel : 'Browser session',
-          String(req.headers['user-agent'] || ''),
-          String(ip || 'unknown'),
-        );
+          : undefined;
+        // Admin and server-to-server sockets do not have a browser session ID;
+        // never invent one here or they pollute the user's known-device list.
+        if (sessionId) {
+          registerDeviceSession(
+            ws,
+            sessionId,
+            typeof parsed.payload.deviceLabel === 'string' ? parsed.payload.deviceLabel : 'Browser',
+            String(req.headers['user-agent'] || ''),
+            String(ip || 'unknown'),
+          );
+        }
         ws.send(JSON.stringify({
           type: 'AUTH_RESULT',
           payload: { success: true, message: 'Authenticated successfully' },

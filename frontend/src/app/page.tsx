@@ -903,6 +903,20 @@ export default function Home() {
 
   // Save server profile to state & Supabase
   const handleSaveServer = async (profile: ServerProfile) => {
+    const existingProfile = servers.find((server) => server.id === profile.id);
+    const normalizedHost = (host: string) => host.trim().toLowerCase().replace(/\.$/, '');
+    const supportedHosts = new Set(['play.freshsmp.fun', 'bedrock.donutsmp.net']);
+    if (!existingProfile && !supportedHosts.has(normalizedHost(profile.serverHost))) {
+      throw new Error('Only FreshSMP and DonutSMP profiles can be created right now.');
+    }
+    const duplicate = servers.find((server) => server.id !== profile.id && (
+      normalizedHost(server.serverHost) === normalizedHost(profile.serverHost) ||
+      (server.name || '').trim().toLowerCase() === profile.name.trim().toLowerCase()
+    ));
+    if (duplicate) {
+      throw new Error(`${profile.name} already has a server profile on this account.`);
+    }
+
     setServers((prev) => {
       const idx = prev.findIndex((s) => s.id === profile.id);
       let updated: ServerProfile[];
@@ -4051,7 +4065,7 @@ export default function Home() {
           setIsServerModalOpen(false);
           setEditingServer(null);
         }}
-        accounts={accounts}
+        serverProfiles={servers}
         initialProfile={editingServer}
         currentUser={currentUser}
         onSaveProfile={handleSaveServer}
