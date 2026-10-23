@@ -83,6 +83,172 @@ function MinecraftStatusIcon({ tone }: { tone: MinecraftStatusTone }) {
     </span>
   );
 }
+
+/* Authentic Minecraft Pixel Art Icons for Sidebar Navigation */
+function MinecraftCraftingTableIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} shapeRendering="crispEdges" aria-hidden="true">
+      <rect x="1" y="1" width="14" height="14" fill="#6d4827" />
+      <rect x="0" y="0" width="16" height="1" fill="#9c6e3b" />
+      <rect x="0" y="0" width="1" height="16" fill="#9c6e3b" />
+      <rect x="15" y="0" width="1" height="16" fill="#3f2711" />
+      <rect x="0" y="15" width="16" height="1" fill="#3f2711" />
+      <rect x="2" y="2" width="12" height="12" fill="#523418" />
+      <rect x="3" y="3" width="4" height="4" fill="#a4723d" />
+      <rect x="9" y="3" width="4" height="4" fill="#a4723d" />
+      <rect x="3" y="9" width="4" height="4" fill="#8a5b2a" />
+      <rect x="9" y="9" width="4" height="4" fill="#8a5b2a" />
+      <rect x="3" y="3" width="1" height="4" fill="#d19c5c" />
+      <rect x="3" y="3" width="4" height="1" fill="#d19c5c" />
+      <rect x="9" y="3" width="1" height="4" fill="#d19c5c" />
+      <rect x="9" y="3" width="4" height="1" fill="#d19c5c" />
+      <rect x="5" y="5" width="2" height="2" fill="#3a2512" />
+      <rect x="11" y="5" width="2" height="2" fill="#3a2512" />
+    </svg>
+  );
+}
+
+function MinecraftCommandBlockIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} shapeRendering="crispEdges" aria-hidden="true">
+      <rect x="0" y="0" width="16" height="16" fill="#462c1b" />
+      <rect x="1" y="1" width="14" height="14" fill="#b96e42" />
+      <rect x="1" y="1" width="14" height="1" fill="#df8b5b" />
+      <rect x="1" y="1" width="1" height="14" fill="#df8b5b" />
+      <rect x="14" y="1" width="1" height="14" fill="#7d4323" />
+      <rect x="1" y="14" width="14" height="1" fill="#7d4323" />
+      <rect x="3" y="3" width="10" height="10" fill="#67391d" />
+      <rect x="4" y="4" width="8" height="8" fill="#351a0b" />
+      <rect x="5" y="5" width="6" height="6" fill="#13a89e" />
+      <rect x="6" y="6" width="4" height="4" fill="#5cf2e5" />
+      <rect x="7" y="7" width="2" height="2" fill="#ffffff" />
+      <rect x="2" y="2" width="1" height="1" fill="#ffd199" />
+      <rect x="13" y="2" width="1" height="1" fill="#ffd199" />
+      <rect x="2" y="13" width="1" height="1" fill="#ffd199" />
+      <rect x="13" y="13" width="1" height="1" fill="#ffd199" />
+    </svg>
+  );
+}
+
+function MinecraftHeartIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} shapeRendering="crispEdges" aria-hidden="true">
+      <path d="M3 1h3v1h1v1h2V2h1V1h3v1h1v3h-1v2h-1v2h-1v2h-1v1h-1v1h-2v-1H6v-1H5v-2H4V7H3V5H2V2h1V1z" fill="#000000" />
+      <path d="M3 2h3v1h1v2H6V4H3V2zm7 0h3v2h-3V3h-1V2h1zm-5 4h1v2H5V6zm6 0h1v2h-1V6zm-4 4h1v1H7v-1zm2 0h1v1H9v-1z" fill="#660000" />
+      <path d="M4 3h2v2H4V3zm6 0h2v2h-2V3zM3 4h10v1H3V4zm1 1h8v2H4V5zm1 2h6v2H5V7zm1 2h4v1H6V9zm1 1h2v1H7v-1z" fill="#e01616" />
+      <rect x="4" y="2" width="1" height="2" fill="#ffffff" />
+      <rect x="5" y="2" width="1" height="1" fill="#ffffff" />
+      <rect x="4" y="3" width="2" height="1" fill="#ff8a8a" />
+    </svg>
+  );
+}
+
+function MinecraftEnderChestIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} shapeRendering="crispEdges" aria-hidden="true">
+      <rect x="1" y="2" width="14" height="12" fill="#0e171b" />
+      <rect x="2" y="1" width="12" height="14" fill="#0e171b" />
+      <rect x="2" y="2" width="12" height="12" fill="#1b2b32" />
+      <rect x="2" y="2" width="12" height="1" fill="#2d4854" />
+      <rect x="2" y="2" width="1" height="12" fill="#2d4854" />
+      <rect x="13" y="2" width="1" height="12" fill="#090f12" />
+      <rect x="2" y="13" width="12" height="1" fill="#090f12" />
+      <rect x="2" y="6" width="12" height="1" fill="#090f12" />
+      <rect x="6" y="5" width="4" height="4" fill="#0b5e55" />
+      <rect x="7" y="5" width="2" height="4" fill="#1fe4c8" />
+      <rect x="6" y="6" width="4" height="2" fill="#1fe4c8" />
+      <rect x="7" y="6" width="2" height="2" fill="#ffffff" />
+      <rect x="7.5" y="6" width="1" height="2" fill="#083832" />
+    </svg>
+  );
+}
+
+function MinecraftSteveIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} shapeRendering="crispEdges" aria-hidden="true">
+      <rect x="2" y="2" width="12" height="12" fill="#1b120c" />
+      <rect x="2" y="2" width="12" height="5" fill="#462d1d" />
+      <rect x="2" y="7" width="2" height="3" fill="#462d1d" />
+      <rect x="12" y="7" width="2" height="3" fill="#462d1d" />
+      <rect x="3" y="3" width="10" height="2" fill="#2e1b0f" />
+      <rect x="4" y="6" width="8" height="7" fill="#bd8b72" />
+      <rect x="4" y="7" width="8" height="5" fill="#cda085" />
+      <rect x="7" y="9" width="2" height="1" fill="#a46d54" />
+      <rect x="3" y="7" width="3" height="2" fill="#ffffff" />
+      <rect x="10" y="7" width="3" height="2" fill="#ffffff" />
+      <rect x="4" y="7" width="2" height="2" fill="#2e428b" />
+      <rect x="10" y="7" width="2" height="2" fill="#2e428b" />
+      <rect x="6" y="11" width="4" height="1" fill="#754832" />
+      <rect x="5" y="10" width="1" height="2" fill="#50301e" />
+      <rect x="10" y="10" width="1" height="2" fill="#50301e" />
+      <rect x="5" y="12" width="6" height="1" fill="#50301e" />
+    </svg>
+  );
+}
+
+function MinecraftCompassIcon({ className = "w-3.5 h-3.5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} shapeRendering="crispEdges" aria-hidden="true">
+      <rect x="4" y="1" width="8" height="14" fill="#2b2b2b" />
+      <rect x="1" y="4" width="14" height="8" fill="#2b2b2b" />
+      <rect x="2" y="2" width="12" height="12" fill="#2b2b2b" />
+      <rect x="4" y="2" width="8" height="12" fill="#808080" />
+      <rect x="2" y="4" width="12" height="8" fill="#808080" />
+      <rect x="3" y="3" width="10" height="10" fill="#a6a6a6" />
+      <rect x="4" y="4" width="8" height="8" fill="#141414" />
+      <rect x="7" y="3" width="2" height="5" fill="#ff2222" />
+      <rect x="6" y="5" width="4" height="2" fill="#cc1111" />
+      <rect x="7" y="3" width="1" height="4" fill="#ff7777" />
+      <rect x="7" y="8" width="2" height="5" fill="#cccccc" />
+      <rect x="6" y="9" width="4" height="2" fill="#999999" />
+      <rect x="7" y="9" width="1" height="3" fill="#ffffff" />
+      <rect x="7" y="7" width="2" height="2" fill="#ffd700" />
+    </svg>
+  );
+}
+
+function MinecraftBookQuillIcon({ className = "w-3.5 h-3.5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} shapeRendering="crispEdges" aria-hidden="true">
+      <rect x="2" y="3" width="9" height="11" fill="#4d2411" />
+      <rect x="3" y="4" width="8" height="10" fill="#7a3d1d" />
+      <rect x="4" y="5" width="6" height="8" fill="#ded2b6" />
+      <rect x="5" y="6" width="5" height="6" fill="#fffcf2" />
+      <rect x="6" y="7" width="3" height="1" fill="#4a3e2c" />
+      <rect x="6" y="9" width="3" height="1" fill="#4a3e2c" />
+      <rect x="10" y="8" width="2" height="2" fill="#e6b800" />
+      <rect x="9" y="1" width="2" height="2" fill="#ffffff" />
+      <rect x="10" y="2" width="2" height="3" fill="#ffffff" />
+      <rect x="11" y="3" width="2" height="4" fill="#d9d9d9" />
+      <rect x="10" y="6" width="2" height="3" fill="#b3b3b3" />
+      <rect x="9" y="8" width="2" height="3" fill="#332211" />
+      <rect x="8" y="11" width="1" height="2" fill="#111111" />
+      <rect x="12" y="4" width="1" height="2" fill="#9b4fd1" />
+    </svg>
+  );
+}
+
+function MinecraftRepeaterIcon({ className = "w-3.5 h-3.5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} shapeRendering="crispEdges" aria-hidden="true">
+      <rect x="1" y="2" width="14" height="12" fill="#3d3d3d" />
+      <rect x="2" y="3" width="12" height="10" fill="#6e6e6e" />
+      <rect x="2" y="3" width="12" height="1" fill="#8f8f8f" />
+      <rect x="2" y="3" width="1" height="10" fill="#8f8f8f" />
+      <rect x="4" y="5" width="2" height="1" fill="#525252" />
+      <rect x="10" y="9" width="2" height="1" fill="#525252" />
+      <rect x="7" y="11" width="2" height="1" fill="#8f8f8f" />
+      <rect x="7" y="4" width="2" height="7" fill="#2b2b2b" />
+      <rect x="6" y="5" width="4" height="1" fill="#2b2b2b" />
+      <rect x="4" y="6" width="2" height="4" fill="#3b2011" />
+      <rect x="4" y="4" width="2" height="2" fill="#ff1f1f" />
+      <rect x="4.5" y="4.5" width="1" height="1" fill="#ffffff" />
+      <rect x="10" y="8" width="2" height="4" fill="#3b2011" />
+      <rect x="10" y="6" width="2" height="2" fill="#ff1f1f" />
+      <rect x="10.5" y="6.5" width="1" height="1" fill="#ffffff" />
+    </svg>
+  );
+}
 import { 
   loadAccountsFromSupabase, 
   syncAllToSupabase, 
@@ -1717,14 +1883,14 @@ export default function Home() {
                   setActiveTab('dashboard');
                   setIsMobileSidebarOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer group ${
                   activeTab === 'dashboard'
                     ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className="mc-nav-block mc-nav-block--grass">
-                  <LayoutDashboard className="w-4 h-4" />
+                <div className="mc-nav-block mc-nav-block--crafting">
+                  <MinecraftCraftingTableIcon className="w-4 h-4" />
                 </div>
                 <span>Dashboard</span>
               </button>
@@ -1735,15 +1901,15 @@ export default function Home() {
                   setIsMobileSidebarOpen(false);
                   fetchTerminalLogs();
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer group ${
                   activeTab === 'termux_stream'
                     ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className="mc-nav-block mc-nav-block--diamond">
-                    <Terminal className="w-4 h-4" />
+                  <div className="mc-nav-block mc-nav-block--command">
+                    <MinecraftCommandBlockIcon className="w-4 h-4" />
                   </div>
                   <span>Termux Stream</span>
                 </div>
@@ -1755,14 +1921,14 @@ export default function Home() {
                   setActiveTab('diagnostics');
                   setIsMobileSidebarOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer group ${
                   activeTab === 'diagnostics'
                     ? 'bg-amber-50 text-amber-900 border border-amber-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
                 <div className="mc-nav-block mc-nav-block--redstone">
-                  <Activity className="w-4 h-4" />
+                  <MinecraftHeartIcon className="w-4 h-4" />
                 </div>
                 <span>Diagnostics</span>
               </button>
@@ -1772,14 +1938,14 @@ export default function Home() {
                   setActiveTab('servers');
                   setIsMobileSidebarOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer group ${
                   activeTab === 'servers'
                     ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className="mc-nav-block mc-nav-block--stone">
-                  <Server className="w-4 h-4" />
+                <div className="mc-nav-block mc-nav-block--ender">
+                  <MinecraftEnderChestIcon className="w-4 h-4" />
                 </div>
                 <span>Servers</span>
               </button>
@@ -1789,15 +1955,15 @@ export default function Home() {
                   setActiveTab('accounts');
                   setIsMobileSidebarOpen(false);
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer group ${
                   activeTab === 'accounts'
                     ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className="mc-nav-block mc-nav-block--amethyst">
-                    <Users className="w-4 h-4" />
+                  <div className="mc-nav-block mc-nav-block--steve">
+                    <MinecraftSteveIcon className="w-4 h-4" />
                   </div>
                   <span>Accounts</span>
                 </div>
@@ -1899,13 +2065,13 @@ export default function Home() {
                                 setActiveSubTab('connect');
                                 setIsMobileSidebarOpen(false);
                               }}
-                              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer group ${
                                 activeSubTab === 'connect'
                                   ? 'bg-emerald-100/60 text-emerald-900 border border-emerald-300 shadow-2xs'
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <span className="mc-nav-mini-block mc-nav-mini-block--grass"><HomeIcon className="h-3.5 w-3.5" /></span>
+                              <span className="mc-nav-mini-block mc-nav-mini-block--compass"><MinecraftCompassIcon className="h-3.5 w-3.5" /></span>
                               <span>Connect</span>
                             </button>
 
@@ -1915,13 +2081,13 @@ export default function Home() {
                                 setActiveSubTab('chat');
                                 setIsMobileSidebarOpen(false);
                               }}
-                              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer group ${
                                 activeSubTab === 'chat'
                                   ? 'bg-sky-50 text-sky-900 border border-sky-300 shadow-2xs'
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <span className="mc-nav-mini-block mc-nav-mini-block--diamond"><MessageSquare className="h-3.5 w-3.5" /></span>
+                              <span className="mc-nav-mini-block mc-nav-mini-block--chat"><MinecraftBookQuillIcon className="h-3.5 w-3.5" /></span>
                               <span>Chat</span>
                             </button>
 
@@ -1931,13 +2097,13 @@ export default function Home() {
                                 setActiveSubTab('settings');
                                 setIsMobileSidebarOpen(false);
                               }}
-                              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer group ${
                                 activeSubTab === 'settings'
                                   ? 'bg-slate-200/80 text-slate-900 border border-slate-300 shadow-2xs'
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <span className="mc-nav-mini-block mc-nav-mini-block--amethyst"><Sliders className="h-3.5 w-3.5" /></span>
+                              <span className="mc-nav-mini-block mc-nav-mini-block--repeater"><MinecraftRepeaterIcon className="h-3.5 w-3.5" /></span>
                               <span>Settings</span>
                             </button>
                           </div>
@@ -3427,29 +3593,24 @@ export default function Home() {
                             </div>
 
                             {!isAllSelected && selectedBossBar?.visible && selectedBossBar.title && (
-                              <div className="relative shrink-0 overflow-hidden border-b-2 border-amber-400/80 bg-gradient-to-r from-[#26231f] via-[#30271d] to-[#25231f] px-3.5 py-2.5 sm:px-5 shadow-inner" role="status" aria-label="AFK reward boss bar">
-                                <div className="flex items-center gap-3">
-                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-200/80 bg-gradient-to-b from-amber-300 to-orange-500 text-amber-950 shadow-[0_2px_0_#8d4f24]">
-                                    <Gift className="h-4 w-4" aria-hidden="true" />
+                              <div className="relative shrink-0 overflow-hidden border-b border-amber-400/60 bg-gradient-to-r from-[#26231f] via-[#30271d] to-[#25231f] px-3 py-1.5 sm:px-4 sm:py-2 shadow-inner" role="status" aria-label="AFK reward boss bar">
+                                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-amber-200/80 bg-gradient-to-b from-amber-300 to-orange-500 text-amber-950 shadow-[0_1.5px_0_#8d4f24]">
+                                    <Gift className="h-3.5 w-3.5" aria-hidden="true" />
                                   </div>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="mb-0.5 flex items-center justify-between gap-3">
-                                      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-300">AFK Reward</span>
-                                      {typeof selectedBossBar.progress === 'number' && (
-                                        <span className="shrink-0 rounded-md border border-amber-400/40 bg-amber-300/10 px-2 py-0.5 text-[10px] font-extrabold tabular-nums text-amber-200">
-                                          {Math.round(selectedBossBar.progress * 100)}%
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="min-w-0 truncate text-sm font-extrabold leading-5 text-[#fff8ec] sm:text-[15px]">
-                                      <MinecraftText text={selectedBossBar.title} palette="dark" />
-                                    </div>
-                                    {typeof selectedBossBar.progress === 'number' && (
-                                      <div className="mt-2 h-2 overflow-hidden rounded-sm border border-amber-200/30 bg-[#171512] p-0.5">
-                                        <div className="h-full rounded-[2px] bg-gradient-to-r from-emerald-400 via-lime-300 to-amber-300 shadow-[0_0_8px_rgba(163,230,53,.35)] transition-[width] duration-500" style={{ width: `${Math.round(selectedBossBar.progress * 100)}%` }} />
+                                  <div className="shrink-0 min-w-0 truncate text-xs sm:text-[13px] font-extrabold leading-none text-[#fff8ec]">
+                                    <MinecraftText text={selectedBossBar.title} palette="dark" />
+                                  </div>
+                                  {typeof selectedBossBar.progress === 'number' && (
+                                    <>
+                                      <div className="flex-1 min-w-[50px] h-2 sm:h-2.5 overflow-hidden rounded-full border border-amber-200/30 bg-[#171512] p-0.5">
+                                        <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-lime-300 to-amber-300 shadow-[0_0_8px_rgba(163,230,53,.35)] transition-[width] duration-500" style={{ width: `${Math.round(selectedBossBar.progress * 100)}%` }} />
                                       </div>
-                                    )}
-                                  </div>
+                                      <span className="shrink-0 rounded-full border border-amber-400/40 bg-amber-300/10 px-2 py-0.5 text-[10px] sm:text-[11px] font-black tabular-nums text-amber-200">
+                                        {Math.round(selectedBossBar.progress * 100)}%
+                                      </span>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             )}
