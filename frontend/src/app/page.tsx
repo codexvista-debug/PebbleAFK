@@ -3294,34 +3294,43 @@ export default function Home() {
                           {/* 2. Main Chat Box Container (Matching Image 3) */}
                           <div className="w-full min-w-0 flex-1 min-h-0 bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
                             {/* Card Header: Shows account skin head and username (or head stack for All Accounts) */}
-                            <div className="shrink-0 px-3 sm:px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-3 bg-slate-50/60">
-                              <div className="flex items-center gap-3 min-w-0">
+                            <div className="shrink-0 px-3 sm:px-5 py-2.5 sm:py-3 border-b border-slate-200 flex items-center justify-between gap-2.5 sm:gap-3 bg-slate-50/60">
+                              <div className="flex-1 min-w-0 flex items-center mr-2 sm:mr-3">
                                 {isAllSelected ? (
-                                  <div className="flex items-center gap-1.5 sm:gap-2" role="group" aria-label="All account status counts">
-                                    <span
+                                  <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5 w-full" role="group" aria-label="All account status counts">
+                                    <button
+                                      type="button"
                                       title={`${stabilityCounts.stable} stable accounts`}
                                       aria-label={`${stabilityCounts.stable} stable accounts`}
-                                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border-2 border-lime-300 bg-[#263b28] px-2 text-xs font-black uppercase tracking-wide text-lime-100 shadow-[0_2px_0_#111]"
+                                      className="mc-status-pill mc-status-pill--stable"
                                     >
-                                      <MinecraftStatusIcon tone="stable" /><span className="hidden sm:inline">Stable</span><span>{stabilityCounts.stable}</span>
-                                    </span>
-                                    <span
+                                      <MinecraftStatusIcon tone="stable" />
+                                      <span className="mc-status-pill-label">Stable</span>
+                                      <span className="mc-status-pill-count">{stabilityCounts.stable}</span>
+                                    </button>
+                                    <button
+                                      type="button"
                                       title={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
                                       aria-label={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
-                                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border-2 border-rose-300 bg-[#44252a] px-2 text-xs font-black uppercase tracking-wide text-rose-100 shadow-[0_2px_0_#111]"
+                                      className="mc-status-pill mc-status-pill--unstable"
                                     >
-                                      <MinecraftStatusIcon tone="unstable" /><span className="hidden sm:inline">Unstable</span><span>{stabilityCounts.unstable}</span>
-                                    </span>
-                                    <span
+                                      <MinecraftStatusIcon tone="unstable" />
+                                      <span className="mc-status-pill-label">Unstable</span>
+                                      <span className="mc-status-pill-count">{stabilityCounts.unstable}</span>
+                                    </button>
+                                    <button
+                                      type="button"
                                       title={`${stabilityCounts.offline} offline accounts`}
                                       aria-label={`${stabilityCounts.offline} offline accounts`}
-                                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border-2 border-stone-400 bg-[#35322e] px-2 text-xs font-black uppercase tracking-wide text-stone-100 shadow-[0_2px_0_#111]"
+                                      className="mc-status-pill mc-status-pill--offline"
                                     >
-                                      <MinecraftStatusIcon tone="offline" /><span className="hidden sm:inline">Offline</span><span>{stabilityCounts.offline}</span>
-                                    </span>
+                                      <MinecraftStatusIcon tone="offline" />
+                                      <span className="mc-status-pill-label">Offline</span>
+                                      <span className="mc-status-pill-count">{stabilityCounts.offline}</span>
+                                    </button>
                                   </div>
                                 ) : selectedAccount ? (
-                                  <>
+                                  <div className="flex items-center gap-3 min-w-0">
                                     <div className="w-8 h-8 rounded-xl overflow-hidden border border-slate-300 bg-slate-100 shrink-0 shadow-2xs">
                                       <img
                                         src={getPlayerSkinHeadUrl(selectedAccount.ign || selectedAccount.username, 32)}
@@ -3378,9 +3387,9 @@ export default function Home() {
                                         )}
                                       </p>
                                     </div>
-                                  </>
+                                  </div>
                                 ) : (
-                                  <>
+                                  <div className="flex items-center gap-3 min-w-0">
                                     <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 font-mono font-bold text-xs shrink-0 shadow-2xs">
                                       &gt;_
                                     </div>
@@ -3390,7 +3399,7 @@ export default function Home() {
                                         {activeServer.serverHost}:{activeServer.serverPort || 19132}
                                       </p>
                                     </div>
-                                  </>
+                                  </div>
                                 )}
                               </div>
 

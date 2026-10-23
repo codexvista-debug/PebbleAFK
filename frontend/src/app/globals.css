@@ -807,6 +807,100 @@ body {
   .mc-auth-header { padding: 14px 18px !important; }
 }
 
+/* Minecraft-themed borderless status pills for the chat header */
+.mc-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  gap: 7px;
+  border: none !important;
+  outline: none !important;
+  border-radius: 9999px !important;
+  font-family: "Arial Black", Impact, system-ui, sans-serif;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+  transition: transform 0.12s ease, filter 0.12s ease, box-shadow 0.12s ease;
+  user-select: none;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.mc-status-pill:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+
+.mc-status-pill:active {
+  filter: brightness(0.95);
+  transform: translateY(1px);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35), inset 0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+.mc-status-pill--stable {
+  background: linear-gradient(180deg, #3d8733 0%, #25591e 100%) !important;
+  color: #e5ffd9 !important;
+}
+
+.mc-status-pill--unstable {
+  background: linear-gradient(180deg, #8f2d35 0%, #58161d 100%) !important;
+  color: #ffe0e4 !important;
+}
+
+.mc-status-pill--offline {
+  background: linear-gradient(180deg, #48413b 0%, #2b2723 100%) !important;
+  color: #eee7dd !important;
+}
+
+.mc-status-pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-status-pill-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.32);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+@media (max-width: 639px) {
+  .mc-status-pill {
+    height: 30px;
+    padding: 0 6px;
+    gap: 4px;
+    font-size: 9.5px;
+  }
+  .mc-status-pill-count {
+    min-width: 16px;
+    height: 16px;
+    padding: 0 3px;
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 380px) {
+  .mc-status-pill {
+    padding: 0 4px;
+    gap: 3px;
+    font-size: 8.5px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
