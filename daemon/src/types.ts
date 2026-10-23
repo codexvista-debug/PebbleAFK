@@ -17,6 +17,10 @@ export interface BotSettings {
   subserverJoinCommandEnabled?: boolean;
   subserverJoinCommand?: string;
   subserverJoinCommandDelay?: number;
+  freshSmpHourlyCommandEnabled?: boolean;
+  freshSmpHourlyCommand?: string;
+  freshSmpBalancePayEnabled?: boolean;
+  freshSmpBalancePayUsername?: string;
 }
 
 export interface BotConfig {

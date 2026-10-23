@@ -104,6 +104,7 @@ export default function Home() {
   const pendingMicrosoftSignInUrlRef = useRef<string | null>(null);
   const microsoftSignOutReadyRef = useRef(false);
   const microsoftSignOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const appliedFreshSmpAutomationBotsRef = useRef<Set<string>>(new Set());
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
   const [smartAdjustNotices, setSmartAdjustNotices] = useState<Array<{ id: string; username: string; message: string }>>([]);
   const smartAdjustNoticeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -880,6 +881,10 @@ export default function Home() {
   const subserverJoinCommandEnabled = activeServer?.settings?.subserverJoinCommandEnabled ?? activeServerIsFreshSmp;
   const subserverJoinCommand = activeServer?.settings?.subserverJoinCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommand : DEFAULT_BOT_SETTINGS.subserverJoinCommand);
   const subserverJoinCommandDelay = activeServer?.settings?.subserverJoinCommandDelay ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay : DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay);
+  const freshSmpHourlyCommandEnabled = activeServer?.settings?.freshSmpHourlyCommandEnabled ?? activeServerIsFreshSmp;
+  const freshSmpHourlyCommand = activeServer?.settings?.freshSmpHourlyCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.freshSmpHourlyCommand ?? '/afkrewards spin' : DEFAULT_BOT_SETTINGS.freshSmpHourlyCommand ?? '');
+  const freshSmpBalancePayEnabled = activeServer?.settings?.freshSmpBalancePayEnabled ?? false;
+  const freshSmpBalancePayUsername = activeServer?.settings?.freshSmpBalancePayUsername ?? '';
 
   const [gatewayStatus, setGatewayStatus] = useState<{ online: boolean; checking: boolean; version?: string } | null>(null);
 
@@ -1133,6 +1138,41 @@ export default function Home() {
     const st = botStates[botId] || botStates[acc.id];
     return st === 'SPAWNED' || st === 'LOGGED_IN';
   }).length : 0;
+
+  // Apply only these new automation settings to bots that were already running
+  // when the feature was introduced. No reconnect or other runtime setting is changed.
+  useEffect(() => {
+    if (daemonStatus !== 'AUTHENTICATED') return;
+
+    servers.forEach((server) => {
+      if (!/freshsmp/i.test(`${server.name} ${server.serverHost}`)) return;
+      const defaults = { ...FRESHSMP_DEFAULT_BOT_SETTINGS, ...(server.settings || {}) };
+      const automationSettings: Partial<BotSettings> = {
+        freshSmpHourlyCommandEnabled: defaults.freshSmpHourlyCommandEnabled ?? true,
+        freshSmpHourlyCommand: defaults.freshSmpHourlyCommand ?? '/afkrewards spin',
+        freshSmpBalancePayEnabled: defaults.freshSmpBalancePayEnabled ?? false,
+        freshSmpBalancePayUsername: defaults.freshSmpBalancePayUsername ?? '',
+      };
+      const accountIds = new Set(server.assignedAccountIds || []);
+      if (server.accountId) accountIds.add(server.accountId);
+      accounts.forEach((account) => {
+        const botId = `${server.id}__${account.id}`;
+        if (botStates[botId]) accountIds.add(account.id);
+      });
+
+      accountIds.forEach((accountId) => {
+        const botId = `${server.id}__${accountId}`;
+        const botState = botStates[botId];
+        if (!['CONNECTING', 'LOGGED_IN', 'SPAWNED', 'RECONNECTING'].includes(botState || '')) return;
+
+        const applyKey = `${currentUser || 'guest'}::${botId}`;
+        if (appliedFreshSmpAutomationBotsRef.current.has(applyKey)) return;
+        if (updateBotSettings(botId, automationSettings)) {
+          appliedFreshSmpAutomationBotsRef.current.add(applyKey);
+        }
+      });
+    });
+  }, [accounts, botStates, currentUser, daemonStatus, servers, updateBotSettings]);
 
   // Connect / Disconnect individual account to server
   const handleConnectAccount = (acc: BedrockAccount, srv: ServerProfile) => {
@@ -3913,6 +3953,77 @@ export default function Home() {
                                   </button>
                                 </div>
                               </div>
+                            )}
+
+                            {activeServerIsFreshSmp && (
+                              <>
+                                <div className="flex flex-col gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="flex-1 pr-4">
+                                    <label className="text-xs font-bold text-slate-800 block">Hourly command for stable accounts</label>
+                                    <span className="text-[11px] text-slate-400 block mt-0.5">
+                                      Runs every hour only while this account is stable in /lifesteal. Enabled by default.
+                                    </span>
+                                  </div>
+                                  <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
+                                    <input
+                                      type="text"
+                                      value={freshSmpHourlyCommand}
+                                      onChange={(e) => handleUpdateServerSetting('freshSmpHourlyCommand', e.target.value)}
+                                      disabled={!freshSmpHourlyCommandEnabled}
+                                      placeholder="/afkrewards spin"
+                                      aria-label="FreshSMP hourly stable-account command"
+                                      className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400"
+                                    />
+                                    <span className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-[11px] font-bold text-slate-500">60 min</span>
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={freshSmpHourlyCommandEnabled}
+                                      aria-label="Enable hourly FreshSMP command for stable accounts"
+                                      onClick={() => handleUpdateServerSetting('freshSmpHourlyCommandEnabled', !freshSmpHourlyCommandEnabled)}
+                                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${freshSmpHourlyCommandEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
+                                    >
+                                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${freshSmpHourlyCommandEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-col gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="flex-1 pr-4">
+                                    <label className="text-xs font-bold text-slate-800 block">Pay main account when balance reaches 100k</label>
+                                    <span className="text-[11px] text-slate-400 block mt-0.5">
+                                      Checks /bal every 10 minutes while stable. At 100k+, sends /pay twice, 1–10 seconds apart. Off until enabled.
+                                    </span>
+                                  </div>
+                                  <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
+                                    <input
+                                      type="text"
+                                      value={freshSmpBalancePayUsername}
+                                      onChange={(e) => handleUpdateServerSetting('freshSmpBalancePayUsername', e.target.value)}
+                                      placeholder="Main account username"
+                                      aria-label="Main account username to pay"
+                                      className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500"
+                                    />
+                                    <button
+                                      type="button"
+                                      role="switch"
+                                      aria-checked={freshSmpBalancePayEnabled}
+                                      aria-label="Enable FreshSMP balance payout"
+                                      onClick={() => {
+                                        const recipient = freshSmpBalancePayUsername.trim().replace(/^@/, '');
+                                        if (!freshSmpBalancePayEnabled && !/^[A-Za-z0-9_]{3,16}$/.test(recipient)) {
+                                          showToast('Enter a valid Minecraft username before enabling automatic payments.', 'error');
+                                          return;
+                                        }
+                                        handleUpdateServerSetting('freshSmpBalancePayEnabled', !freshSmpBalancePayEnabled);
+                                      }}
+                                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${freshSmpBalancePayEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
+                                    >
+                                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${freshSmpBalancePayEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </>
                             )}
 
                             {/* Auto reconnect delay */}
