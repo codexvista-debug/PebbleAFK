@@ -312,11 +312,13 @@ export class PebbleBotInstance {
   private lifestealThresholdTimer: NodeJS.Timeout | null = null;
   private lifestealStabilityTimer: NodeJS.Timeout | null = null;
   private freshSmpAutomationInterval: NodeJS.Timeout | null = null;
+  private freshSmpFirstPayTimer: NodeJS.Timeout | null = null;
   private freshSmpSecondPayTimer: NodeJS.Timeout | null = null;
   private freshSmpNextHourlyCommandAt = 0;
   private freshSmpNextBalanceCheckAt = 0;
   private freshSmpBalanceCheckPendingUntil = 0;
   private freshSmpPaidForCurrentThreshold = false;
+  private freshSmpFirstPaySentForCurrentThreshold = false;
 
   // Telemetry cache
   private position = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -485,6 +487,13 @@ export class PebbleBotInstance {
       clearInterval(this.freshSmpAutomationInterval);
       this.freshSmpAutomationInterval = null;
     }
+    if (this.freshSmpFirstPayTimer) {
+      clearTimeout(this.freshSmpFirstPayTimer);
+      this.freshSmpFirstPayTimer = null;
+      if (!this.freshSmpFirstPaySentForCurrentThreshold) {
+        this.freshSmpPaidForCurrentThreshold = false;
+      }
+    }
     if (this.freshSmpSecondPayTimer) {
       clearTimeout(this.freshSmpSecondPayTimer);
       this.freshSmpSecondPayTimer = null;
@@ -547,6 +556,14 @@ export class PebbleBotInstance {
       this.freshSmpBalanceCheckPendingUntil = 0;
       if (previous.freshSmpBalancePayUsername !== this.config.settings.freshSmpBalancePayUsername) {
         this.freshSmpPaidForCurrentThreshold = false;
+        this.freshSmpFirstPaySentForCurrentThreshold = false;
+      }
+      if (this.freshSmpFirstPayTimer) {
+        clearTimeout(this.freshSmpFirstPayTimer);
+        this.freshSmpFirstPayTimer = null;
+        if (!this.freshSmpFirstPaySentForCurrentThreshold) {
+          this.freshSmpPaidForCurrentThreshold = false;
+        }
       }
       if (this.freshSmpSecondPayTimer) {
         clearTimeout(this.freshSmpSecondPayTimer);
@@ -586,6 +603,7 @@ export class PebbleBotInstance {
 
     if (balance < FRESH_SMP_PAYOUT_THRESHOLD) {
       this.freshSmpPaidForCurrentThreshold = false;
+      this.freshSmpFirstPaySentForCurrentThreshold = false;
       this.logActivity('status', `FreshSMP balance check: ${balance.toLocaleString('en-US')}; it is below ${FRESH_SMP_PAYOUT_THRESHOLD.toLocaleString('en-US')}, so no payment was sent.`);
       return;
     }
@@ -598,21 +616,34 @@ export class PebbleBotInstance {
     const recipient = this.getFreshSmpPayUsername();
     if (!this.hasFreshSmpBalancePay() || !recipient) return;
     const command = `/pay ${recipient} ${FRESH_SMP_PAYOUT_AMOUNT}`;
-    const secondDelayMs = 1_000 + Math.floor(Math.random() * 9_001);
+    const payoutDelayMs = 10_000;
     this.freshSmpPaidForCurrentThreshold = true;
-    this.logActivity('warning', `FreshSMP balance is ${balance.toLocaleString('en-US')}; sending ${command} twice, with the second payment in ${Math.ceil(secondDelayMs / 1000)}s.`);
-    this.sendChat(command);
-
-    this.freshSmpSecondPayTimer = setTimeout(() => {
-      this.freshSmpSecondPayTimer = null;
+    this.freshSmpFirstPaySentForCurrentThreshold = false;
+    this.logActivity('warning', `FreshSMP balance is ${balance.toLocaleString('en-US')}; scheduling ${command} in 10s, then the confirmation payment 10s later.`);
+    this.freshSmpFirstPayTimer = setTimeout(() => {
+      this.freshSmpFirstPayTimer = null;
       if (!this.isFreshSmpStableSession() || !this.hasFreshSmpBalancePay() || this.getFreshSmpPayUsername() !== recipient) {
-        this.logActivity('warning', `Skipped the second ${command} because this account is no longer stable or the payout setting changed.`);
+        this.freshSmpPaidForCurrentThreshold = false;
+        this.logActivity('warning', `Skipped ${command} because this account is no longer stable or the payout setting changed.`);
         return;
       }
-      this.logActivity('command', `FreshSMP balance automation: sending the second ${command}.`);
+
+      this.freshSmpFirstPaySentForCurrentThreshold = true;
+      this.logActivity('command', `FreshSMP balance automation: sending ${command}.`);
       this.sendChat(command);
-    }, secondDelayMs);
-    this.freshSmpSecondPayTimer.unref?.();
+
+      this.freshSmpSecondPayTimer = setTimeout(() => {
+        this.freshSmpSecondPayTimer = null;
+        if (!this.isFreshSmpStableSession() || !this.hasFreshSmpBalancePay() || this.getFreshSmpPayUsername() !== recipient) {
+          this.logActivity('warning', `Skipped the confirmation payment ${command} because this account is no longer stable or the payout setting changed.`);
+          return;
+        }
+        this.logActivity('command', `FreshSMP balance automation: sending the confirmation payment ${command}.`);
+        this.sendChat(command);
+      }, payoutDelayMs);
+      this.freshSmpSecondPayTimer.unref?.();
+    }, payoutDelayMs);
+    this.freshSmpFirstPayTimer.unref?.();
   }
 
   private scheduleFreshSmpRecovery(reason: string): boolean {
