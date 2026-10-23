@@ -3267,59 +3267,29 @@ export default function Home() {
                             <div className="shrink-0 px-3 sm:px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-3 bg-slate-50/60">
                               <div className="flex items-center gap-3 min-w-0">
                                 {isAllSelected ? (
-                                  <>
-                                    <div className="flex items-center -space-x-2 shrink-0">
-                                      {targetAccounts.slice(0, 3).map((acc) => {
-                                        const ign = acc.ign || acc.username;
-                                        return (
-                                          <div key={acc.id} className="w-8 h-8 rounded-xl overflow-hidden border-2 border-white bg-slate-100 shadow-2xs">
-                                            <img
-                                              src={getPlayerSkinHeadUrl(ign, 32)}
-                                              alt={ign}
-                                              className="w-full h-full object-cover [image-rendering:pixelated]"
-                                              onError={(e) => {
-                                                const img = e.currentTarget as HTMLImageElement;
-                                                img.src = 'https://minotar.net/helm/MHF_Steve/32.png';
-                                              }}
-                                            />
-                                          </div>
-                                        );
-                                      })}
-                                      {targetAccounts.length > 3 && (
-                                        <div className="w-8 h-8 rounded-xl bg-slate-200 border-2 border-white flex items-center justify-center text-[10px] font-black text-slate-700 shadow-2xs">
-                                          +{targetAccounts.length - 3}
-                                        </div>
-                                      )}
-                                    </div>
-                                    <div className="min-w-0">
-                                      <h3 className="font-black text-sm text-slate-900 leading-none truncate">
-                                        All Accounts ({targetAccounts.length})
-                                      </h3>
-                                      <p className="mt-1 flex items-center gap-1.5 text-[10px] font-bold">
-                                        <span
-                                          title={`${stabilityCounts.stable} stable accounts`}
-                                          aria-label={`${stabilityCounts.stable} stable accounts`}
-                                          className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-emerald-700"
-                                        >
-                                          <CheckCircle2 className="h-3 w-3" />{stabilityCounts.stable}
-                                        </span>
-                                        <span
-                                          title={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
-                                          aria-label={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
-                                          className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-rose-700"
-                                        >
-                                          <AlertCircle className="h-3 w-3" />{stabilityCounts.unstable}
-                                        </span>
-                                        <span
-                                          title={`${stabilityCounts.offline} offline accounts`}
-                                          aria-label={`${stabilityCounts.offline} offline accounts`}
-                                          className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-slate-600"
-                                        >
-                                          <MinusCircle className="h-3 w-3" />{stabilityCounts.offline}
-                                        </span>
-                                      </p>
-                                    </div>
-                                  </>
+                                  <div className="flex items-center gap-1.5 sm:gap-2" role="group" aria-label="All account status counts">
+                                    <span
+                                      title={`${stabilityCounts.stable} stable accounts`}
+                                      aria-label={`${stabilityCounts.stable} stable accounts`}
+                                      className="inline-flex h-7 min-w-9 shrink-0 items-center justify-center gap-1 rounded-full border border-emerald-300/70 bg-emerald-100 px-2 text-xs font-extrabold text-emerald-800"
+                                    >
+                                      <CheckCircle2 className="h-3.5 w-3.5" />{stabilityCounts.stable}
+                                    </span>
+                                    <span
+                                      title={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
+                                      aria-label={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
+                                      className="inline-flex h-7 min-w-9 shrink-0 items-center justify-center gap-1 rounded-full border border-rose-300/70 bg-rose-100 px-2 text-xs font-extrabold text-rose-800"
+                                    >
+                                      <AlertCircle className="h-3.5 w-3.5" />{stabilityCounts.unstable}
+                                    </span>
+                                    <span
+                                      title={`${stabilityCounts.offline} offline accounts`}
+                                      aria-label={`${stabilityCounts.offline} offline accounts`}
+                                      className="inline-flex h-7 min-w-9 shrink-0 items-center justify-center gap-1 rounded-full border border-slate-300/70 bg-slate-100 px-2 text-xs font-extrabold text-slate-700"
+                                    >
+                                      <MinusCircle className="h-3.5 w-3.5" />{stabilityCounts.offline}
+                                    </span>
+                                  </div>
                                 ) : selectedAccount ? (
                                   <>
                                     <div className="w-8 h-8 rounded-xl overflow-hidden border border-slate-300 bg-slate-100 shrink-0 shadow-2xs">

@@ -233,7 +233,14 @@ export function formatDisconnectReason(raw: any): string {
   if (Number.isFinite(num) && BEDROCK_DISCONNECT_REASONS[num]) {
     return BEDROCK_DISCONNECT_REASONS[num];
   }
-  return stripMinecraftFormatting(str);
+  const cleaned = stripMinecraftFormatting(str);
+  if (/<(?:!doctype|html)\b/i.test(cleaned)) {
+    const status = cleaned.match(/\b(429\s+Too Many Requests|502\s+Bad Gateway|503\s+Service Unavailable|504\s+Gateway Timeout)\b/i);
+    if (status) return `Remote endpoint returned HTTP ${status[1]}.`;
+    const title = cleaned.match(/<title[^>]*>([^<]{1,100})<\/title>/i)?.[1]?.trim();
+    return title ? `Remote endpoint returned an error page (${title}).` : 'Remote endpoint returned an HTML error page.';
+  }
+  return cleaned.length > 600 ? `${cleaned.slice(0, 600)}…` : cleaned;
 }
 
 function isPermanentBedrockAuthRejection(reason: string): boolean {
@@ -242,6 +249,7 @@ function isPermanentBedrockAuthRejection(reason: string): boolean {
 
 export class PebbleBotInstance {
   private static lastHandshakeTime: number = 0;
+  private static handshakeQueue: Promise<void> = Promise.resolve();
   private static recentChatConsoleLines = new Map<string, number>();
   private static nextFreshSmpRecoveryAt: number = 0;
   public config: BotConfig;
@@ -250,6 +258,7 @@ export class PebbleBotInstance {
   private broadcastFn: (msg: DaemonMessage) => void;
   private client: any = null;
   private startInProgress: boolean = false;
+  private handshakeDelayResolver: (() => void) | null = null;
   private startGeneration: number = 0;
   private connectStartTime: number = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -670,23 +679,46 @@ export class PebbleBotInstance {
         );
       }
 
-      // Stagger Bedrock RakNet connection handshakes so concurrent bots never send
-      // near-simultaneous Open Connection Request UDP packets from the same device/IP.
-      // A wider gap also reduces login/transfer bursts on FreshSMP-style gateways.
-      const minSpacingMs = 12000;
-      const now = Date.now();
-      const waitMs = Math.max(0, (PebbleBotInstance.lastHandshakeTime + minSpacingMs) - now);
-      if (waitMs > 0) {
-        this.logActivity('connect', `⏳ Staggering RakNet connection by ${(waitMs / 1000).toFixed(1)}s to avoid server gateway rate-limiting...`);
-        console.log(chalk.cyan(`[PebbleAFK] Staggering connection for ${this.config.username} by ${waitMs}ms`));
-        await new Promise((r) => setTimeout(r, waitMs));
-        if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
-      }
-      PebbleBotInstance.lastHandshakeTime = Date.now();
+      // Serialize the reservation as well as the wait. Previously several
+      // accounts could calculate the same delay before any one updated
+      // lastHandshakeTime, then all launch together after that shared wait.
+      // Keep a 20s gap (longer than the 18s RakNet connect timeout) so a large
+      // batch comes online gradually without flooding FreshSMP's UDP gateway.
+      const minSpacingMs = 20_000;
+      const previousHandshake = PebbleBotInstance.handshakeQueue;
+      let releaseHandshakeQueue: () => void = () => {};
+      PebbleBotInstance.handshakeQueue = new Promise<void>((resolve) => {
+        releaseHandshakeQueue = resolve;
+      });
+      await previousHandshake;
 
-      console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (version: ${targetVersion}, backend: ${rakBackend})`));
-      const client = bedrock.createClient(clientOptions);
-      this.client = client;
+      let client: any;
+      try {
+        if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
+        const waitMs = Math.max(0, PebbleBotInstance.lastHandshakeTime + minSpacingMs - Date.now());
+        if (waitMs > 0) {
+          this.logActivity('connect', `⏳ Waiting ${(waitMs / 1000).toFixed(1)}s for the next staggered RakNet slot...`);
+          console.log(chalk.cyan(`[PebbleAFK] Staggering connection for ${this.config.username} by ${waitMs}ms`));
+          await new Promise<void>((resolve) => {
+            let timer: NodeJS.Timeout | null = null;
+            const finishWait = () => {
+              if (timer) clearTimeout(timer);
+              timer = null;
+              if (this.handshakeDelayResolver === finishWait) this.handshakeDelayResolver = null;
+              resolve();
+            };
+            this.handshakeDelayResolver = finishWait;
+            timer = setTimeout(finishWait, waitMs);
+          });
+        }
+        if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
+        PebbleBotInstance.lastHandshakeTime = Date.now();
+        console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (version: ${targetVersion}, backend: ${rakBackend})`));
+        client = bedrock.createClient(clientOptions);
+        this.client = client;
+      } finally {
+        releaseHandshakeQueue();
+      }
 
       let recentPlayStatus = 'not received';
       const clientStatuses: Record<number, string> = { 0: 'disconnected', 1: 'connecting', 2: 'authenticating', 3: 'initializing', 4: 'initialized' };
@@ -1142,6 +1174,8 @@ export class PebbleBotInstance {
     this.isExplicitlyStopped = true;
     this.startGeneration++;
     this.startInProgress = false;
+    this.handshakeDelayResolver?.();
+    this.handshakeDelayResolver = null;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -2058,7 +2092,7 @@ export class PebbleBotInstance {
     if (this.reconnectTimer) return;
 
     const baseDelay = Math.max(3000, this.config.settings.autoReconnectDelay || 5000);
-    const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit/i.test(reason);
+    const isLoginThrottled = /logging in too fast|try again later|wait at least|rate.?limit|too many requests|http\s*429|\b429\b/i.test(reason);
     const isDuplicateLogin = /already logged in|duplicate login|logged in from elsewhere/i.test(reason);
     const isTransportTimeout = /no reply to RakNet UDP packets|Connect timed out|filtering UDP|network path did not answer/i.test(reason);
     const isEncryptedPacketFailure = /checksum mismatch|bad encrypted packet|badPacket/i.test(reason);
@@ -2089,7 +2123,9 @@ export class PebbleBotInstance {
     const reconnectDescription = isDuplicateLogin
       ? `Server still sees this account logged in; waiting ${Math.ceil(delay / 1000)}s for the old session to clear`
       : isLoginThrottled
-      ? `Server login throttle; backing off for ${Math.ceil(delay / 1000)}s`
+      ? /too many requests|http\s*429|\b429\b/i.test(reason)
+        ? `Remote service rate-limited this connection; backing off for ${Math.ceil(delay / 1000)}s`
+        : `Server login throttle; backing off for ${Math.ceil(delay / 1000)}s`
       : isEncryptedPacketFailure
         ? `Encrypted packet rejected; backing off for ${Math.ceil(delay / 1000)}s before reconnect`
         : isUnexplainedSessionEnd
