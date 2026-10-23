@@ -44,7 +44,8 @@ import {
   CornerDownLeft,
   Terminal,
   ArrowUp,
-  Activity
+  Activity,
+  Gift
 } from 'lucide-react';
 import { AuthModal } from '@/components/AuthModal';
 import { SettingsModal } from '@/components/SettingsModal';
@@ -1586,21 +1587,21 @@ export default function Home() {
             </div>
           ) : activeTab === 'accounts' ? (
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-emerald-500 text-white flex items-center justify-center font-black text-xs shadow-xs">
+              <div className="w-7 h-7 rounded-lg bg-violet-100 text-violet-700 border border-violet-200 flex items-center justify-center font-black text-xs shadow-xs">
                 <Users className="w-4 h-4" />
               </div>
               <span className="font-black text-sm text-slate-900 tracking-tight">Accounts</span>
             </div>
           ) : activeTab === 'termux_stream' ? (
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-slate-900 text-emerald-400 flex items-center justify-center font-mono font-black text-xs shadow-xs">
+              <div className="w-7 h-7 rounded-lg bg-sky-100 text-sky-700 border border-sky-200 flex items-center justify-center font-mono font-black text-xs shadow-xs">
                 &gt;_
               </div>
               <span className="font-black text-sm text-slate-900 tracking-tight">Termux Stream</span>
             </div>
           ) : activeTab === 'diagnostics' ? (
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center"><Activity className="w-4 h-4" /></div>
+              <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 border border-amber-200 flex items-center justify-center shadow-xs"><Activity className="w-4 h-4" /></div>
               <span className="font-black text-sm text-slate-900 tracking-tight">Diagnostics</span>
             </div>
           ) : (
@@ -1689,13 +1690,13 @@ export default function Home() {
                   setActiveTab('dashboard');
                   setIsMobileSidebarOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
                   activeTab === 'dashboard'
                     ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className={`p-1 rounded-lg ${activeTab === 'dashboard' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                <div className={`p-1.5 rounded-lg ${activeTab === 'dashboard' ? 'bg-emerald-500 text-white shadow-sm' : 'bg-emerald-100 text-emerald-700'}`}>
                   <LayoutDashboard className="w-4 h-4" />
                 </div>
                 <span>Dashboard</span>
@@ -1707,14 +1708,14 @@ export default function Home() {
                   setIsMobileSidebarOpen(false);
                   fetchTerminalLogs();
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
                   activeTab === 'termux_stream'
                     ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`p-1 rounded-lg ${activeTab === 'termux_stream' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  <div className={`p-1.5 rounded-lg ${activeTab === 'termux_stream' ? 'bg-sky-500 text-white shadow-sm' : 'bg-sky-100 text-sky-700'}`}>
                     <Terminal className="w-4 h-4" />
                   </div>
                   <span>Termux Stream</span>
@@ -1727,13 +1728,13 @@ export default function Home() {
                   setActiveTab('diagnostics');
                   setIsMobileSidebarOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
                   activeTab === 'diagnostics'
                     ? 'bg-amber-50 text-amber-900 border border-amber-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className={`p-1 rounded-lg ${activeTab === 'diagnostics' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                <div className={`p-1.5 rounded-lg ${activeTab === 'diagnostics' ? 'bg-amber-500 text-white shadow-sm' : 'bg-amber-100 text-amber-700'}`}>
                   <Activity className="w-4 h-4" />
                 </div>
                 <span>Diagnostics</span>
@@ -1744,13 +1745,13 @@ export default function Home() {
                   setActiveTab('servers');
                   setIsMobileSidebarOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
                   activeTab === 'servers'
                     ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className={`p-1 rounded-lg ${activeTab === 'servers' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                <div className={`p-1.5 rounded-lg ${activeTab === 'servers' ? 'bg-cyan-500 text-white shadow-sm' : 'bg-cyan-100 text-cyan-700'}`}>
                   <Server className="w-4 h-4" />
                 </div>
                 <span>Servers</span>
@@ -1761,14 +1762,14 @@ export default function Home() {
                   setActiveTab('accounts');
                   setIsMobileSidebarOpen(false);
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[13px] font-extrabold transition cursor-pointer ${
                   activeTab === 'accounts'
                     ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`p-1 rounded-lg ${activeTab === 'accounts' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  <div className={`p-1.5 rounded-lg ${activeTab === 'accounts' ? 'bg-violet-500 text-white shadow-sm' : 'bg-violet-100 text-violet-700'}`}>
                     <Users className="w-4 h-4" />
                   </div>
                   <span>Accounts</span>
@@ -1877,7 +1878,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <HomeIcon className={`w-3.5 h-3.5 ${activeSubTab === 'connect' ? 'text-emerald-700' : 'text-slate-400'}`} />
+                              <HomeIcon className={`w-4 h-4 ${activeSubTab === 'connect' ? 'text-emerald-700' : 'text-emerald-500'}`} />
                               <span>Connect</span>
                             </button>
 
@@ -1893,7 +1894,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <MessageSquare className={`w-3.5 h-3.5 ${activeSubTab === 'chat' ? 'text-sky-700' : 'text-slate-400'}`} />
+                              <MessageSquare className={`w-4 h-4 ${activeSubTab === 'chat' ? 'text-sky-700' : 'text-sky-500'}`} />
                               <span>Chat</span>
                             </button>
 
@@ -1909,7 +1910,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <Sliders className={`w-3.5 h-3.5 ${activeSubTab === 'settings' ? 'text-slate-800' : 'text-slate-400'}`} />
+                              <Sliders className={`w-4 h-4 ${activeSubTab === 'settings' ? 'text-violet-700' : 'text-violet-500'}`} />
                               <span>Settings</span>
                             </button>
                           </div>
@@ -3388,22 +3389,30 @@ export default function Home() {
                             </div>
 
                             {selectedBossBar?.visible && selectedBossBar.title && (
-                              <div className="shrink-0 border-b border-amber-200/70 bg-amber-50/70 px-4 py-2.5 sm:px-5" role="status" aria-label="AFK reward boss bar">
-                                <div className="flex items-center justify-between gap-3 text-xs sm:text-sm">
-                                  <div className="min-w-0 truncate font-semibold text-amber-900">
-                                    <MinecraftText text={selectedBossBar.title} palette="light" />
+                              <div className="relative shrink-0 overflow-hidden border-b-2 border-amber-400/80 bg-gradient-to-r from-[#26231f] via-[#30271d] to-[#25231f] px-3.5 py-2.5 sm:px-5 shadow-inner" role="status" aria-label="AFK reward boss bar">
+                                <div className="flex items-center gap-3">
+                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-200/80 bg-gradient-to-b from-amber-300 to-orange-500 text-amber-950 shadow-[0_2px_0_#8d4f24]">
+                                    <Gift className="h-4 w-4" aria-hidden="true" />
                                   </div>
-                                  {typeof selectedBossBar.progress === 'number' && (
-                                    <span className="shrink-0 tabular-nums text-[11px] font-medium text-amber-700">
-                                      {Math.round(selectedBossBar.progress * 100)}%
-                                    </span>
-                                  )}
+                                  <div className="min-w-0 flex-1">
+                                    <div className="mb-0.5 flex items-center justify-between gap-3">
+                                      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-300">AFK Reward</span>
+                                      {typeof selectedBossBar.progress === 'number' && (
+                                        <span className="shrink-0 rounded-md border border-amber-400/40 bg-amber-300/10 px-2 py-0.5 text-[10px] font-extrabold tabular-nums text-amber-200">
+                                          {Math.round(selectedBossBar.progress * 100)}%
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="min-w-0 truncate text-sm font-extrabold leading-5 text-[#fff8ec] sm:text-[15px]">
+                                      <MinecraftText text={selectedBossBar.title} palette="dark" />
+                                    </div>
+                                    {typeof selectedBossBar.progress === 'number' && (
+                                      <div className="mt-2 h-2 overflow-hidden rounded-sm border border-amber-200/30 bg-[#171512] p-0.5">
+                                        <div className="h-full rounded-[2px] bg-gradient-to-r from-emerald-400 via-lime-300 to-amber-300 shadow-[0_0_8px_rgba(163,230,53,.35)] transition-[width] duration-500" style={{ width: `${Math.round(selectedBossBar.progress * 100)}%` }} />
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                                {typeof selectedBossBar.progress === 'number' && (
-                                  <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-amber-200/80">
-                                    <div className="h-full rounded-full bg-amber-500 transition-[width] duration-500" style={{ width: `${Math.round(selectedBossBar.progress * 100)}%` }} />
-                                  </div>
-                                )}
                               </div>
                             )}
 

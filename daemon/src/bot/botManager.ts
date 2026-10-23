@@ -29,46 +29,9 @@ export class BotManager {
 
   constructor(broadcastFn: (msg: DaemonMessage) => void) {
     this.broadcastFn = broadcastFn;
-    this.loadDesiredBots();
-  }
-
-  private loadDesiredBots() {
-    try {
-      if (!fs.existsSync(this.desiredBotsPath)) return;
-      const saved = JSON.parse(fs.readFileSync(this.desiredBotsPath, 'utf8'));
-      if (!Array.isArray(saved)) return;
-
-      for (const config of saved.slice(0, 100)) {
-        if (
-          config && typeof config.id === 'string' && config.id &&
-          typeof config.username === 'string' && config.username &&
-          typeof config.host === 'string' && config.host &&
-          Number.isFinite(Number(config.port)) &&
-          (config.authType === 'microsoft' || config.authType === 'offline') &&
-          config.settings && typeof config.settings === 'object'
-        ) {
-          this.desiredBots.set(config.id, config as BotConfig);
-        }
-      }
-
-      if (this.desiredBots.size > 0) {
-        const configs = Array.from(this.desiredBots.values());
-        console.log(chalk.cyan(`[BotManager] Restoring ${configs.length} active bot${configs.length === 1 ? '' : 's'} after daemon restart...`));
-        // Let the daemon listener and tunnel supervisor finish starting, then
-        // rehydrate the sessions with the normal per-account handshake spacing.
-        setTimeout(() => {
-          configs.forEach((config, index) => {
-            setTimeout(() => {
-              // A user may have stopped an account while the dashboard was
-              // reconnecting; do not resurrect a config removed in that gap.
-              if (this.desiredBots.has(config.id)) this.startBot(config);
-            }, index * 1000);
-          });
-        }, 1200);
-      }
-    } catch (error: any) {
-      console.warn(chalk.yellow(`[BotManager] Could not restore saved bot sessions: ${error?.message || error}`));
-    }
+    // Saved bot configs are deliberately not restored during daemon startup.
+    // The user must explicitly press Connect (or Connect Selected) after
+    // launching Termux; this avoids unexpectedly reconnecting a whole fleet.
   }
 
   private persistDesiredBots() {

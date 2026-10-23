@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Activity, AlertTriangle, CheckCircle2, Clock3, Radio, ShieldAlert } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle2, Clock3, Radio, ShieldAlert, Server, UserRound } from 'lucide-react';
 import { Account, BotLifecycleState, FreshSmpDiagnosticState, ServerProfile } from '@/types';
 
 interface Props {
@@ -30,16 +30,16 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
     <div className="w-full min-w-0 max-w-6xl mx-auto space-y-5 pb-6">
       <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6 shadow-xs">
         <div className="flex items-start gap-3">
-          <div className="p-2 rounded-xl bg-amber-50 text-amber-700 border border-amber-100"><Activity className="w-5 h-5" /></div>
+          <div className="p-2.5 rounded-xl bg-gradient-to-br from-amber-300 to-orange-400 text-amber-950 border border-amber-200 shadow-sm"><Activity className="w-5 h-5" /></div>
           <div>
-            <h1 className="text-lg font-black text-slate-900">FreshSMP Lifesteal Diagnostics</h1>
-            <p className="mt-1 text-xs leading-relaxed text-slate-600">Tracks each FreshSMP bot from Bedrock login and resource-pack negotiation through the /lifesteal queue and subserver. A queue with no entry after exactly 60 seconds is flagged; sessions that end sooner are recorded as short stays.</p>
+            <h1 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900">FreshSMP Lifesteal Diagnostics</h1>
+            <p className="mt-1.5 max-w-4xl text-sm leading-6 font-medium text-slate-600">Follow each account from Bedrock login through the resource-pack check, Lifesteal queue, and subserver. Queue waits are flagged after 60 seconds, while shorter sessions are recorded as short stays.</p>
           </div>
         </div>
         <div className="mt-4 grid gap-2 sm:grid-cols-3">
-          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-[11px] text-slate-600"><Radio className="inline w-3.5 h-3.5 mr-1.5 text-sky-600" />RakNet login and world spawn</div>
-          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-[11px] text-slate-600"><ShieldAlert className="inline w-3.5 h-3.5 mr-1.5 text-amber-600" />Resource-pack exchange observations</div>
-          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-[11px] text-slate-600"><Clock3 className="inline w-3.5 h-3.5 mr-1.5 text-rose-600" />Exact 60-second queue threshold</div>
+          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><Radio className="inline w-4 h-4 mr-2 text-sky-500" />RakNet login and world spawn</div>
+          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><ShieldAlert className="inline w-4 h-4 mr-2 text-amber-500" />Resource-pack exchange observations</div>
+          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><Clock3 className="inline w-4 h-4 mr-2 text-rose-500" />Exact 60-second queue threshold</div>
         </div>
       </div>
 
@@ -60,8 +60,8 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
         return (
           <section key={profile.id} className="rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
-              <div><h2 className="text-sm font-black text-slate-900">{profile.name}</h2><p className="text-[11px] text-slate-500">{profile.serverHost}:{profile.serverPort} · {unstable.length} unstable · {stableCount} stable hidden</p></div>
-              <span className="text-[10px] font-bold rounded-full px-2.5 py-1 bg-sky-50 text-sky-700 border border-sky-100">FreshSMP only</span>
+              <div className="min-w-0"><h2 className="text-base font-black tracking-tight text-slate-900">{profile.name}</h2><p className="mt-0.5 text-xs font-medium text-slate-500"><Server className="inline w-3.5 h-3.5 mr-1 text-sky-500" />{profile.serverHost}:{profile.serverPort} · {unstable.length} unstable · {stableCount} stable hidden</p></div>
+              <span className="shrink-0 text-[11px] font-extrabold rounded-full px-2.5 py-1 bg-sky-100 text-sky-800 border border-sky-200">FreshSMP only</span>
             </div>
             {assigned.length === 0 ? <p className="p-5 text-xs text-slate-500">No linked accounts to monitor.</p> : unstable.length === 0 ? (
               <div className="p-8 text-center">
@@ -83,22 +83,22 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
                   return (
                     <article key={account.id} className="min-w-0 rounded-xl border border-slate-200 p-4 sm:p-5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5"><div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-xs font-black text-slate-600">{account.username.slice(0, 2).toUpperCase()}</div><div><h3 className="text-xs font-black text-slate-900">{account.ign || account.username}</h3><p className="text-[10px] text-slate-500">{account.username} · {status}</p></div></div>
+                        <div className="flex items-center gap-2.5"><div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-100 to-indigo-100 border border-sky-200 flex items-center justify-center text-xs font-black text-sky-800 shadow-sm"><UserRound className="w-4 h-4" /></div><div><h3 className="text-sm font-black tracking-tight text-slate-900">{account.ign || account.username}</h3><p className="mt-0.5 text-xs font-medium text-slate-500">{account.username} · {status}</p></div></div>
                         <div className="flex items-center gap-2">
-                          <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold border ${waitingOverMinute || phase === 'reconnecting' ? 'bg-rose-50 text-rose-700 border-rose-200' : phase === 'lifesteal' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold border shadow-sm ${waitingOverMinute || phase === 'reconnecting' ? 'bg-rose-50 text-rose-800 border-rose-200' : phase === 'lifesteal' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-50 text-slate-700 border-slate-200'}`}>
                             {waitingOverMinute ? 'Queue over 60 seconds' : phaseLabel[phase]}
                           </span>
-                          {detail && <span className="text-[10px] text-slate-400">{detail.lifestealAttemptStartedAt ? `Attempt ${elapsed(attemptDuration)}` : elapsed(phaseDuration)}</span>}
+                          {detail && <span className="text-[11px] font-semibold text-slate-500">{detail.lifestealAttemptStartedAt ? `Attempt ${elapsed(attemptDuration)}` : elapsed(phaseDuration)}</span>}
                         </div>
                       </div>
-                      {botReasons[botId] && <div className="mt-3 rounded-lg bg-rose-50 border border-rose-100 px-3 py-2 text-[11px] text-rose-800"><AlertTriangle className="inline w-3.5 h-3.5 mr-1" />{botReasons[botId]}</div>}
-                      {latestProblem && <p className="mt-2 text-[11px] text-amber-800">Most recent issue: {latestProblem.message}</p>}
-                      {!detail ? <p className="mt-3 text-[11px] text-slate-400">No daemon diagnostic events yet. Start the bot or reconnect the daemon to begin collecting evidence.</p> : detail.events.length === 0 ? <p className="mt-3 text-[11px] text-slate-400">Waiting for the first connection event.</p> : (
+                      {botReasons[botId] && <div className="mt-3 rounded-xl bg-rose-50 border border-rose-200 px-3 py-2.5 text-xs font-bold leading-relaxed text-rose-800 shadow-sm"><AlertTriangle className="inline w-4 h-4 mr-1.5 align-[-3px] text-rose-600" />{botReasons[botId]}</div>}
+                      {latestProblem && <p className="mt-2 rounded-lg border border-amber-300/40 bg-amber-950/25 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-200"><AlertTriangle className="inline w-4 h-4 mr-1.5 align-[-3px] text-amber-400" />Most recent issue: {latestProblem.message}</p>}
+                      {!detail ? <p className="mt-3 text-xs font-medium text-slate-500">No daemon diagnostic events yet. Connect an account or reconnect the daemon to start collecting evidence.</p> : detail.events.length === 0 ? <p className="mt-3 text-xs font-medium text-slate-500">Waiting for the first connection event.</p> : (
                         <div className="mt-3 max-h-64 overflow-y-auto rounded-xl border border-slate-100 bg-slate-50/60 divide-y divide-slate-100">
                           {[...detail.events].reverse().map((event) => (
                             <div key={event.id} className="flex gap-2.5 px-3 py-2.5">
-                              <span className="mt-0.5 shrink-0">{event.severity === 'error' ? <AlertTriangle className="w-3.5 h-3.5 text-rose-500" /> : event.severity === 'success' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : <Activity className="w-3.5 h-3.5 text-slate-400" />}</span>
-                              <div className="min-w-0 flex-1"><p className="text-[11px] leading-relaxed text-slate-700">{event.message}</p><p className="mt-0.5 text-[9px] text-slate-400">{new Date(event.timestamp).toLocaleString()} · {event.category.replace('_', ' ')}{event.durationMs !== undefined ? ` · ${elapsed(event.durationMs)}` : ''}</p></div>
+                              <span className="mt-0.5 shrink-0">{event.severity === 'error' ? <AlertTriangle className="w-4 h-4 text-rose-500" /> : event.severity === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : event.severity === 'warning' ? <ShieldAlert className="w-4 h-4 text-amber-500" /> : <Activity className="w-4 h-4 text-sky-500" />}</span>
+                              <div className="min-w-0 flex-1"><p className="text-xs leading-relaxed font-medium text-slate-700">{event.message}</p><p className="mt-1 text-[10px] font-semibold text-slate-500">{new Date(event.timestamp).toLocaleString()} · {event.category.replace('_', ' ')}{event.durationMs !== undefined ? ` · ${elapsed(event.durationMs)}` : ''}</p></div>
                             </div>
                           ))}
                         </div>
@@ -111,7 +111,7 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
           </section>
         );
       })}
-      <p className="text-[10px] text-slate-400 px-1">These diagnostics identify where the failure occurs; queue timeout and RakNet transport timeout are distinct issues. Events are retained by the Termux daemon for the current process and resynced when the dashboard reconnects.</p>
+      <p className="text-xs leading-relaxed font-medium text-slate-500 px-1">These diagnostics show where a failure occurs. Queue waits and RakNet transport timeouts are different issues. The Termux daemon retains events for the current process and resyncs them when the dashboard reconnects.</p>
     </div>
   );
 }

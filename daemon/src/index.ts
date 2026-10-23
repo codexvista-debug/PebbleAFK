@@ -392,8 +392,8 @@ wss.on('connection', (ws: WebSocket, req) => {
       }
 
       if (parsed.type === 'RESTART_DAEMON') {
-        console.log(chalk.cyan('[Daemon] Core restart requested by dashboard. Active accounts will be restored.'));
-        sendDaemonStatus(ws, '🔁 Restarting daemon core; active accounts will reconnect automatically...');
+        console.log(chalk.cyan('[Daemon] Core restart requested by dashboard. Accounts require a manual reconnect after startup.'));
+        sendDaemonStatus(ws, '🔁 Restarting daemon core; reconnect accounts manually from the dashboard after it returns.');
         setTimeout(() => process.exit(42), 1200);
         return;
       }
@@ -547,7 +547,7 @@ async function updateDaemonFromDashboard(ws: WebSocket) {
     status('⚙️ Building updated daemon core...');
     const buildOut = await runCommand('npm', ['run', 'build'], daemonDir);
     if (buildOut) console.log(chalk.gray(buildOut));
-    status(`✨ Engine update complete (${targetHead.slice(0, 7)}). Restarting the core; active accounts will reconnect automatically.`);
+    status(`✨ Engine update complete (${targetHead.slice(0, 7)}). Restarting the core; reconnect accounts manually from the dashboard after it returns.`);
     console.log(chalk.cyan('════════════════════════════════════════════════════\n'));
     setTimeout(() => process.exit(42), 1200);
   } catch (error: any) {
