@@ -70,6 +70,8 @@ const SERVER_VERSION_CACHE: Map<string, string> = new Map([
   ['freshsmp.fun', '1.26.51'],
   ['play.freshsmp.fun', '1.26.51'],
 ]);
+const FRESH_SMP_PAYOUT_THRESHOLD = 40_000;
+const FRESH_SMP_PAYOUT_AMOUNT = `${FRESH_SMP_PAYOUT_THRESHOLD / 1_000}k`;
 const SERVER_ENDPOINT_CURSORS = new Map<string, number>();
 // Once a Bedrock edge has completed the full game handshake, prefer that edge
 // for other accounts on the same daemon/host. Ping responses alone do not
@@ -581,20 +583,20 @@ export class PebbleBotInstance {
       return;
     }
 
-    if (balance < 100_000) {
+    if (balance < FRESH_SMP_PAYOUT_THRESHOLD) {
       this.freshSmpPaidForCurrentThreshold = false;
-      this.logActivity('status', `FreshSMP balance check: ${balance.toLocaleString('en-US')}; it is below 100,000, so no payment was sent.`);
+      this.logActivity('status', `FreshSMP balance check: ${balance.toLocaleString('en-US')}; it is below ${FRESH_SMP_PAYOUT_THRESHOLD.toLocaleString('en-US')}, so no payment was sent.`);
       return;
     }
 
     if (this.freshSmpPaidForCurrentThreshold) {
-      this.logActivity('status', `FreshSMP balance check: ${balance.toLocaleString('en-US')}; this 100,000 balance threshold was already processed.`);
+      this.logActivity('status', `FreshSMP balance check: ${balance.toLocaleString('en-US')}; this ${FRESH_SMP_PAYOUT_THRESHOLD.toLocaleString('en-US')} balance threshold was already processed.`);
       return;
     }
 
     const recipient = this.getFreshSmpPayUsername();
     if (!this.hasFreshSmpBalancePay() || !recipient) return;
-    const command = `/pay ${recipient} 100k`;
+    const command = `/pay ${recipient} ${FRESH_SMP_PAYOUT_AMOUNT}`;
     const secondDelayMs = 1_000 + Math.floor(Math.random() * 9_001);
     this.freshSmpPaidForCurrentThreshold = true;
     this.logActivity('warning', `FreshSMP balance is ${balance.toLocaleString('en-US')}; sending ${command} twice, with the second payment in ${Math.ceil(secondDelayMs / 1000)}s.`);
