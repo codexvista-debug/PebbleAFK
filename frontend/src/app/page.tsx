@@ -67,6 +67,22 @@ const getPlayerSkinHeadUrl = (name: string, size = 32) => {
   const clean = (name || 'Steve').replace(/^@/, '').trim();
   return `https://crafthead.net/helm/${encodeURIComponent(clean)}/${size}`;
 };
+
+type MinecraftStatusTone = 'stable' | 'unstable' | 'offline';
+
+function MinecraftStatusIcon({ tone }: { tone: MinecraftStatusTone }) {
+  const pixels = tone === 'stable'
+    ? ['bg-lime-300', 'bg-emerald-400', 'bg-emerald-700', 'bg-amber-800']
+    : tone === 'unstable'
+      ? ['bg-amber-300', 'bg-red-400', 'bg-rose-700', 'bg-stone-900']
+      : ['bg-stone-300', 'bg-stone-400', 'bg-stone-600', 'bg-stone-800'];
+
+  return (
+    <span className="grid h-4 w-4 shrink-0 grid-cols-2 grid-rows-2 gap-px border border-[#171512] bg-[#171512] p-px shadow-[0_1px_0_rgba(255,255,255,.35)]" aria-hidden="true">
+      {pixels.map((pixel, index) => <span key={index} className={pixel} />)}
+    </span>
+  );
+}
 import { 
   loadAccountsFromSupabase, 
   syncAllToSupabase, 
@@ -110,6 +126,17 @@ export default function Home() {
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'success' | 'error' } | null>(null);
   const [smartAdjustNotices, setSmartAdjustNotices] = useState<Array<{ id: string; username: string; message: string }>>([]);
   const smartAdjustNoticeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const adjustingAccountIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const notice of smartAdjustNotices) {
+      const username = notice.username.replace(/^@/, '').trim().toLowerCase();
+      for (const account of accounts) {
+        const names = [account.username, account.ign].filter(Boolean).map((name) => name!.replace(/^@/, '').trim().toLowerCase());
+        if (names.includes(username)) ids.add(account.id);
+      }
+    }
+    return ids;
+  }, [smartAdjustNotices, accounts]);
   const seenSmartAdjustEventsRef = useRef<Set<string>>(new Set());
   const seededSmartAdjustBotsRef = useRef<Set<string>>(new Set());
 
@@ -1696,7 +1723,7 @@ export default function Home() {
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className={`p-1.5 rounded-lg ${activeTab === 'dashboard' ? 'bg-emerald-500 text-white shadow-sm' : 'bg-emerald-100 text-emerald-700'}`}>
+                <div className="mc-nav-block mc-nav-block--grass">
                   <LayoutDashboard className="w-4 h-4" />
                 </div>
                 <span>Dashboard</span>
@@ -1715,7 +1742,7 @@ export default function Home() {
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`p-1.5 rounded-lg ${activeTab === 'termux_stream' ? 'bg-sky-500 text-white shadow-sm' : 'bg-sky-100 text-sky-700'}`}>
+                  <div className="mc-nav-block mc-nav-block--diamond">
                     <Terminal className="w-4 h-4" />
                   </div>
                   <span>Termux Stream</span>
@@ -1734,7 +1761,7 @@ export default function Home() {
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className={`p-1.5 rounded-lg ${activeTab === 'diagnostics' ? 'bg-amber-500 text-white shadow-sm' : 'bg-amber-100 text-amber-700'}`}>
+                <div className="mc-nav-block mc-nav-block--redstone">
                   <Activity className="w-4 h-4" />
                 </div>
                 <span>Diagnostics</span>
@@ -1751,7 +1778,7 @@ export default function Home() {
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className={`p-1.5 rounded-lg ${activeTab === 'servers' ? 'bg-cyan-500 text-white shadow-sm' : 'bg-cyan-100 text-cyan-700'}`}>
+                <div className="mc-nav-block mc-nav-block--stone">
                   <Server className="w-4 h-4" />
                 </div>
                 <span>Servers</span>
@@ -1769,7 +1796,7 @@ export default function Home() {
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`p-1.5 rounded-lg ${activeTab === 'accounts' ? 'bg-violet-500 text-white shadow-sm' : 'bg-violet-100 text-violet-700'}`}>
+                  <div className="mc-nav-block mc-nav-block--amethyst">
                     <Users className="w-4 h-4" />
                   </div>
                   <span>Accounts</span>
@@ -1878,7 +1905,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <HomeIcon className={`w-4 h-4 ${activeSubTab === 'connect' ? 'text-emerald-700' : 'text-emerald-500'}`} />
+                              <span className="mc-nav-mini-block mc-nav-mini-block--grass"><HomeIcon className="h-3.5 w-3.5" /></span>
                               <span>Connect</span>
                             </button>
 
@@ -1894,7 +1921,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <MessageSquare className={`w-4 h-4 ${activeSubTab === 'chat' ? 'text-sky-700' : 'text-sky-500'}`} />
+                              <span className="mc-nav-mini-block mc-nav-mini-block--diamond"><MessageSquare className="h-3.5 w-3.5" /></span>
                               <span>Chat</span>
                             </button>
 
@@ -1910,7 +1937,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <Sliders className={`w-4 h-4 ${activeSubTab === 'settings' ? 'text-violet-700' : 'text-violet-500'}`} />
+                              <span className="mc-nav-mini-block mc-nav-mini-block--amethyst"><Sliders className="h-3.5 w-3.5" /></span>
                               <span>Settings</span>
                             </button>
                           </div>
@@ -2661,6 +2688,7 @@ export default function Home() {
                                 const isConnected = isDaemonLive && (botState === 'SPAWNED' || botState === 'LOGGED_IN');
                                 const isConnecting = isDaemonLive && (botState === 'CONNECTING' || botState === 'RECONNECTING');
                                 const isChecked = selectedAccountIds.includes(acc.id);
+                                const isBeingAdjusted = adjustingAccountIds.has(acc.id);
 
                                 const srvStart = sessionStartTimes[botId];
                                 const localSec = srvStart ? Math.max(0, Math.floor((nowTick - srvStart) / 1000)) : 0;
@@ -2682,7 +2710,7 @@ export default function Home() {
                                 return (
                                   <div
                                     key={acc.id}
-                                    className={`p-3 space-y-2.5 transition ${isChecked ? 'bg-emerald-50/40' : 'bg-white'}`}
+                                    className={`p-3 space-y-2.5 transition ${isBeingAdjusted ? 'mc-adjusting-card rounded-xl border-2 border-emerald-400/90' : isChecked ? 'bg-emerald-50/40' : 'bg-white'}`}
                                   >
                                     {/* Top Row: Checkbox, Avatar, Name & Badges, Pin */}
                                     <div className="flex items-center justify-between gap-2">
@@ -2848,6 +2876,7 @@ export default function Home() {
                                     const isConnected = isDaemonLive && (botState === 'SPAWNED' || botState === 'LOGGED_IN');
                                     const isConnecting = isDaemonLive && (botState === 'CONNECTING' || botState === 'RECONNECTING');
                                     const isChecked = selectedAccountIds.includes(acc.id);
+                                    const isBeingAdjusted = adjustingAccountIds.has(acc.id);
 
                                     const srvStart = sessionStartTimes[botId];
                                     const localSec = srvStart ? Math.max(0, Math.floor((nowTick - srvStart) / 1000)) : 0;
@@ -2870,7 +2899,7 @@ export default function Home() {
                                       <tr
                                         key={acc.id}
                                         className={`hover:bg-slate-50/80 transition ${
-                                          isChecked ? 'bg-emerald-50/30' : ''
+                                          isBeingAdjusted ? 'mc-adjusting-card' : isChecked ? 'bg-emerald-50/30' : ''
                                         }`}
                                       >
                                         <td className="p-3 text-center">
@@ -3157,7 +3186,7 @@ export default function Home() {
                           : targetAccounts[0]?.id || '');
                       const selectedAccount = isAllSelected ? null : (targetAccounts.find((a) => a.id === selectedAccountId) || null);
                       const selectedBotId = selectedAccount ? `${activeServer.id}__${selectedAccountId}` : '';
-                      const selectedBossBar = selectedAccount ? bossBarsByBot[selectedBotId] : Object.values(bossBarsByBot)[0] || null;
+                      const selectedBossBar = selectedAccount ? bossBarsByBot[selectedBotId] : null;
 
                       const isSelectedOnline = isAllSelected
                         ? targetAccounts.some((acc) => {
@@ -3272,23 +3301,23 @@ export default function Home() {
                                     <span
                                       title={`${stabilityCounts.stable} stable accounts`}
                                       aria-label={`${stabilityCounts.stable} stable accounts`}
-                                      className="inline-flex h-7 min-w-9 shrink-0 items-center justify-center gap-1 rounded-full border border-emerald-300/70 bg-emerald-100 px-2 text-xs font-extrabold text-emerald-800"
+                                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border-2 border-lime-300 bg-[#263b28] px-2 text-xs font-black uppercase tracking-wide text-lime-100 shadow-[0_2px_0_#111]"
                                     >
-                                      <CheckCircle2 className="h-3.5 w-3.5" />{stabilityCounts.stable}
+                                      <MinecraftStatusIcon tone="stable" /><span className="hidden sm:inline">Stable</span><span>{stabilityCounts.stable}</span>
                                     </span>
                                     <span
                                       title={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
                                       aria-label={`${stabilityCounts.unstable} unstable, connecting, or in-lobby accounts`}
-                                      className="inline-flex h-7 min-w-9 shrink-0 items-center justify-center gap-1 rounded-full border border-rose-300/70 bg-rose-100 px-2 text-xs font-extrabold text-rose-800"
+                                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border-2 border-rose-300 bg-[#44252a] px-2 text-xs font-black uppercase tracking-wide text-rose-100 shadow-[0_2px_0_#111]"
                                     >
-                                      <AlertCircle className="h-3.5 w-3.5" />{stabilityCounts.unstable}
+                                      <MinecraftStatusIcon tone="unstable" /><span className="hidden sm:inline">Unstable</span><span>{stabilityCounts.unstable}</span>
                                     </span>
                                     <span
                                       title={`${stabilityCounts.offline} offline accounts`}
                                       aria-label={`${stabilityCounts.offline} offline accounts`}
-                                      className="inline-flex h-7 min-w-9 shrink-0 items-center justify-center gap-1 rounded-full border border-slate-300/70 bg-slate-100 px-2 text-xs font-extrabold text-slate-700"
+                                      className="inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border-2 border-stone-400 bg-[#35322e] px-2 text-xs font-black uppercase tracking-wide text-stone-100 shadow-[0_2px_0_#111]"
                                     >
-                                      <MinusCircle className="h-3.5 w-3.5" />{stabilityCounts.offline}
+                                      <MinecraftStatusIcon tone="offline" /><span className="hidden sm:inline">Offline</span><span>{stabilityCounts.offline}</span>
                                     </span>
                                   </div>
                                 ) : selectedAccount ? (
@@ -3388,7 +3417,7 @@ export default function Home() {
                               </button>
                             </div>
 
-                            {selectedBossBar?.visible && selectedBossBar.title && (
+                            {!isAllSelected && selectedBossBar?.visible && selectedBossBar.title && (
                               <div className="relative shrink-0 overflow-hidden border-b-2 border-amber-400/80 bg-gradient-to-r from-[#26231f] via-[#30271d] to-[#25231f] px-3.5 py-2.5 sm:px-5 shadow-inner" role="status" aria-label="AFK reward boss bar">
                                 <div className="flex items-center gap-3">
                                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-200/80 bg-gradient-to-b from-amber-300 to-orange-500 text-amber-950 shadow-[0_2px_0_#8d4f24]">

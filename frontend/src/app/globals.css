@@ -723,6 +723,61 @@ body {
   image-rendering: pixelated;
 }
 
+/* Bright, blocky navigation tiles inspired by Minecraft inventory textures. */
+.mc-nav-block {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid;
+  border-radius: 3px;
+  image-rendering: pixelated;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, .5), inset 1px 1px 0 rgba(255,255,255,.3);
+  transition: filter .15s ease, transform .15s ease;
+}
+.mc-nav-block--grass { color: #f1ffe7; background: linear-gradient(#65c34d 0 45%, #795234 46%); border-color: #a2e77b; }
+.mc-nav-block--diamond { color: #e7ffff; background: linear-gradient(145deg, #53e5e5, #1688b4 62%, #155e91); border-color: #9bf5ef; }
+.mc-nav-block--redstone { color: #fff5d7; background: linear-gradient(145deg, #ffca57, #d36b32 65%, #8f392b); border-color: #ffe08a; }
+.mc-nav-block--stone { color: #f3fcff; background: linear-gradient(145deg, #82d9e7, #248ba7 62%, #155c76); border-color: #b7f4f5; }
+.mc-nav-block--amethyst { color: #fff1ff; background: linear-gradient(145deg, #e0a4ff, #9860d1 62%, #563981); border-color: #f2ccff; }
+.mc-nav-block:hover { filter: brightness(1.12); transform: translateY(-1px); }
+.mc-nav-mini-block {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+  border-radius: 2px;
+  box-shadow: 0 1px 0 rgba(0,0,0,.45), inset 1px 1px 0 rgba(255,255,255,.3);
+}
+.mc-nav-mini-block--grass { color: #f1ffe7; background: linear-gradient(#65c34d 0 45%, #795234 46%); border-color: #a2e77b; }
+.mc-nav-mini-block--diamond { color: #e7ffff; background: linear-gradient(145deg, #53e5e5, #1688b4 62%, #155e91); border-color: #9bf5ef; }
+.mc-nav-mini-block--amethyst { color: #fff1ff; background: linear-gradient(145deg, #e0a4ff, #9860d1 62%, #563981); border-color: #f2ccff; }
+
+/* The single account in active FreshSMP recovery pulses green without flickering its text. */
+.mc-adjusting-card {
+  position: relative;
+  z-index: 1;
+  animation: mc-adjusting-pulse 1.25s steps(2, end) infinite;
+}
+.mc-surface .mc-adjusting-card {
+  background-color: rgba(24, 75, 36, .88) !important;
+  box-shadow: inset 0 0 0 1px #8be36a, 0 0 18px rgba(111, 226, 89, .42);
+}
+.mc-surface tr.mc-adjusting-card > td {
+  background-color: rgba(24, 75, 36, .88) !important;
+  border-top: 2px solid #8be36a;
+  border-bottom: 2px solid #8be36a;
+}
+@keyframes mc-adjusting-pulse {
+  0%, 100% { outline: 1px solid rgba(139, 227, 106, .45); }
+  50% { outline: 3px solid rgba(139, 227, 106, .95); }
+}
+
 /* Crisp, game-like scrollbars. */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: #242220; }
