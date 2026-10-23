@@ -1746,6 +1746,36 @@ export default function Home() {
         </div>
       )}
 
+      {smartAdjustNotices.length > 0 && (
+        <div className="mc-signet-notifications" aria-live="polite" aria-label="Signet recovery notifications">
+          {smartAdjustNotices.map((notice) => (
+            <div key={notice.id} className="mc-signet-notification animate-in fade-in slide-in-from-top-2 duration-200" role="status">
+              <div className="mc-signet-notification__icon" aria-hidden="true">
+                <RotateCw className="h-5 w-5 animate-spin [animation-duration:3s]" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="mc-signet-notification__eyebrow">PEBBLEAFK · SIGNET RECOVERY</div>
+                <div className="mc-signet-notification__title">Signet is fixing the account <span>@{notice.username}</span></div>
+                <p className="mc-signet-notification__details">{notice.message}</p>
+              </div>
+              <button
+                type="button"
+                aria-label={`Dismiss Signet notification for ${notice.username}`}
+                onClick={() => {
+                  const timer = smartAdjustNoticeTimersRef.current.get(notice.id);
+                  if (timer) clearTimeout(timer);
+                  smartAdjustNoticeTimersRef.current.delete(notice.id);
+                  setSmartAdjustNotices((previous) => previous.filter((item) => item.id !== notice.id));
+                }}
+                className="mc-signet-notification__dismiss"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Mobile Top Header Bar */}
       <div className="mc-mobile-topbar md:hidden flex items-center justify-between p-3.5 bg-white border-b border-slate-200/90 shrink-0 sticky top-0 z-30 shadow-2xs">
         <div className="flex items-center gap-2.5">
@@ -2720,34 +2750,6 @@ export default function Home() {
                     {/* SUBTAB 1: CONNECT */}
                     {activeSubTab === 'connect' && (
                       <div className="space-y-4">
-                        {smartAdjustNotices.length > 0 && (
-                          <div className="space-y-2" aria-live="polite" aria-label="FreshSMP smart recovery updates">
-                            {smartAdjustNotices.map((notice) => (
-                              <div key={notice.id} className="flex items-start gap-3 rounded-2xl border border-sky-400/50 bg-slate-900/90 px-4 py-3 shadow-lg shadow-black/20 animate-in fade-in slide-in-from-top-1 duration-200">
-                                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-sky-400/40 bg-sky-950/70 text-sky-200">
-                                  <RotateCw className="h-4 w-4" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <div className="text-sm font-extrabold text-sky-100">FreshSMP recovery is adjusting @{notice.username}</div>
-                                  <p className="mt-0.5 text-xs leading-relaxed text-slate-200 sm:truncate" title={notice.message}>{notice.message}</p>
-                                </div>
-                                <button
-                                  type="button"
-                                  aria-label={`Dismiss recovery notice for ${notice.username}`}
-                                  onClick={() => {
-                                    const timer = smartAdjustNoticeTimersRef.current.get(notice.id);
-                                    if (timer) clearTimeout(timer);
-                                    smartAdjustNoticeTimersRef.current.delete(notice.id);
-                                    setSmartAdjustNotices((previous) => previous.filter((item) => item.id !== notice.id));
-                                  }}
-                                  className="rounded-lg p-1 text-slate-400 transition hover:bg-white hover:text-slate-700"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
                         {/* Top Action Bar */}
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-2.5">
