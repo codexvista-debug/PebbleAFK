@@ -3420,7 +3420,7 @@ export default function Home() {
                               <div className="shrink-0 border-b border-amber-200/70 bg-amber-50/70 px-4 py-2.5 sm:px-5" role="status" aria-label="AFK reward boss bar">
                                 <div className="flex items-center justify-between gap-3 text-xs sm:text-sm">
                                   <div className="min-w-0 truncate font-semibold text-amber-900">
-                                    <MinecraftText text={selectedBossBar.title} />
+                                    <MinecraftText text={selectedBossBar.title} palette="light" />
                                   </div>
                                   {typeof selectedBossBar.progress === 'number' && (
                                     <span className="shrink-0 tabular-nums text-[11px] font-medium text-amber-700">

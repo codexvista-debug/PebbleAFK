@@ -9,72 +9,26 @@ interface MinecraftChatMessageProps {
   compact?: boolean;
 }
 
-// Light-mode optimized high-contrast Minecraft Rank colors (DonutSMP, FreshSMP, Survival SMP)
-const LIGHT_RANK_COLORS: Record<string, string> = {
-  IRON: '#64748b',       // Slate 500
-  GOLD: '#d97706',       // Amber 600
-  DIAMOND: '#0284c7',    // Sky 600
-  EMERALD: '#059669',    // Emerald 600
-  NETHERITE: '#475569',  // Dark Slate
-  DONUT: '#ea580c',      // Orange 600
-  FRESH: '#059669',      // Emerald 600
-  CHIEF: '#7c3aed',      // Purple 600
-  TITAN: '#0284c7',      // Sky 600
-  KING: '#d97706',       // Amber 600
-  CHAMPION: '#b45309',   // Amber 700
-  KNIGHT: '#2563eb',     // Blue 600
-  EMPEROR: '#7c3aed',    // Purple 600
-  'OVERLORD++': '#7c3aed',
-  OVERLORD: '#7c3aed',
-  LORD: '#7c3aed',
-  JESTER: '#c026d3',
-  'JESTER+': '#c026d3',
-  MEMBER: '#475569',     // Slate 600
-  VIP: '#059669',        // Emerald 600
-  'VIP+': '#059669',
-  MVP: '#0891b2',        // Cyan 600
-  'MVP+': '#0284c7',
-  MEDIA: '#e11d48',      // Rose 600
-  YOUTUBE: '#e11d48',
-  STREAMER: '#9333ea',
-  HELPER: '#06b6d4',     // Cyan 500
-  STAFF: '#dc2626',      // Red 600
-  ADMIN: '#dc2626',      // Red 600
-  OWNER: '#dc2626',
-  MOD: '#059669',
-  DEFAULT: '#475569',
+// Brightened rank colors remain distinct and legible on the dark chat surface.
+const DARK_RANK_COLORS: Record<string, string> = {
+  IRON: '#c9c3ba', GOLD: '#ffc166', DIAMOND: '#72c9ff', EMERALD: '#76e6b1',
+  NETHERITE: '#c1b9af', DONUT: '#ff9d68', FRESH: '#76e6b1', CHIEF: '#c49aff',
+  TITAN: '#72c9ff', KING: '#ffc166', CHAMPION: '#ffb078', KNIGHT: '#83b5ff',
+  EMPEROR: '#c49aff', 'OVERLORD++': '#c49aff', OVERLORD: '#c49aff', LORD: '#c49aff',
+  JESTER: '#ff91dc', 'JESTER+': '#ff91dc', MEMBER: '#c1b9af', VIP: '#76e6b1',
+  'VIP+': '#76e6b1', MVP: '#72e5ed', 'MVP+': '#72c9ff', MEDIA: '#ff849d',
+  YOUTUBE: '#ff849d', STREAMER: '#d995ff', HELPER: '#72e5ed', STAFF: '#ff8181',
+  ADMIN: '#ff8181', OWNER: '#ff8181', MOD: '#76e6b1', DEFAULT: '#d1c9c0',
 };
 
-// Light-mode Minecraft Color Codes (Standard Java 0-f + Bedrock Material codes g-u)
-const LIGHT_MC_COLORS: Record<string, string> = {
-  '0': '#0f172a', // Black -> slate-900
-  '1': '#1e3a8a', // Dark Blue
-  '2': '#15803d', // Dark Green
-  '3': '#0e7490', // Dark Aqua
-  '4': '#b91c1c', // Dark Red
-  '5': '#6b21a8', // Dark Purple
-  '6': '#d97706', // Gold
-  '7': '#64748b', // Gray
-  '8': '#334155', // Dark Gray
-  '9': '#2563eb', // Blue
-  'a': '#16a34a', // Green
-  'b': '#0284c7', // Aqua
-  'c': '#dc2626', // Red
-  'd': '#c026d3', // Light Purple
-  'e': '#ca8a04', // Yellow
-  'f': '#0f172a', // White -> dark slate on light mode
-  // Bedrock Edition Material Colors
-  'g': '#ca8a04', // Minecoin Gold
-  'h': '#64748b', // Material Quartz
-  'i': '#475569', // Material Iron (Slate-600)
-  'j': '#334155', // Material Netherite (Slate-700)
-  'm': '#dc2626', // Material Redstone
-  'n': '#ea580c', // Material Copper
-  'p': '#d97706', // Material Gold
-  'q': '#16a34a', // Material Emerald
-  's': '#0284c7', // Material Diamond
-  't': '#1e40af', // Material Lapis
-  'u': '#7c3aed', // Material Amethyst
+const DARK_MC_COLORS: Record<string, string> = {
+  '0': '#c9c0b6', '1': '#78a8ff', '2': '#78df86', '3': '#66d9d1',
+  '4': '#ff7777', '5': '#d995ff', '6': '#ffc166', '7': '#e2d9ce',
+  '8': '#b7aea4', '9': '#83b5ff', 'a': '#76e68a', 'b': '#72e5ed',
+  'c': '#ff8181', 'd': '#ff91dc', 'e': '#ffe477', 'f': '#fffaf2',
+  'g': '#ffdc70', 'h': '#e1ded8', 'i': '#c9c3ba', 'j': '#b7aea4',
+  'm': '#ff7777', 'n': '#ffb078', 'p': '#ffc166', 'q': '#78df86',
+  's': '#72e5ed', 't': '#83b5ff', 'u': '#d995ff',
 };
 
 export function parseLightMinecraftColorCodes(text: string): React.ReactNode {
@@ -82,7 +36,7 @@ export function parseLightMinecraftColorCodes(text: string): React.ReactNode {
   if (!text.includes('§')) return text;
 
   const parts = text.split(/(§[0-9a-fk-orxghijpqstu])/gi);
-  let currentColor = '#0f172a';
+  let currentColor = '#f2eee8';
   let isBold = false;
   let isItalic = false;
 
@@ -90,14 +44,14 @@ export function parseLightMinecraftColorCodes(text: string): React.ReactNode {
     if (!part) return null;
     if (part.startsWith('§')) {
       const code = part.charAt(1).toLowerCase();
-      if (LIGHT_MC_COLORS[code]) {
-        currentColor = LIGHT_MC_COLORS[code];
+      if (DARK_MC_COLORS[code]) {
+        currentColor = DARK_MC_COLORS[code];
       } else if (code === 'l') {
         isBold = true;
       } else if (code === 'o') {
         isItalic = true;
       } else if (code === 'r') {
-        currentColor = '#0f172a';
+        currentColor = '#f2eee8';
         isBold = false;
         isItalic = false;
       }
@@ -196,7 +150,7 @@ export const MinecraftChatMessage: React.FC<MinecraftChatMessageProps> = ({
     const username = rankPlayerMatch[2];
     const cleanBody = rankPlayerMatch[3];
     const baseRank = rank.replace(/\+/g, '');
-    const rankColor = LIGHT_RANK_COLORS[rank] || LIGHT_RANK_COLORS[baseRank] || '#475569';
+    const rankColor = DARK_RANK_COLORS[rank] || DARK_RANK_COLORS[baseRank] || '#d1c9c0';
 
     // Extract color-coded message body from rawText if available
     let rawBody = cleanBody;
@@ -406,7 +360,7 @@ export const MinecraftChatMessage: React.FC<MinecraftChatMessageProps> = ({
 
   // 7. Default Server / Player Message Fallback
   const isServer = message.sender === 'Server' || message.type === 'system';
-  const senderColor = isServer ? '#d97706' : LIGHT_RANK_COLORS[message.sender?.toUpperCase()] || '#0284c7';
+  const senderColor = isServer ? '#ffc166' : DARK_RANK_COLORS[message.sender?.toUpperCase()] || '#72c9ff';
 
   return (
     <div className="group min-w-0 max-w-full flex items-start gap-1.5 py-1 px-1.5 sm:px-2 hover:bg-slate-100/80 rounded-lg transition-colors text-slate-800">

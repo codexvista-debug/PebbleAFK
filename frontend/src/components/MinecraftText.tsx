@@ -2,43 +2,32 @@
 
 import React from 'react';
 
-// Minecraft Bedrock / Java Section Sign Formatting Map
-const COLOR_MAP: Record<string, string> = {
-  // Standard Minecraft Colors
-  '0': '#000000', // Black
-  '1': '#1e3a8a', // Dark Blue
-  '2': '#15803d', // Dark Green
-  '3': '#0e7490', // Dark Aqua
-  '4': '#b91c1c', // Dark Red
-  '5': '#7e22ce', // Dark Purple
-  '6': '#d97706', // Gold / Amber
-  '7': '#64748b', // Gray
-  '8': '#334155', // Dark Gray
-  '9': '#2563eb', // Blue
-  'a': '#16a34a', // Bright Green
-  'b': '#0891b2', // Aqua / Cyan
-  'c': '#dc2626', // Red
-  'd': '#c026d3', // Light Purple
-  'e': '#ca8a04', // Yellow
-  'f': '#0f172a', // White (Mapped to dark slate for high contrast on light UI)
+// Minecraft colors are lifted for the dark control-room/chat surfaces.
+const DARK_COLOR_MAP: Record<string, string> = {
+  '0': '#c9c0b6', '1': '#78a8ff', '2': '#78df86', '3': '#66d9d1',
+  '4': '#ff7777', '5': '#d995ff', '6': '#ffc166', '7': '#e2d9ce',
+  '8': '#b7aea4', '9': '#83b5ff', 'a': '#76e68a', 'b': '#72e5ed',
+  'c': '#ff8181', 'd': '#ff91dc', 'e': '#ffe477', 'f': '#fffaf2',
+  'g': '#ffdc70', 'h': '#e1ded8', 'i': '#c9c3ba', 'j': '#b7aea4',
+  'm': '#ff7777', 'n': '#ffb078', 'p': '#d995ff', 'q': '#78df86',
+  's': '#72e5ed', 't': '#83b5ff', 'u': '#d995ff',
+};
 
-  // Bedrock Edition Extended Material & Rank Colors
-  'g': '#ca8a04', // Minecoin Gold
-  'h': '#94a3b8', // Material Quartz (slate)
-  'i': '#64748b', // Material Iron (slate gray)
-  'j': '#334155', // Material Netherite (dark gray)
-  'm': '#dc2626', // Redstone
-  'n': '#b45309', // Copper
-  'p': '#7c3aed', // Purple / Gold rank
-  'q': '#15803d', // Emerald Green
-  's': '#0891b2', // Diamond Aqua
-  't': '#1e40af', // Lapis Blue
-  'u': '#9333ea', // Amethyst Purple
+// The AFK boss bar intentionally stays light, so use readable dark text there.
+const LIGHT_COLOR_MAP: Record<string, string> = {
+  '0': '#26231f', '1': '#244c9a', '2': '#276b35', '3': '#176d70',
+  '4': '#a92e32', '5': '#71349b', '6': '#91520d', '7': '#5d554c',
+  '8': '#49443f', '9': '#245fc0', 'a': '#26753a', 'b': '#087b83',
+  'c': '#bd3038', 'd': '#a63885', 'e': '#8a6a08', 'f': '#26231f',
+  'g': '#8a6a08', 'h': '#5d554c', 'i': '#5d554c', 'j': '#49443f',
+  'm': '#bd3038', 'n': '#91520d', 'p': '#71349b', 'q': '#26753a',
+  's': '#087b83', 't': '#245fc0', 'u': '#71349b',
 };
 
 interface MinecraftTextProps {
   text: string;
   className?: string;
+  palette?: 'dark' | 'light';
 }
 
 interface TextSpan {
@@ -50,7 +39,7 @@ interface TextSpan {
   strikethrough?: boolean;
 }
 
-export function parseMinecraftText(rawText: string): TextSpan[] {
+export function parseMinecraftText(rawText: string, palette: 'dark' | 'light' = 'dark'): TextSpan[] {
   if (!rawText) return [];
 
   // Match hex codes (e.g. §x§r§r§g§g§b§b) or single code (e.g. §a, §l, §i, etc.)
@@ -87,8 +76,9 @@ export function parseMinecraftText(rawText: string): TextSpan[] {
       }
     } else {
       const code = (match[2] || '').toLowerCase();
-      if (code in COLOR_MAP) {
-        currentColor = COLOR_MAP[code];
+      const colorMap = palette === 'light' ? LIGHT_COLOR_MAP : DARK_COLOR_MAP;
+      if (code in colorMap) {
+        currentColor = colorMap[code];
         // In Minecraft, applying a color resets formatting styles
         isBold = false;
         isItalic = false;
@@ -134,7 +124,7 @@ export function parseMinecraftText(rawText: string): TextSpan[] {
   return spans;
 }
 
-export const MinecraftText: React.FC<MinecraftTextProps> = ({ text, className = '' }) => {
+export const MinecraftText: React.FC<MinecraftTextProps> = ({ text, className = '', palette = 'dark' }) => {
   if (!text) return null;
 
   // Fast path: if no formatting codes present, render plain text (clearing any stray §)
@@ -142,7 +132,7 @@ export const MinecraftText: React.FC<MinecraftTextProps> = ({ text, className = 
     return <span className={className}>{text.replace(/§+/g, '')}</span>;
   }
 
-  const spans = parseMinecraftText(text);
+  const spans = parseMinecraftText(text, palette);
 
   return (
     <span className={className}>

@@ -120,11 +120,11 @@ body {
 
 .mc-surface [class~="text-slate-500"],
 .mc-surface [class~="text-slate-400"] {
-  color: #aaa198 !important;
+  color: #c9c0b6 !important;
 }
 
 .mc-surface [class~="text-slate-300"] {
-  color: #81786f !important;
+  color: #a99f94 !important;
 }
 
 .mc-surface [class~="border-slate-100"],
