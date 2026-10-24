@@ -72,9 +72,14 @@ echo -e "${GRAY}─────────────────────�
 
 # 1. Android Wake Lock & System Notification
 echo -e "${CYAN}[1/4]${NC} 🔋 ${BOLD}Acquiring Android background wake lock...${NC}"
+WAKE_LOCK_ACTIVE=0
 if command -v termux-wake-lock &> /dev/null; then
-  termux-wake-lock
-  echo -e "      ${GREEN}✓ Android OS power management locked (24/7 active)${NC}"
+  if termux-wake-lock; then
+    WAKE_LOCK_ACTIVE=1
+    echo -e "      ${GREEN}✓ Android wake lock acquired for this launcher session${NC}"
+  else
+    echo -e "      ${YELLOW}⚠ Termux API did not confirm the wake lock; continuing and recording the failure${NC}"
+  fi
 else
   echo -e "      ${YELLOW}⚠ termux-wake-lock not available (continuing standard)${NC}"
 fi
@@ -180,6 +185,7 @@ stop_pid_file "$NATIVE_PREP_PID_FILE" "native RakNet preparation"
 stop_pid_file "$LAUNCHER_PID_FILE" "launcher"
 rm -f "$NATIVE_STATUS_FILE" "$NATIVE_STATUS_FILE.tmp"
 echo "=== PebbleAFK Daemon Started $(date) ===" > daemon.log
+echo "[$(date +%T)] [Launcher] Foreground supervisor started (wake_lock_active=${WAKE_LOCK_ACTIVE}, instance=${INSTANCE_ID})." >> daemon.log
 
 if [ -z "$APP_SECRET" ]; then
   echo -e "      ${RED}✗ No daemon secret is available for @${APP_USER}. The website connection cannot be authenticated.${NC}"
@@ -308,61 +314,74 @@ if ! echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
 fi
 echo -e "      ${GREEN}✓ This daemon instance is healthy on port 8080 (Supervisor PID: ${DAEMON_PID})${NC}"
 
+start_tunnel_and_wait_for_url() {
+  local attempt
+  while true; do
+    if ! is_managed_pid "$TUNNEL_PID"; then
+      rm -f tunnel.log
+      cloudflared tunnel --protocol http2 --no-autoupdate --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
+      TUNNEL_PID=$!
+      echo "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
+    fi
+
+    TUNNEL_URL=""
+    for attempt in {1..50}; do
+      TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log 2>/dev/null | tail -n 1)
+      if [ -n "$TUNNEL_URL" ] && is_managed_pid "$TUNNEL_PID"; then
+        return 0
+      fi
+      if ! is_managed_pid "$TUNNEL_PID"; then break; fi
+      sleep 0.5
+    done
+
+    echo "[$(date +%T)] ⚠️ Cloudflare tunnel did not provide a live URL; retrying startup in 5s." >> daemon.log
+    if is_managed_pid "$TUNNEL_PID"; then
+      kill -TERM "$TUNNEL_PID" 2>/dev/null || true
+      sleep 1
+      if is_managed_pid "$TUNNEL_PID"; then kill -KILL "$TUNNEL_PID" 2>/dev/null || true; fi
+    fi
+    sleep 5
+  done
+}
+
 echo -ne "      ${YELLOW}⌛ Negotiating secure SSL tunnel address...${NC}"
-TUNNEL_URL=""
-for i in {1..50}; do
-  echo -ne "${YELLOW}.${NC}"
-  TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log 2>/dev/null | tail -n 1)
-  if [ -n "$TUNNEL_URL" ]; then
-    break
-  fi
-  sleep 0.5
-done
-echo ""
-
-if [ -z "$TUNNEL_URL" ]; then
-  echo -e "      ${RED}✗ Cloudflare tunnel timed out. Check tunnel.log for details.${NC}"
-  exit 1
-fi
-
-if ! is_managed_pid "$TUNNEL_PID"; then
-  echo -e "      ${RED}✗ Cloudflare tunnel exited before registration. Check tunnel.log:${NC}"
-  tail -n 20 tunnel.log
-  exit 1
-else
-  # The daemon's local health/instance check already passed and cloudflared
-  # targets this exact local listener. Waiting for a phone-side HTTP request
-  # through a fresh quick tunnel can stall for tens of seconds (or fail on
-  # mobile networks), so publish the URL immediately and let the browser
-  # perform the real WebSocket connection.
-  echo -e "      ${GREEN}✓ Tunnel process is live; publishing its URL without a blocking public-edge probe.${NC}"
-fi
-
+start_tunnel_and_wait_for_url
+echo -e "\n      ${GREEN}✓ Tunnel process is live; publishing its URL without a blocking public-edge probe.${NC}"
 WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')
 
-# 4. Auto-sync to Vercel Website
+# 4. Auto-sync to Vercel Website. A temporary API/network failure must not
+# terminate the foreground Termux launcher and take healthy bots offline.
 echo -e "\n${CYAN}[4/4]${NC} 🚀 ${BOLD}Auto-syncing tunnel to user @${APP_USER}...${NC}"
 TUNNEL_REGISTERED=0
-SYNC_DEADLINE=$((SECONDS + 20))
-for sync_attempt in 1 2 3 4 5 6 7 8; do
-  SYNC_RESP=$(curl -s --connect-timeout 2 --max-time 4 -X POST "$DASHBOARD_SYNC_URL" \
-    -H "Content-Type: application/json" \
-    -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null || true)
-  if echo "$SYNC_RESP" | grep -q '"success":true'; then
-    TUNNEL_REGISTERED=1
-    break
+while [ "$TUNNEL_REGISTERED" != "1" ]; do
+  if ! is_managed_pid "$TUNNEL_PID"; then
+    echo "[$(date +%T)] ⚠️ Cloudflare tunnel exited before registration; recreating it." >> daemon.log
+    start_tunnel_and_wait_for_url
+    WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')
   fi
-  [ "$SECONDS" -ge "$SYNC_DEADLINE" ] && break
-  echo -ne "${YELLOW}↺${NC}"
-  sleep 0.5
+
+  SYNC_DEADLINE=$((SECONDS + 20))
+  for sync_attempt in 1 2 3 4 5 6 7 8; do
+    SYNC_RESP=$(curl -s --connect-timeout 2 --max-time 4 -X POST "$DASHBOARD_SYNC_URL" \
+      -H "Content-Type: application/json" \
+      -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null || true)
+    if echo "$SYNC_RESP" | grep -q '"success":true' && is_managed_pid "$TUNNEL_PID"; then
+      TUNNEL_REGISTERED=1
+      break
+    fi
+    [ "$SECONDS" -ge "$SYNC_DEADLINE" ] && break
+    echo -ne "${YELLOW}↺${NC}"
+    sleep 0.5
+  done
+
+  if [ "$TUNNEL_REGISTERED" != "1" ]; then
+    echo "[$(date +%T)] ⚠️ Website tunnel registration is temporarily unavailable: ${SYNC_RESP:-no response}; retrying in 10s." >> daemon.log
+    echo -e "\n      ${YELLOW}⚠ Dashboard registration is unavailable; keeping the daemon alive and retrying.${NC}"
+    sleep 10
+  fi
 done
 
-if [ "$TUNNEL_REGISTERED" = "1" ]; then
-  echo -e "      ${GREEN}✓ AUTO-SYNC SUCCESSFUL! Dashboard paired automatically.${NC}"
-else
-  echo -e "      ${RED}✗ Website registration failed: ${SYNC_RESP:-no response}${NC}"
-  exit 1
-fi
+echo -e "      ${GREEN}✓ AUTO-SYNC SUCCESSFUL! Dashboard paired automatically.${NC}"
 
 echo -e "\n  ${GREEN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "  ${GREEN}║${NC}   ${BOLD}✨ PebbleAFK Bedrock Core is RUNNING 24/7${NC}                      ${GREEN}║${NC}"
@@ -378,6 +397,7 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 (
   CHECK_COUNTER=0
   HEALTH_MISS_COUNT=0
+  TUNNEL_RESTART_PENDING=0
 
   restart_tunnel() {
     echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel process exited; creating a replacement..." >> daemon.log
@@ -399,6 +419,7 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
         LOCAL_HEALTH=$(curl -fsS --connect-timeout 2 --max-time 4 http://127.0.0.1:8080/ 2>/dev/null || true)
         if ! echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
           echo -e "[$(date +%T)] ❌ Local daemon identity check failed; refusing to register replacement tunnel." >> daemon.log
+          TUNNEL_RESTART_PENDING=1
           return 1
         fi
         NEW_WSS_URL=$(echo "$NEW_TUNNEL_URL" | sed 's/https:/wss:/')
@@ -407,11 +428,13 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
           -d "{\"username\":\"$APP_USER\",\"url\":\"$NEW_WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"register\"}" 2>/dev/null || true)
         if ! echo "$SYNC_RESP" | grep -q '"success":true'; then
           echo -e "[$(date +%T)] ❌ Website rejected replacement tunnel URL: ${SYNC_RESP:-no response}" >> daemon.log
+          TUNNEL_RESTART_PENDING=1
           return 1
         fi
         TUNNEL_URL="$NEW_TUNNEL_URL"
         WSS_URL="$NEW_WSS_URL"
         TUNNEL_REGISTERED=1
+        TUNNEL_RESTART_PENDING=0
         echo -e "[$(date +%T)] ✓ Cloudflare tunnel URL refreshed at ${WSS_URL}; waiting for the web client to reconnect." >> daemon.log
         return 0
       fi
@@ -419,13 +442,14 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
     done
 
     echo -e "[$(date +%T)] ❌ Cloudflare tunnel did not return an address; watchdog will retry." >> daemon.log
+    TUNNEL_RESTART_PENDING=1
     return 1
   }
 
   while true; do
     sleep 15
     # Recover a dead cloudflared process immediately.
-    if ! is_managed_pid "$TUNNEL_PID"; then
+    if ! is_managed_pid "$TUNNEL_PID" || [ "$TUNNEL_RESTART_PENDING" = "1" ]; then
       echo -e "[$(date +%T)] ⚠️ Cloudflare tunnel interrupted. Re-opening tunnel (HTTP/2)..." >> daemon.log
       restart_tunnel || true
     fi
