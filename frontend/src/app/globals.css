@@ -1242,3 +1242,160 @@ button:hover .mc-nav-mini-block,
   object-fit: contain;
   filter: drop-shadow(0 2px 2px rgba(0, 0, 0, .45));
 }
+
+/* Compact voxel controls for the mobile drawer and chat header. */
+.mc-surface .mc-sidebar-footer {
+  background: linear-gradient(180deg, #292623, #211f1d) !important;
+  border-top-color: #51483f !important;
+  box-shadow: inset 0 1px 0 rgba(255, 248, 235, .06);
+}
+
+.mc-surface .mc-sidebar-user {
+  color: #f5eee4 !important;
+  background: linear-gradient(180deg, #403b35, #2e2b28) !important;
+  border: 1px solid #655a4f !important;
+  border-bottom: 3px solid #1a1816 !important;
+  border-radius: 6px !important;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, .08), 0 2px 0 rgba(0, 0, 0, .25);
+}
+
+.mc-surface .mc-sidebar-role {
+  color: #e8ffd8 !important;
+  background: linear-gradient(180deg, #56a944, #347a32) !important;
+  border: 1px solid #91db68 !important;
+  border-bottom: 3px solid #204d22 !important;
+  border-radius: 5px !important;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, .22), 0 2px 0 rgba(0, 0, 0, .2);
+}
+
+.mc-surface .mc-sidebar-action {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  padding: 0;
+  color: #f2eadf !important;
+  background: linear-gradient(145deg, #514a42, #302c28) !important;
+  border: 1px solid #716456 !important;
+  border-bottom: 3px solid #1a1714 !important;
+  border-radius: 5px !important;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, .12), 0 2px 0 rgba(0, 0, 0, .25) !important;
+  transition: transform .12s ease, filter .12s ease;
+  cursor: pointer;
+}
+
+.mc-surface .mc-sidebar-action:hover {
+  filter: brightness(1.18);
+  transform: translateY(-1px);
+}
+
+.mc-surface .mc-sidebar-action:active {
+  transform: translateY(1px);
+}
+
+.mc-surface .mc-sidebar-action svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.6;
+}
+
+.mc-surface .mc-sidebar-action--close {
+  width: 32px;
+  height: 32px;
+  flex-basis: 32px;
+  color: #fff3dc !important;
+  background: linear-gradient(145deg, #554d43, #332f2b) !important;
+  border-color: #766858 !important;
+  border-bottom-color: #1b1815 !important;
+}
+
+.mc-surface .mc-sidebar-action--admin {
+  color: #c7ffad !important;
+  background: linear-gradient(145deg, #397c3b, #244d2d) !important;
+  border-color: #69b957 !important;
+  border-bottom-color: #19391f !important;
+}
+
+.mc-surface .mc-sidebar-action--logout {
+  color: #ffd3bd !important;
+  background: linear-gradient(145deg, #874336, #552923) !important;
+  border-color: #b56952 !important;
+  border-bottom-color: #301914 !important;
+}
+
+.mc-status-strip {
+  min-width: 0;
+  scrollbar-width: none;
+}
+
+.mc-status-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.mc-surface .mc-chat-scroll-toggle {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #62594f !important;
+  border-bottom: 3px solid #1c1916 !important;
+  border-radius: 6px !important;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, .15), 0 2px 0 rgba(0, 0, 0, .28) !important;
+  transition: transform .12s ease, filter .12s ease;
+  cursor: pointer;
+}
+
+.mc-surface .mc-chat-scroll-toggle:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+}
+
+.mc-surface .mc-chat-scroll-toggle.is-active {
+  color: #ecffe4 !important;
+  background: linear-gradient(180deg, #4d9c3f, #2b672f) !important;
+  border-color: #76c75e !important;
+  border-bottom-color: #1d481f !important;
+}
+
+.mc-surface .mc-chat-scroll-toggle.is-inactive {
+  color: #d0c7bc !important;
+  background: linear-gradient(180deg, #514b44, #302d29) !important;
+}
+
+@media (max-width: 639px) {
+  .mc-status-strip {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .mc-status-pill {
+    height: 27px;
+    flex: 0 0 auto;
+    gap: 3px;
+    padding: 0 4px;
+    font-size: 8px;
+    letter-spacing: .025em;
+  }
+
+  .mc-status-pill > span:first-child {
+    width: 12px;
+    height: 12px;
+  }
+
+  .mc-status-pill-count {
+    min-width: 14px;
+    height: 14px;
+    padding: 0 2px;
+    font-size: 8px;
+  }
+
+  .mc-surface .mc-chat-scroll-toggle {
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
+  }
+}

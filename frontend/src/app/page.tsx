@@ -44,6 +44,7 @@ import {
   CornerDownLeft,
   Terminal,
   ArrowUp,
+  ArrowDownToLine,
   Activity,
   Gift
 } from 'lucide-react';
@@ -1873,8 +1874,9 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => setIsMobileSidebarOpen(false)}
-                className="md:hidden p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-lg transition cursor-pointer"
+                className="mc-sidebar-action mc-sidebar-action--close md:hidden"
                 title="Close navigation"
+                aria-label="Close navigation"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -2111,16 +2113,16 @@ export default function Home() {
           </div>
 
           {/* User Profile + Logout at Bottom */}
-          <div className="mc-sidebar-footer p-3 border-t border-slate-200/80 bg-slate-50/50 flex items-center justify-between">
+          <div className="mc-sidebar-footer p-3 border-t border-slate-200/80 bg-slate-50/50 flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 overflow-hidden">
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white border border-slate-200/90 text-slate-800 text-xs font-extrabold shadow-2xs truncate max-w-[170px]">
+              <div className="mc-sidebar-user inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-extrabold truncate max-w-[170px]">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
                 <span className="truncate">@{currentUser}</span>
               </div>
               {currentUser?.toLowerCase() === 'chief' && (
                 <Link
                   href="/chief"
-                  className="text-[9px] font-black uppercase px-2 py-0.5 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300 shadow-2xs transition shrink-0"
+                  className="mc-sidebar-role text-[9px] font-black uppercase px-2 py-1 transition shrink-0"
                   title="Chief Admin Panel"
                 >
                   ADMIN
@@ -2128,20 +2130,22 @@ export default function Home() {
               )}
             </div>
 
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5 shrink-0">
               {currentUser?.toLowerCase() === 'chief' && (
                 <Link
                   href="/chief"
-                  className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition cursor-pointer"
+                  className="mc-sidebar-action mc-sidebar-action--admin"
                   title="Open Chief Admin Console"
+                  aria-label="Open Chief Admin Console"
                 >
                   <Shield className="w-4 h-4" />
                 </Link>
               )}
               <button
                 onClick={handleLogout}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                className="mc-sidebar-action mc-sidebar-action--logout"
                 title="Sign Out"
+                aria-label="Sign Out"
               >
                 <LogOut className="w-4 h-4" />
               </button>
@@ -3432,10 +3436,10 @@ export default function Home() {
                           {/* 2. Main Chat Box Container (Matching Image 3) */}
                           <div className="w-full min-w-0 flex-1 min-h-0 bg-white border border-slate-200/90 rounded-3xl overflow-hidden shadow-xs flex flex-col">
                             {/* Card Header: Shows account skin head and username (or head stack for All Accounts) */}
-                            <div className="shrink-0 px-3 sm:px-5 py-2.5 sm:py-3 border-b border-slate-200 flex items-center justify-between gap-2.5 sm:gap-3 bg-slate-50/60">
+                              <div className="shrink-0 px-2.5 sm:px-5 py-1.5 sm:py-3 border-b border-slate-200 flex items-center justify-between gap-2 sm:gap-3 bg-slate-50/60">
                               <div className="flex-1 min-w-0 flex items-center mr-2 sm:mr-3">
                                 {isAllSelected ? (
-                                  <div className="flex w-fit max-w-full flex-wrap items-center gap-1.5 sm:gap-2" role="group" aria-label="All account status counts">
+                                  <div className="mc-status-strip flex w-fit max-w-full flex-nowrap items-center gap-1 sm:gap-2" role="group" aria-label="All account status counts">
                                     <button
                                       type="button"
                                       title={`${stabilityCounts.stable} stable accounts`}
@@ -3555,12 +3559,10 @@ export default function Home() {
                                     } catch (_) {}
                                   }
                                 }}
-                                className="flex shrink-0 items-center rounded-xl p-1.5 hover:bg-white border border-transparent hover:border-slate-200 transition"
+                                className={`mc-chat-scroll-toggle shrink-0 ${chatAutoScroll ? 'is-active' : 'is-inactive'}`}
                                 title={chatAutoScroll ? 'Auto-scroll is on' : 'Auto-scroll is off'}
                               >
-                                <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${chatAutoScroll ? 'bg-emerald-600' : 'bg-slate-300'}`}>
-                                  <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${chatAutoScroll ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                                </span>
+                                <ArrowDownToLine className="h-4 w-4" aria-hidden="true" />
                               </button>
                             </div>
 
