@@ -2091,7 +2091,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <span className="mc-nav-mini-block mc-nav-mini-block--compass"><MinecraftCompassIcon className="h-4 w-4" /></span>
+                              <img src="/nav/connect-compass.png" alt="" className="mc-nav-mini-block mc-mini-nav-art" />
                               <span>Connect</span>
                             </button>
 
@@ -2107,7 +2107,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <span className="mc-nav-mini-block mc-nav-mini-block--chat"><MinecraftBookQuillIcon className="h-4 w-4" /></span>
+                              <img src="/nav/chat-book-quill.png" alt="" className="mc-nav-mini-block mc-mini-nav-art" />
                               <span>Chat</span>
                             </button>
 
@@ -2123,7 +2123,7 @@ export default function Home() {
                                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                               }`}
                             >
-                              <span className="mc-nav-mini-block mc-nav-mini-block--repeater"><MinecraftRepeaterIcon className="h-4 w-4" /></span>
+                              <img src="/nav/settings-repeater.png" alt="" className="mc-nav-mini-block mc-mini-nav-art" />
                               <span>Settings</span>
                             </button>
                           </div>

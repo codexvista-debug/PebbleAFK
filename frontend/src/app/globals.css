@@ -1181,3 +1181,25 @@ button:hover .mc-nav-mini-block,
   width: 42px;
   height: 42px;
 }
+
+.mc-surface .mc-nav-mini-block.mc-mini-nav-art {
+  display: block;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  padding: 0;
+  overflow: visible;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  object-fit: contain;
+  image-rendering: auto;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, .48));
+}
+
+.mc-surface .group:hover .mc-nav-mini-block.mc-mini-nav-art {
+  box-shadow: none !important;
+  filter: brightness(1.1) drop-shadow(0 3px 2px rgba(0, 0, 0, .5));
+  transform: translateY(-1px) scale(1.06);
+}
