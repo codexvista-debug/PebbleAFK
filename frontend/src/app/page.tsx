@@ -40,7 +40,6 @@ import {
   ChevronDown,
   AlertTriangle,
   RotateCcw,
-  RotateCw,
   CornerDownLeft,
   Terminal,
   ArrowUp,
@@ -1726,7 +1725,7 @@ export default function Home() {
           {smartAdjustNotices.map((notice) => (
             <div key={notice.id} className="mc-signet-notification animate-in fade-in slide-in-from-top-2 duration-200" role="status">
               <div className="mc-signet-notification__icon" aria-hidden="true">
-                <RotateCw className="h-5 w-5 animate-spin [animation-duration:3s]" />
+                <img src="/nav/daemon-allay-active.png" alt="" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="mc-signet-notification__eyebrow">PEBBLEAFK · SIGNET RECOVERY</div>
@@ -2031,7 +2030,7 @@ export default function Home() {
                             setActiveTab('servers');
                             setIsMobileSidebarOpen(false);
                           }}
-                          className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer group ${
+                          className={`w-full min-h-[44px] flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer group ${
                             isSelected
                               ? 'bg-emerald-50 text-white border border-emerald-300 shadow-2xs'
                               : 'text-slate-700 hover:bg-slate-100/80 hover:text-slate-900'

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ServerProfile, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS } from '../types';
 import { X, Info, ChevronDown, Check } from 'lucide-react';
 import { ConfirmModal } from './ConfirmModal';
+import { ServerLogo } from './ServerLogo';
 
 interface ServerProfileModalProps {
   isOpen: boolean;
@@ -207,10 +208,13 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
                       type="button"
                       onClick={() => handleSelectSetup(s)}
                       disabled={isSetupAlreadyAdded(s)}
-                      className="w-full text-left px-2.5 py-2 rounded-xl hover:bg-emerald-50 hover:text-emerald-800 transition flex items-center justify-between text-xs cursor-pointer group disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+                      className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-emerald-50 hover:text-emerald-800 transition flex items-center gap-2.5 text-xs cursor-pointer group disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
                     >
-                      <span className="font-bold text-slate-800 group-hover:text-emerald-700">{s.name}</span>
-                      <span className="text-[10px] text-slate-400 font-mono">{isSetupAlreadyAdded(s) ? 'Already added' : s.host}</span>
+                      <ServerLogo host={s.host} name={s.name} size="w-8 h-8" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-bold text-slate-800 group-hover:text-emerald-700">{s.name}</span>
+                        <span className="block truncate text-[10px] text-slate-400 font-mono">{isSetupAlreadyAdded(s) ? 'Already added' : s.host}</span>
+                      </span>
                     </button>
                   ))}
                 </div>

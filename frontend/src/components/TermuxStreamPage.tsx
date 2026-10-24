@@ -140,7 +140,7 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
             <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-700 font-mono font-bold text-sm shadow-2xs shrink-0">
               &gt;_
             </div>
-            <div>
+            <div className="hidden sm:block">
               <h2 className="font-extrabold text-base sm:text-lg text-slate-900 font-mono tracking-tight">
                 Termux Stream
               </h2>
