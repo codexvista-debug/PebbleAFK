@@ -59,6 +59,13 @@ export class BotManager {
     return Array.from(this.bots.values());
   }
 
+  public getStableFreshSmpUsernames(): string[] {
+    return this.getAllBots()
+      .filter((bot) => bot.isStableFreshSmpSession())
+      .map((bot) => (bot.config.username || '').replace(/^@/, '').trim())
+      .filter(Boolean);
+  }
+
   public startBot(config: BotConfig): PebbleBotInstance {
     const cleanUser = (config.username || '').toLowerCase().trim();
     const currentById = this.bots.get(config.id);

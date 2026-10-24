@@ -3,6 +3,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { BotLifecycleState, BossBar, ChatMessage, Telemetry, ActivityLog, BedrockForm, SocketStatus, MsAuthData, FreshSmpDiagnosticState } from '../types';
 
+export interface DaemonRun {
+  instanceId: string;
+  startedAt: number;
+  endedAt: number | null;
+  lastSeenAt: number;
+  stableBots: string[];
+  peakStableBots: number;
+}
+
 function mergeTerminalLogLines(existing: string[], incoming: string[]) {
   if (!existing.length) return incoming.slice(-10000);
   if (!incoming.length) return existing;
@@ -86,6 +95,7 @@ export function useDaemonSocket(
   const [lastDaemonDisconnectedAt, setLastDaemonDisconnectedAt] = useState<number | null>(null);
   const [daemonHeartbeatOnline, setDaemonHeartbeatOnline] = useState(false);
   const [daemonStatusStorageError, setDaemonStatusStorageError] = useState('');
+  const [daemonRuns, setDaemonRuns] = useState<DaemonRun[]>([]);
   const daemonHeartbeatAtRef = useRef(0);
   const [deviceSessions, setDeviceSessions] = useState<{ sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number; connected: boolean }[]>([]);
 
@@ -105,32 +115,12 @@ export function useDaemonSocket(
   const browserSessionIdsRef = useRef<Record<string, string>>({});
   const wasAuthenticatedRef = useRef(false);
 
-  const syncDaemonStatus = useCallback(async (startedAt?: number, isOnline = true) => {
+  const syncDaemonStatus = useCallback(async () => {
     const username = currentUserRef.current?.trim().toLowerCase();
     const secret = authTokenRef.current;
     if (!username || !secret) return;
 
     try {
-      let writeError = '';
-      if (startedAt && startedAt > 0) {
-        const writeResponse = await fetch('/api/termux-status', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` },
-          body: JSON.stringify({
-            username,
-            daemonStartedAt: startedAt,
-            lastSeenAt: Date.now(),
-            instanceId: String(startedAt),
-            isOnline,
-          }),
-          cache: 'no-store',
-        });
-        if (!writeResponse.ok) {
-          const errorData = await writeResponse.json().catch(() => ({}));
-          writeError = typeof errorData?.error === 'string' ? errorData.error : 'Could not save daemon uptime to Supabase.';
-        }
-      }
-
       const response = await fetch(`/api/termux-status?username=${encodeURIComponent(username)}`, {
         headers: { Authorization: `Bearer ${secret}` },
         cache: 'no-store',
@@ -145,9 +135,10 @@ export function useDaemonSocket(
       }
       const data = await response.json();
       const saved = data?.status;
+      if (Array.isArray(data?.runs)) setDaemonRuns(data.runs);
       if (!saved || typeof saved !== 'object') return;
 
-      setDaemonStatusStorageError(writeError);
+      setDaemonStatusStorageError('');
       const savedLastSeenAt = Number(saved.lastSeenAt);
       daemonHeartbeatAtRef.current = Number.isFinite(savedLastSeenAt) && savedLastSeenAt > 0 ? savedLastSeenAt : 0;
       setDaemonHeartbeatOnline(saved.isOnline === true && daemonHeartbeatAtRef.current > Date.now() - 75000);
@@ -278,6 +269,7 @@ export function useDaemonSocket(
     setTerminalLogs([]);
     setTerminalHistoryError('');
     setDaemonHeartbeatOnline(false);
+    setDaemonRuns([]);
     daemonHeartbeatAtRef.current = 0;
     setDaemonStatusStorageError('');
     try {
@@ -478,7 +470,7 @@ export function useDaemonSocket(
                 const owner = currentUserRef.current?.trim().toLowerCase();
                 if (owner) localStorage.setItem(`pebbleafk_daemon_started_at_${owner}`, String(startedAt));
               } catch (_) {}
-              void syncDaemonStatus(startedAt, true);
+              void syncDaemonStatus();
               setStatus('AUTHENTICATED');
             } else {
               if (connectionTimeoutRef.current) {
@@ -949,6 +941,7 @@ export function useDaemonSocket(
     terminalHistoryError,
     daemonStartedAt,
     lastDaemonDisconnectedAt,
+    daemonRuns,
     deviceSessions,
     disconnectDeviceSession,
     fetchTerminalLogs,

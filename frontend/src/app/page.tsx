@@ -15,8 +15,6 @@ import {
   ArrowRight, 
   ShieldCheck, 
   Radio, 
-  Gamepad2, 
-  HardDrive,
   UserPlus,
   CheckCircle2,
   AlertCircle,
@@ -60,7 +58,7 @@ import { AccountLogsModal } from '@/components/AccountLogsModal';
 import { ServerLogo } from '@/components/ServerLogo';
 import { RelativeTime } from '@/components/RelativeTime';
 import { MinecraftText } from '@/components/MinecraftText';
-import { useDaemonSocket } from '@/lib/useDaemonSocket';
+import { DaemonRun, useDaemonSocket } from '@/lib/useDaemonSocket';
 import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType, MAX_BEDROCK_ACCOUNTS, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS } from '@/types';
 
 const getPlayerSkinHeadUrl = (name: string, size = 32) => {
@@ -69,6 +67,15 @@ const getPlayerSkinHeadUrl = (name: string, size = 32) => {
 };
 
 type MinecraftStatusTone = 'stable' | 'unstable' | 'offline';
+function formatDaemonDuration(startedAt: number, endedAt: number | null, now: number) {
+  const seconds = Math.max(0, Math.floor(((endedAt || now) - startedAt) / 1000));
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  return `${minutes}m ${seconds % 60}s`;
+}
 
 function MinecraftStatusIcon({ tone }: { tone: MinecraftStatusTone }) {
   const pixels = tone === 'stable'
@@ -325,6 +332,7 @@ export default function Home() {
   const [selectedLogsAccount, setSelectedLogsAccount] = useState<BedrockAccount | null>(null);
   const [isAccountLogsOpen, setIsAccountLogsOpen] = useState(false);
   const [isTermuxConsoleOpen, setIsTermuxConsoleOpen] = useState(false);
+  const [selectedDaemonRun, setSelectedDaemonRun] = useState<DaemonRun | null>(null);
   const [pinnedAccountIds, setPinnedAccountIds] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -601,6 +609,7 @@ export default function Home() {
     terminalLogs,
     terminalHistoryError,
     daemonStartedAt,
+    daemonRuns,
     daemonIsOnline,
     daemonStatusStorageError,
     lastDaemonDisconnectedAt,
@@ -2213,45 +2222,34 @@ export default function Home() {
             {/* VIEW 1: DASHBOARD TAB */}
             {activeTab === 'dashboard' && (
               <div className="max-w-4xl mx-auto space-y-6">
-                {/* Quick Metrics Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Daemon</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`w-2 h-2 rounded-full ${daemonStatus === 'AUTHENTICATED' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
-                      <span className="text-xs font-bold text-slate-900">
-                        {daemonStatus === 'AUTHENTICATED' ? 'Online' : 'Standby'}
-                      </span>
+                <section className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs">
+                  <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                    <div>
+                      <h2 className="text-sm font-extrabold text-slate-900">Recent daemon sessions</h2>
+                      <p className="mt-0.5 text-[11px] text-slate-500">Latest first · stable FreshSMP accounts observed during each run</p>
                     </div>
+                    <span className={`shrink-0 rounded-lg px-2 py-1 text-[10px] font-bold ${daemonIsOnline ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                      {daemonIsOnline ? 'Current run active' : 'Daemon offline'}
+                    </span>
                   </div>
-
-                  <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Active Bots</span>
-                    <div className="flex items-center gap-1.5">
-                      <Gamepad2 className="w-3.5 h-3.5 text-emerald-600" />
-                      <span className="text-xs font-bold text-slate-900">0 Running</span>
+                  {daemonRuns.length === 0 ? (
+                    <p className="px-5 py-5 text-xs text-slate-500">No run history yet. Daemon sessions will appear here after the status-history migration is applied and Termux sends a heartbeat.</p>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {daemonRuns.slice(0, 5).map((run, index) => (
+                        <div key={`${run.instanceId}-${run.startedAt}-${index}`} className="flex items-center gap-3 px-5 py-3">
+                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${!run.endedAt && daemonIsOnline && index === 0 ? 'animate-pulse bg-emerald-500' : 'bg-slate-400'}`} />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-bold text-slate-800">{new Date(run.startedAt).toLocaleString()}</p>
+                            <p className="mt-0.5 text-[10px] text-slate-500">{run.peakStableBots} stable bot{run.peakStableBots === 1 ? '' : 's'} · {run.endedAt ? 'Ended' : 'In progress'}</p>
+                          </div>
+                          <span className="shrink-0 font-mono text-xs font-bold tabular-nums text-slate-700">{formatDaemonDuration(run.startedAt, run.endedAt, nowTick)}</span>
+                          <button type="button" onClick={() => setSelectedDaemonRun(run)} className="shrink-0 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-bold text-slate-700 hover:bg-slate-50">Details</button>
+                        </div>
+                      ))}
                     </div>
-                  </div>
-
-                  <button
-                    onClick={() => setActiveTab('accounts')}
-                    className="p-4 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200/80 shadow-2xs space-y-1 text-left transition cursor-pointer"
-                  >
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Bedrock Accounts</span>
-                    <div className="flex items-center gap-1.5">
-                      <Users className="w-3.5 h-3.5 text-slate-500" />
-                      <span className="text-xs font-bold text-slate-900">{verifiedAccountsCount} / {MAX_BEDROCK_ACCOUNTS}</span>
-                    </div>
-                  </button>
-
-                  <div className="p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-1">
-                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Engine Protocol</span>
-                    <div className="flex items-center gap-1.5">
-                      <HardDrive className="w-3.5 h-3.5 text-sky-600" />
-                      <span className="text-xs font-bold text-slate-900">RakNet UDP</span>
-                    </div>
-                  </div>
-                </div>
+                  )}
+                </section>
 
                 <section className="rounded-2xl bg-white border border-slate-200/90 shadow-xs overflow-hidden">
                   <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
@@ -2288,6 +2286,34 @@ export default function Home() {
                     </div>
                   )}
                 </section>
+
+                {selectedDaemonRun && (
+                  <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/60 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedDaemonRun(null); }}>
+                    <section role="dialog" aria-modal="true" aria-labelledby="daemon-run-title" className="w-full max-w-lg overflow-hidden rounded-2xl border border-emerald-900/40 bg-[#292724] text-white shadow-2xl">
+                      <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+                        <div>
+                          <h2 id="daemon-run-title" className="text-sm font-black">Daemon session details</h2>
+                          <p className="mt-1 text-[11px] text-slate-300">Run {selectedDaemonRun.instanceId.slice(0, 16)}</p>
+                        </div>
+                        <button type="button" onClick={() => setSelectedDaemonRun(null)} className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10" aria-label="Close details"><X className="h-4 w-4" /></button>
+                      </div>
+                      <div className="space-y-4 px-5 py-4">
+                        <dl className="grid grid-cols-2 gap-3 text-xs">
+                          <div className="rounded-xl bg-black/20 p-3"><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Started</dt><dd className="mt-1 font-semibold">{new Date(selectedDaemonRun.startedAt).toLocaleString()}</dd></div>
+                          <div className="rounded-xl bg-black/20 p-3"><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Duration</dt><dd className="mt-1 font-mono font-bold">{formatDaemonDuration(selectedDaemonRun.startedAt, selectedDaemonRun.endedAt, nowTick)}</dd></div>
+                          <div className="rounded-xl bg-black/20 p-3"><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Ended</dt><dd className="mt-1 font-semibold">{selectedDaemonRun.endedAt ? new Date(selectedDaemonRun.endedAt).toLocaleString() : 'Still running'}</dd></div>
+                          <div className="rounded-xl bg-black/20 p-3"><dt className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Peak stable bots</dt><dd className="mt-1 font-semibold">{selectedDaemonRun.peakStableBots}</dd></div>
+                        </dl>
+                        <div>
+                          <h3 className="mb-2 text-[10px] font-extrabold uppercase tracking-wider text-emerald-300">Stable accounts observed</h3>
+                          {selectedDaemonRun.stableBots.length ? (
+                            <div className="flex flex-wrap gap-2">{selectedDaemonRun.stableBots.map((name) => <span key={name} className="rounded-lg border border-emerald-700/60 bg-emerald-950/60 px-2.5 py-1 text-xs font-bold text-emerald-200">@{name}</span>)}</div>
+                          ) : <p className="text-xs text-slate-400">No stable-account snapshot was recorded for this run.</p>}
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                )}
               </div>
             )}
 

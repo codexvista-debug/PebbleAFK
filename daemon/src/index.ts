@@ -150,6 +150,7 @@ async function syncDaemonStatus(isOnline = true) {
         lastSeenAt: Date.now(),
         instanceId: process.env.PEBBLEAFK_INSTANCE_ID || String(DAEMON_STARTED_AT),
         isOnline,
+        stableBots: botManager.getStableFreshSmpUsernames(),
       }),
       signal: AbortSignal.timeout(isOnline ? 10000 : 1800),
     });

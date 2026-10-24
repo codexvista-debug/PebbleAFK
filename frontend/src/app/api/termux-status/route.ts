@@ -29,7 +29,12 @@ export async function GET(req: NextRequest) {
     p_secret: secret,
   });
   if (error) return unavailable(error.message);
-  return NextResponse.json({ username, status: data || null }, {
+  const { data: runs, error: runsError } = await supabase.rpc('read_termux_daemon_runs', {
+    p_username: username,
+    p_secret: secret,
+  });
+  if (runsError) console.warn('[Termux Status API] Could not load daemon run history:', runsError.message);
+  return NextResponse.json({ username, status: data || null, runs: Array.isArray(runs) ? runs : [] }, {
     headers: { 'Cache-Control': 'no-store, max-age=0' },
   });
 }
@@ -53,6 +58,9 @@ export async function POST(req: NextRequest) {
     }
 
     const instanceId = typeof body?.instanceId === 'string' ? body.instanceId.slice(0, 120) : '';
+    const stableBots = Array.isArray(body?.stableBots)
+      ? body.stableBots.filter((name: unknown) => typeof name === 'string').map((name: string) => name.replace(/^@/, '').trim()).filter(Boolean).slice(0, 100)
+      : [];
     const { data, error } = await supabase.rpc('write_termux_daemon_status', {
       p_username: username,
       p_secret: secret,
@@ -60,6 +68,7 @@ export async function POST(req: NextRequest) {
       p_last_seen_at_ms: Math.round(lastSeenAt),
       p_instance_id: instanceId,
       p_is_online: isOnline,
+      p_stable_bots: stableBots,
     });
     if (error) return unavailable(error.message);
     return NextResponse.json({ success: true, ...(data && typeof data === 'object' ? data : {}) }, {

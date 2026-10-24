@@ -1512,7 +1512,7 @@ export class PebbleBotInstance {
     }, intervalSec * 1000);
   }
 
-  private isStableFreshSmpSession(client = this.client): boolean {
+  public isStableFreshSmpSession(client = this.client): boolean {
     return Boolean(
       client && this.client === client && this.state === 'SPAWNED' &&
       this.isFreshSmpProfile() && this.isInSubserver && this.freshSmpPhase === 'lifesteal' &&
