@@ -3,6 +3,28 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { BotLifecycleState, BossBar, ChatMessage, Telemetry, ActivityLog, BedrockForm, SocketStatus, MsAuthData, FreshSmpDiagnosticState } from '../types';
 
+function mergeTerminalLogLines(existing: string[], incoming: string[]) {
+  if (!existing.length) return incoming.slice(-10000);
+  if (!incoming.length) return existing;
+  const searchStart = Math.max(0, existing.length - 1500);
+  for (let start = existing.length - 1; start >= searchStart; start--) {
+    if (existing[start] !== incoming[0]) continue;
+    let overlap = 0;
+    while (start + overlap < existing.length && overlap < incoming.length && existing[start + overlap] === incoming[overlap]) overlap++;
+    if (overlap > 0) return [...existing, ...incoming.slice(overlap)].slice(-10000);
+  }
+  let overlap = Math.min(existing.length, incoming.length, 1000);
+  while (overlap > 0) {
+    let matches = true;
+    for (let i = 0; i < overlap; i++) {
+      if (existing[existing.length - overlap + i] !== incoming[i]) { matches = false; break; }
+    }
+    if (matches) break;
+    overlap--;
+  }
+  return [...existing, ...incoming.slice(overlap)].slice(-10000);
+}
+
 export function useDaemonSocket(
   currentUser: string | null,
   onAccountVerified?: (payload: { botId: string; email: string; ign: string; uuid?: string; avatarUrl?: string }) => void
@@ -55,6 +77,17 @@ export function useDaemonSocket(
   const [msAuthError, setMsAuthError] = useState<string | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
+  const [terminalHistoryError, setTerminalHistoryError] = useState('');
+  const [daemonStartedAt, setDaemonStartedAt] = useState<number | null>(() => {
+    if (typeof window === 'undefined' || !currentUser) return null;
+    const value = Number(localStorage.getItem(`pebbleafk_daemon_started_at_${currentUser.trim().toLowerCase()}`));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  });
+  const [lastDaemonDisconnectedAt, setLastDaemonDisconnectedAt] = useState<number | null>(() => {
+    if (typeof window === 'undefined' || !currentUser) return null;
+    const value = Number(localStorage.getItem(`pebbleafk_daemon_disconnected_at_${currentUser.trim().toLowerCase()}`));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  });
   const [deviceSessions, setDeviceSessions] = useState<{ sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number; connected: boolean }[]>([]);
 
   const socketRef = useRef<WebSocket | null>(null);
@@ -71,6 +104,7 @@ export function useDaemonSocket(
   const sessionRemovedRef = useRef(false);
   const shutdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const browserSessionIdsRef = useRef<Record<string, string>>({});
+  const wasAuthenticatedRef = useRef(false);
 
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
@@ -180,6 +214,17 @@ export function useDaemonSocket(
 
     // Flush all logs, bot states, and telemetry from previous user
     setTerminalLogs([]);
+    setTerminalHistoryError('');
+    try {
+      const savedStartedAt = Number(localStorage.getItem(`pebbleafk_daemon_started_at_${u}`));
+      const savedDisconnectedAt = Number(localStorage.getItem(`pebbleafk_daemon_disconnected_at_${u}`));
+      setDaemonStartedAt(Number.isFinite(savedStartedAt) && savedStartedAt > 0 ? savedStartedAt : null);
+      setLastDaemonDisconnectedAt(Number.isFinite(savedDisconnectedAt) && savedDisconnectedAt > 0 ? savedDisconnectedAt : null);
+    } catch (_) {
+      setDaemonStartedAt(null);
+      setLastDaemonDisconnectedAt(null);
+    }
+    wasAuthenticatedRef.current = false;
     setDeviceSessions([]);
     setBotStates({});
     setBotReasons({});
@@ -343,6 +388,14 @@ export function useDaemonSocket(
               }
               authenticatedAtRef.current = Date.now();
               lastPongAtRef.current = Date.now();
+              wasAuthenticatedRef.current = true;
+              const reportedStartedAt = Number(msg.payload?.daemonStartedAt);
+              const startedAt = Number.isFinite(reportedStartedAt) && reportedStartedAt > 0 ? reportedStartedAt : Date.now();
+              setDaemonStartedAt(startedAt);
+              try {
+                const owner = currentUserRef.current?.trim().toLowerCase();
+                if (owner) localStorage.setItem(`pebbleafk_daemon_started_at_${owner}`, String(startedAt));
+              } catch (_) {}
               setStatus('AUTHENTICATED');
             } else {
               if (connectionTimeoutRef.current) {
@@ -485,15 +538,7 @@ export function useDaemonSocket(
 
           if (msg.type === 'TERMINAL_LOGS') {
             if (Array.isArray(msg.payload?.logs)) {
-              setTerminalLogs((prev) => {
-                if (
-                  prev.length === msg.payload.logs.length &&
-                  prev[prev.length - 1] === msg.payload.logs[msg.payload.logs.length - 1]
-                ) {
-                  return prev;
-                }
-                return msg.payload.logs;
-              });
+              setTerminalLogs((prev) => mergeTerminalLogLines(prev, msg.payload.logs));
             }
           }
 
@@ -503,7 +548,7 @@ export function useDaemonSocket(
                 if (prev.length > 0 && prev[prev.length - 1] === msg.payload.line) {
                   return prev;
                 }
-                return [...prev.slice(-400), msg.payload.line];
+                return [...prev.slice(-9999), msg.payload.line];
               });
             }
           }
@@ -513,6 +558,15 @@ export function useDaemonSocket(
       ws.onclose = () => {
         if (socketRef.current !== ws) return;
         socketRef.current = null;
+        if (wasAuthenticatedRef.current) {
+          const disconnectedAt = Date.now();
+          setLastDaemonDisconnectedAt(disconnectedAt);
+          try {
+            const owner = currentUserRef.current?.trim().toLowerCase();
+            if (owner) localStorage.setItem(`pebbleafk_daemon_disconnected_at_${owner}`, String(disconnectedAt));
+          } catch (_) {}
+        }
+        wasAuthenticatedRef.current = false;
         if (connectionTimeoutRef.current) {
           clearTimeout(connectionTimeoutRef.current);
           connectionTimeoutRef.current = null;
@@ -723,6 +777,38 @@ export function useDaemonSocket(
     return send({ type: 'GET_TERMINAL_LOGS' });
   }, [send]);
 
+  const fetchTerminalHistory = useCallback(async () => {
+    const username = currentUserRef.current?.trim().toLowerCase();
+    const secret = authTokenRef.current;
+    if (!username || !secret) return;
+    try {
+      const response = await fetch(`/api/termux-logs?username=${encodeURIComponent(username)}`, {
+        headers: { Authorization: `Bearer ${secret}` },
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        setTerminalHistoryError(typeof errorData?.error === 'string' ? errorData.error : 'Could not load retained Termux history.');
+        return;
+      }
+      const data = await response.json();
+      setTerminalHistoryError('');
+      const history = Array.isArray(data?.logs)
+        ? data.logs.map((entry: { line?: unknown; created_at?: unknown }) => {
+          if (typeof entry?.line !== 'string') return '';
+          const createdAt = typeof entry.created_at === 'string' ? new Date(entry.created_at) : null;
+          const dateLabel = createdAt && !Number.isNaN(createdAt.getTime())
+            ? createdAt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+            : '';
+          return dateLabel ? `[${dateLabel}] ${entry.line}` : entry.line;
+        }).filter(Boolean)
+        : [];
+      setTerminalLogs((liveLines) => mergeTerminalLogLines(history, liveLines));
+    } catch (_) {
+      setTerminalHistoryError('Could not reach retained Termux history. Live daemon logs will continue to appear.');
+    }
+  }, []);
+
   const clearTerminalLogs = useCallback(() => {
     setTerminalLogs([]);
   }, []);
@@ -781,9 +867,13 @@ export function useDaemonSocket(
     shutdownDaemon,
     clearChat,
     terminalLogs,
+    terminalHistoryError,
+    daemonStartedAt,
+    lastDaemonDisconnectedAt,
     deviceSessions,
     disconnectDeviceSession,
     fetchTerminalLogs,
+    fetchTerminalHistory,
     clearTerminalLogs,
     verifyAccount,
     sendChat,

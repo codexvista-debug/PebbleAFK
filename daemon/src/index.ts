@@ -25,6 +25,7 @@ process.on('unhandledRejection', (reason: any) => {
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const AUTH_TOKEN = (process.env.DAEMON_AUTH_TOKEN || '').trim();
 const DAEMON_OWNER = (process.env.PEBBLEAFK_OWNER || '').trim().toLowerCase();
+const DAEMON_STARTED_AT = Date.now() - Math.round(process.uptime() * 1000);
 const path = require('path');
 const childProcess = require('child_process');
 const crypto = require('crypto');
@@ -129,6 +130,30 @@ function registerDeviceSession(ws: WebSocket, sessionId: string, label: string, 
 const terminalLogs: string[] = [];
 const MAX_LOGS = 500;
 let isAppendingLog = false;
+const LOG_HISTORY_URL = process.env.PEBBLEAFK_LOGS_URL || 'https://pebbleafk.vercel.app/api/termux-logs';
+const pendingHistoryLogs: Array<{ line: string; timestamp: number }> = [];
+let historyFlushInProgress = false;
+
+async function flushTerminalLogHistory() {
+  if (historyFlushInProgress || !DAEMON_OWNER || !AUTH_TOKEN || pendingHistoryLogs.length === 0) return;
+  historyFlushInProgress = true;
+  const batch = pendingHistoryLogs.slice(0, 100);
+  try {
+    const response = await fetch(LOG_HISTORY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
+      body: JSON.stringify({ username: DAEMON_OWNER, logs: batch }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (response.ok) pendingHistoryLogs.splice(0, batch.length);
+  } catch (_) {
+    // Keep the batch queued; transient Internet/Vercel outages must not stop the daemon.
+  } finally {
+    historyFlushInProgress = false;
+  }
+}
+
+setInterval(() => { void flushTerminalLogHistory(); }, 3000).unref();
 
 function appendTerminalLog(rawText: string) {
   if (isAppendingLog) return;
@@ -136,6 +161,10 @@ function appendTerminalLog(rawText: string) {
   try {
     const line = `[${new Date().toLocaleTimeString()}] ${rawText}`;
     terminalLogs.push(line);
+    if (DAEMON_OWNER && AUTH_TOKEN) {
+      pendingHistoryLogs.push({ line, timestamp: Date.now() });
+      if (pendingHistoryLogs.length > 5000) pendingHistoryLogs.splice(0, pendingHistoryLogs.length - 5000);
+    }
     if (terminalLogs.length > MAX_LOGS) {
       terminalLogs.shift();
     }
@@ -181,6 +210,8 @@ console.error = (...args: any[]) => {
   appendTerminalLog(`❌ ${text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')}`);
 };
 
+appendTerminalLog('=== NEW TERMUX SESSION STARTED ===');
+
 function broadcast(message: DaemonMessage) {
   const json = JSON.stringify(message);
   for (const client of authenticatedClients) {
@@ -205,7 +236,7 @@ wss.on('connection', (ws: WebSocket, req) => {
     authenticatedClients.add(ws);
     ws.send(JSON.stringify({
       type: 'AUTH_RESULT',
-      payload: { success: true, message: 'Connected to PebbleAFK Daemon.' },
+      payload: { success: true, message: 'Connected to PebbleAFK Daemon.', daemonStartedAt: DAEMON_STARTED_AT },
     }));
   }
 
@@ -283,7 +314,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         }
         ws.send(JSON.stringify({
           type: 'AUTH_RESULT',
-          payload: { success: true, message: 'Authenticated successfully' },
+          payload: { success: true, message: 'Authenticated successfully', daemonStartedAt: DAEMON_STARTED_AT },
         }));
         console.log(chalk.green(`[Auth] Client authenticated successfully`));
 

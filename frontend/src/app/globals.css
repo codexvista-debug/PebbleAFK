@@ -102,8 +102,7 @@ body {
   background-color: #4a443e !important;
 }
 
-.mc-surface [class~="bg-slate-900"],
-.mc-surface [class*="bg-slate-900/"] {
+.mc-surface [class~="bg-slate-900"] {
   background-color: #171615 !important;
 }
 

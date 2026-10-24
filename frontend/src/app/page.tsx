@@ -600,7 +600,11 @@ export default function Home() {
     setMsAuthError,
     sendChat,
     terminalLogs,
+    terminalHistoryError,
+    daemonStartedAt,
+    lastDaemonDisconnectedAt,
     fetchTerminalLogs,
+    fetchTerminalHistory,
     clearTerminalLogs,
     startBot,
     updateBotSettings,
@@ -968,20 +972,13 @@ export default function Home() {
     };
   }, [currentUser, daemonStatus, isSettingsOpen, secretCode, setDaemonUrl, setAuthToken, reconnect]);
 
-  // Stream Termux logs when user is on the Termux Stream page (live lines arrive via push)
+  // Load this PebbleAFK user's retained daemon history when opening the stream.
   useEffect(() => {
-    if (activeTab === 'termux_stream') {
-      if (daemonStatus === 'AUTHENTICATED') {
-        fetchTerminalLogs();
-      }
-      const interval = setInterval(() => {
-        if (daemonStatusRef.current === 'AUTHENTICATED') {
-          fetchTerminalLogs();
-        }
-      }, 8000);
-      return () => clearInterval(interval);
+    if (activeTab === 'termux_stream' && daemonStatus === 'AUTHENTICATED') {
+      void fetchTerminalHistory();
+      fetchTerminalLogs();
     }
-  }, [activeTab, daemonStatus, fetchTerminalLogs]);
+  }, [activeTab, daemonStatus, fetchTerminalHistory, fetchTerminalLogs]);
 
   // Microsoft OAuth Device Code Sign-In (Exact same flow as PocketAFK)
   const handleStartMicrosoftLogin = (target?: BedrockAccount | string) => {
@@ -2208,7 +2205,7 @@ export default function Home() {
 
           {/* Main Scrollable Content */}
           <main className={`mc-workspace flex-1 min-h-0 min-w-0 w-full bg-grid-slate overflow-x-hidden ${
-            activeTab === 'servers' && activeSubTab === 'chat' && activeServer
+            activeTab === 'termux_stream' || (activeTab === 'servers' && activeSubTab === 'chat' && activeServer)
               ? 'flex flex-col overflow-y-hidden p-2 sm:p-4'
               : 'overflow-y-auto p-3 sm:p-6'
           }`}>
@@ -2668,14 +2665,18 @@ export default function Home() {
             {activeTab === 'termux_stream' && (
               <TermuxStreamPage
                 logs={terminalLogs}
+                historyError={terminalHistoryError}
                 isOnline={daemonStatus === 'AUTHENTICATED'}
+                daemonStartedAt={daemonStartedAt}
+                lastDisconnectedAt={lastDaemonDisconnectedAt}
+                now={nowTick}
                 onFetchLogs={fetchTerminalLogs}
                 onClearLogs={clearTerminalLogs}
                 onRestartDaemon={restartDaemon}
                 onUpdateDaemon={updateDaemon}
                 onShutdownDaemon={shutdownDaemon}
                 termuxCommand={termux1ClickCmd}
-                serverName={activeServer?.name}
+                pebbleUsername={currentUser || undefined}
               />
             )}
 

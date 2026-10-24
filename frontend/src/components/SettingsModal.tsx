@@ -268,9 +268,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {termuxCommand}
               </div>
 
-              <div className="text-[11px] text-slate-500 leading-relaxed flex items-center gap-1">
-                <span className="text-emerald-700 font-bold">✨ Auto-Sync:</span>
-                <span>Termux will automatically sync your tunnel to this dashboard with zero copy-pasting.</span>
+              <div className="text-[11px] text-[#514a42] leading-relaxed flex items-start gap-1.5 font-medium">
+                <span className="text-[#367a32] font-extrabold shrink-0">✨ Auto-Sync:</span>
+                <span className="text-[#514a42]">Termux will automatically sync your tunnel to this dashboard with zero copy-pasting.</span>
               </div>
             </div>
           </div>

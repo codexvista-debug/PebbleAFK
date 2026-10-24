@@ -54,3 +54,6 @@ alter table public.accounts enable row level security;
 create policy "Allow all read/write for users" on public.users for all using (true) with check (true);
 create policy "Allow all read/write for tunnels" on public.tunnels for all using (true) with check (true);
 create policy "Allow all read/write for accounts" on public.accounts for all using (true) with check (true);
+
+-- Run supabase/migrations/20261023_termux_log_history.sql after this base
+-- schema to install private, per-user Termux log retention and its API RPCs.
