@@ -57,3 +57,5 @@ create policy "Allow all read/write for accounts" on public.accounts for all usi
 
 -- Run supabase/migrations/20261023_termux_log_history.sql after this base
 -- schema to install private, per-user Termux log retention and its API RPCs.
+-- Then run supabase/migrations/20261023_termux_daemon_status.sql to store
+-- per-user daemon start, heartbeat, and disconnect timestamps across sessions.

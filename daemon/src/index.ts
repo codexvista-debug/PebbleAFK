@@ -24,7 +24,8 @@ process.on('unhandledRejection', (reason: any) => {
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const AUTH_TOKEN = (process.env.DAEMON_AUTH_TOKEN || '').trim();
-const DAEMON_OWNER = (process.env.PEBBLEAFK_OWNER || '').trim().toLowerCase();
+let daemonOwner = (process.env.PEBBLEAFK_OWNER || '').trim().toLowerCase();
+let daemonSecret = AUTH_TOKEN;
 const DAEMON_STARTED_AT = Date.now() - Math.round(process.uptime() * 1000);
 const path = require('path');
 const childProcess = require('child_process');
@@ -131,18 +132,46 @@ const terminalLogs: string[] = [];
 const MAX_LOGS = 500;
 let isAppendingLog = false;
 const LOG_HISTORY_URL = process.env.PEBBLEAFK_LOGS_URL || 'https://pebbleafk.vercel.app/api/termux-logs';
+const DAEMON_STATUS_URL = process.env.PEBBLEAFK_STATUS_URL || 'https://pebbleafk.vercel.app/api/termux-status';
 const pendingHistoryLogs: Array<{ line: string; timestamp: number }> = [];
 let historyFlushInProgress = false;
+let statusHeartbeatInProgress = false;
+
+async function syncDaemonStatus(isOnline = true) {
+  if (statusHeartbeatInProgress || !daemonOwner || !daemonSecret) return;
+  statusHeartbeatInProgress = true;
+  try {
+    await fetch(DAEMON_STATUS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemonSecret}` },
+      body: JSON.stringify({
+        username: daemonOwner,
+        daemonStartedAt: DAEMON_STARTED_AT,
+        lastSeenAt: Date.now(),
+        instanceId: process.env.PEBBLEAFK_INSTANCE_ID || String(DAEMON_STARTED_AT),
+        isOnline,
+      }),
+      signal: AbortSignal.timeout(isOnline ? 10000 : 1800),
+    });
+  } catch (_) {
+    // A temporary Supabase/Vercel outage must never interrupt the local daemon.
+  } finally {
+    statusHeartbeatInProgress = false;
+  }
+}
+
+setInterval(() => { void syncDaemonStatus(true); }, 20000).unref();
+setTimeout(() => { void syncDaemonStatus(true); }, 3000).unref();
 
 async function flushTerminalLogHistory() {
-  if (historyFlushInProgress || !DAEMON_OWNER || !AUTH_TOKEN || pendingHistoryLogs.length === 0) return;
+  if (historyFlushInProgress || !daemonOwner || !daemonSecret || pendingHistoryLogs.length === 0) return;
   historyFlushInProgress = true;
   const batch = pendingHistoryLogs.slice(0, 100);
   try {
     const response = await fetch(LOG_HISTORY_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AUTH_TOKEN}` },
-      body: JSON.stringify({ username: DAEMON_OWNER, logs: batch }),
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${daemonSecret}` },
+      body: JSON.stringify({ username: daemonOwner, logs: batch }),
       signal: AbortSignal.timeout(10000),
     });
     if (response.ok) pendingHistoryLogs.splice(0, batch.length);
@@ -161,7 +190,7 @@ function appendTerminalLog(rawText: string) {
   try {
     const line = `[${new Date().toLocaleTimeString()}] ${rawText}`;
     terminalLogs.push(line);
-    if (DAEMON_OWNER && AUTH_TOKEN) {
+    if (daemonOwner && daemonSecret) {
       pendingHistoryLogs.push({ line, timestamp: Date.now() });
       if (pendingHistoryLogs.length > 5000) pendingHistoryLogs.splice(0, pendingHistoryLogs.length - 5000);
     }
@@ -288,7 +317,7 @@ wss.on('connection', (ws: WebSocket, req) => {
           return;
         }
 
-        if (DAEMON_OWNER && requestedOwner && requestedOwner !== DAEMON_OWNER) {
+        if (daemonOwner && requestedOwner && requestedOwner !== daemonOwner) {
           ws.send(JSON.stringify({
             type: 'AUTH_RESULT',
             payload: { success: false, message: 'This daemon belongs to a different PebbleAFK account.' },
@@ -296,6 +325,10 @@ wss.on('connection', (ws: WebSocket, req) => {
           ws.close();
           return;
         }
+
+        if (!daemonOwner && /^[a-z0-9]{1,16}$/.test(requestedOwner)) daemonOwner = requestedOwner;
+        if (!daemonSecret && /^pb_[a-f0-9]{10}$/i.test(clientToken)) daemonSecret = clientToken;
+        void syncDaemonStatus(true);
 
         authenticatedClients.add(ws);
         const sessionId = typeof parsed.payload.sessionId === 'string' && /^[\w-]{8,100}$/.test(parsed.payload.sessionId)
@@ -589,10 +622,11 @@ async function updateDaemonFromDashboard(ws: WebSocket) {
   }
 }
 
-function gracefulShutdown(signal: string) {
+async function gracefulShutdown(signal: string) {
   if (shutdownRequested) return;
   shutdownRequested = true;
   console.log(chalk.yellow(`[Daemon] Received ${signal}. Closing server sockets cleanly...`));
+  await syncDaemonStatus(false);
   try {
     for (const client of authenticatedClients) {
       try { client.close(1001, 'Daemon stopping'); } catch (_) {}

@@ -83,11 +83,10 @@ export function useDaemonSocket(
     const value = Number(localStorage.getItem(`pebbleafk_daemon_started_at_${currentUser.trim().toLowerCase()}`));
     return Number.isFinite(value) && value > 0 ? value : null;
   });
-  const [lastDaemonDisconnectedAt, setLastDaemonDisconnectedAt] = useState<number | null>(() => {
-    if (typeof window === 'undefined' || !currentUser) return null;
-    const value = Number(localStorage.getItem(`pebbleafk_daemon_disconnected_at_${currentUser.trim().toLowerCase()}`));
-    return Number.isFinite(value) && value > 0 ? value : null;
-  });
+  const [lastDaemonDisconnectedAt, setLastDaemonDisconnectedAt] = useState<number | null>(null);
+  const [daemonHeartbeatOnline, setDaemonHeartbeatOnline] = useState(false);
+  const [daemonStatusStorageError, setDaemonStatusStorageError] = useState('');
+  const daemonHeartbeatAtRef = useRef(0);
   const [deviceSessions, setDeviceSessions] = useState<{ sessionId: string; label: string; userAgent: string; ip: string; connectedAt: number; lastSeenAt: number; connected: boolean }[]>([]);
 
   const socketRef = useRef<WebSocket | null>(null);
@@ -105,6 +104,72 @@ export function useDaemonSocket(
   const shutdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const browserSessionIdsRef = useRef<Record<string, string>>({});
   const wasAuthenticatedRef = useRef(false);
+
+  const syncDaemonStatus = useCallback(async (startedAt?: number, isOnline = true) => {
+    const username = currentUserRef.current?.trim().toLowerCase();
+    const secret = authTokenRef.current;
+    if (!username || !secret) return;
+
+    try {
+      let writeError = '';
+      if (startedAt && startedAt > 0) {
+        const writeResponse = await fetch('/api/termux-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` },
+          body: JSON.stringify({
+            username,
+            daemonStartedAt: startedAt,
+            lastSeenAt: Date.now(),
+            instanceId: String(startedAt),
+            isOnline,
+          }),
+          cache: 'no-store',
+        });
+        if (!writeResponse.ok) {
+          const errorData = await writeResponse.json().catch(() => ({}));
+          writeError = typeof errorData?.error === 'string' ? errorData.error : 'Could not save daemon uptime to Supabase.';
+        }
+      }
+
+      const response = await fetch(`/api/termux-status?username=${encodeURIComponent(username)}`, {
+        headers: { Authorization: `Bearer ${secret}` },
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        setDaemonStatusStorageError(typeof errorData?.error === 'string' ? errorData.error : 'Could not load daemon uptime from Supabase.');
+        if (daemonHeartbeatAtRef.current && Date.now() - daemonHeartbeatAtRef.current > 75000) {
+          setDaemonHeartbeatOnline(false);
+        }
+        return;
+      }
+      const data = await response.json();
+      const saved = data?.status;
+      if (!saved || typeof saved !== 'object') return;
+
+      setDaemonStatusStorageError(writeError);
+      const savedLastSeenAt = Number(saved.lastSeenAt);
+      daemonHeartbeatAtRef.current = Number.isFinite(savedLastSeenAt) && savedLastSeenAt > 0 ? savedLastSeenAt : 0;
+      setDaemonHeartbeatOnline(saved.isOnline === true && daemonHeartbeatAtRef.current > Date.now() - 75000);
+      const savedStartedAt = Number(saved.daemonStartedAt);
+      if (Number.isFinite(savedStartedAt) && savedStartedAt > 0) {
+        setDaemonStartedAt(savedStartedAt);
+        try { localStorage.setItem(`pebbleafk_daemon_started_at_${username}`, String(savedStartedAt)); } catch (_) {}
+      } else if (!startedAt) {
+        setDaemonStartedAt(null);
+        try { localStorage.removeItem(`pebbleafk_daemon_started_at_${username}`); } catch (_) {}
+      }
+      const savedDisconnectedAt = Number(saved.lastDisconnectedAt);
+      const disconnectedAt = Number.isFinite(savedDisconnectedAt) && savedDisconnectedAt > 0 ? savedDisconnectedAt : null;
+      setLastDaemonDisconnectedAt(disconnectedAt);
+    } catch (_) {
+      // Keep the live WebSocket state usable when status persistence is unavailable.
+      setDaemonStatusStorageError('Could not reach Supabase to sync daemon uptime.');
+      if (daemonHeartbeatAtRef.current && Date.now() - daemonHeartbeatAtRef.current > 75000) {
+        setDaemonHeartbeatOnline(false);
+      }
+    }
+  }, []);
 
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
@@ -215,11 +280,13 @@ export function useDaemonSocket(
     // Flush all logs, bot states, and telemetry from previous user
     setTerminalLogs([]);
     setTerminalHistoryError('');
+    setDaemonHeartbeatOnline(false);
+    daemonHeartbeatAtRef.current = 0;
+    setDaemonStatusStorageError('');
     try {
       const savedStartedAt = Number(localStorage.getItem(`pebbleafk_daemon_started_at_${u}`));
-      const savedDisconnectedAt = Number(localStorage.getItem(`pebbleafk_daemon_disconnected_at_${u}`));
       setDaemonStartedAt(Number.isFinite(savedStartedAt) && savedStartedAt > 0 ? savedStartedAt : null);
-      setLastDaemonDisconnectedAt(Number.isFinite(savedDisconnectedAt) && savedDisconnectedAt > 0 ? savedDisconnectedAt : null);
+      setLastDaemonDisconnectedAt(null);
     } catch (_) {
       setDaemonStartedAt(null);
       setLastDaemonDisconnectedAt(null);
@@ -236,6 +303,13 @@ export function useDaemonSocket(
     setLatency(null);
     setStatus('DISCONNECTED');
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || !authToken) return;
+    void syncDaemonStatus();
+    const heartbeatRefresh = setInterval(() => { void syncDaemonStatus(); }, 30000);
+    return () => clearInterval(heartbeatRefresh);
+  }, [currentUser, authToken, syncDaemonStatus]);
 
   const connect = useCallback((force = false) => {
     if (shutdownRequestedRef.current || sessionRemovedRef.current) return;
@@ -396,6 +470,7 @@ export function useDaemonSocket(
                 const owner = currentUserRef.current?.trim().toLowerCase();
                 if (owner) localStorage.setItem(`pebbleafk_daemon_started_at_${owner}`, String(startedAt));
               } catch (_) {}
+              void syncDaemonStatus(startedAt, true);
               setStatus('AUTHENTICATED');
             } else {
               if (connectionTimeoutRef.current) {
@@ -558,14 +633,8 @@ export function useDaemonSocket(
       ws.onclose = () => {
         if (socketRef.current !== ws) return;
         socketRef.current = null;
-        if (wasAuthenticatedRef.current) {
-          const disconnectedAt = Date.now();
-          setLastDaemonDisconnectedAt(disconnectedAt);
-          try {
-            const owner = currentUserRef.current?.trim().toLowerCase();
-            if (owner) localStorage.setItem(`pebbleafk_daemon_disconnected_at_${owner}`, String(disconnectedAt));
-          } catch (_) {}
-        }
+        // This is a browser-client socket close, not proof that the Termux
+        // process stopped; daemon heartbeats own the disconnect timeline.
         wasAuthenticatedRef.current = false;
         if (connectionTimeoutRef.current) {
           clearTimeout(connectionTimeoutRef.current);
@@ -843,6 +912,8 @@ export function useDaemonSocket(
 
   return {
     status,
+    daemonIsOnline: status === 'AUTHENTICATED' || daemonHeartbeatOnline,
+    daemonStatusStorageError,
     daemonUrl,
     setDaemonUrl,
     authToken,

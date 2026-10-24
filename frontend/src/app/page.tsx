@@ -601,6 +601,8 @@ export default function Home() {
     terminalLogs,
     terminalHistoryError,
     daemonStartedAt,
+    daemonIsOnline,
+    daemonStatusStorageError,
     lastDaemonDisconnectedAt,
     fetchTerminalLogs,
     fetchTerminalHistory,
@@ -2665,7 +2667,8 @@ export default function Home() {
               <TermuxStreamPage
                 logs={terminalLogs}
                 historyError={terminalHistoryError}
-                isOnline={daemonStatus === 'AUTHENTICATED'}
+                statusStorageError={daemonStatusStorageError}
+                isOnline={daemonIsOnline}
                 daemonStartedAt={daemonStartedAt}
                 lastDisconnectedAt={lastDaemonDisconnectedAt}
                 now={nowTick}

@@ -7,6 +7,7 @@ import { ShutdownConfirmDialog } from './ShutdownConfirmDialog';
 interface TermuxStreamPageProps {
   logs: string[];
   historyError?: string;
+  statusStorageError?: string;
   isOnline: boolean;
   daemonStartedAt: number | null;
   lastDisconnectedAt: number | null;
@@ -23,6 +24,7 @@ interface TermuxStreamPageProps {
 export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
   logs,
   historyError,
+  statusStorageError,
   isOnline,
   daemonStartedAt,
   lastDisconnectedAt,
@@ -249,6 +251,11 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
           {historyError && (
             <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-950/30 px-3 py-2 font-sans text-[11px] font-semibold text-amber-200">
               Retained history is unavailable: {historyError}
+            </div>
+          )}
+          {statusStorageError && (
+            <div className="mx-4 mt-2 rounded-xl border border-amber-300/70 bg-amber-50/90 px-3 py-2 text-[11px] font-semibold leading-relaxed text-amber-900 sm:mx-5">
+              Uptime sync unavailable: {statusStorageError}
             </div>
           )}
           <div className="text-slate-400 pb-2 text-[10px] border-b border-slate-200 mb-2 flex items-center justify-between font-bold">
