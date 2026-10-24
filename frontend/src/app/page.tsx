@@ -1628,37 +1628,6 @@ export default function Home() {
     setChatInput('');
   };
 
-  // Status dot style for daemon button
-  const getDaemonRingStyle = () => {
-    switch (daemonStatus) {
-      case 'AUTHENTICATED':
-        return 'border-emerald-300 bg-emerald-50 text-emerald-600 shadow-emerald-500/20';
-      case 'CONNECTED':
-        return 'border-amber-300 bg-amber-50 text-amber-600 shadow-amber-500/20';
-      case 'CONNECTING':
-        return 'border-sky-300 bg-sky-50 text-sky-600 shadow-sky-500/20 animate-pulse';
-      case 'AUTH_ERROR':
-        return 'border-rose-300 bg-rose-50 text-rose-600 shadow-rose-500/20';
-      default:
-        return 'border-slate-300 bg-slate-100 text-slate-400';
-    }
-  };
-
-  const getDaemonInnerDot = () => {
-    switch (daemonStatus) {
-      case 'AUTHENTICATED':
-        return 'bg-emerald-500 animate-pulse';
-      case 'CONNECTED':
-        return 'bg-amber-500 animate-pulse';
-      case 'CONNECTING':
-        return 'bg-sky-500 animate-ping';
-      case 'AUTH_ERROR':
-        return 'bg-rose-500';
-      default:
-        return 'bg-slate-400';
-    }
-  };
-
   // 1. UNLOGGED VIEW: Main page
   if (!sessionRestored) {
     return (
@@ -1846,10 +1815,15 @@ export default function Home() {
           <button
             type="button"
             onClick={() => setIsSettingsOpen(true)}
-            className={`relative w-8 h-8 rounded-full border-2 flex items-center justify-center transition shadow-xs hover:scale-105 cursor-pointer ${getDaemonRingStyle()}`}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border-0 bg-transparent p-0 shadow-none transition hover:scale-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-400 cursor-pointer"
             title={`Termux Daemon: ${daemonStatus}`}
+            aria-label={`Termux daemon ${daemonStatus === 'AUTHENTICATED' ? 'online' : 'inactive'}; open settings`}
           >
-            <span className={`w-2.5 h-2.5 rounded-full ${getDaemonInnerDot()}`} />
+            <img
+              src={daemonStatus === 'AUTHENTICATED' ? '/nav/daemon-allay-active.png' : '/nav/daemon-allay-inactive.png'}
+              alt=""
+              className="h-10 w-10 object-contain drop-shadow-[0_2px_2px_rgba(0,0,0,.45)]"
+            />
           </button>
         </div>
       </div>
@@ -2214,10 +2188,16 @@ export default function Home() {
             <div className="flex items-center gap-2.5">
               <button
                 onClick={() => setIsSettingsOpen(true)}
-                className={`relative w-8 h-8 rounded-full border-2 flex items-center justify-center transition shadow-xs hover:scale-105 cursor-pointer ${getDaemonRingStyle()}`}
+                type="button"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border-0 bg-transparent p-0 shadow-none transition hover:scale-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-400 cursor-pointer"
                 title={`Termux Daemon: ${daemonStatus} - Click for 1-Click launcher & settings`}
+                aria-label={`Termux daemon ${daemonStatus === 'AUTHENTICATED' ? 'online' : 'inactive'}; open settings`}
               >
-                <span className={`w-2.5 h-2.5 rounded-full ${getDaemonInnerDot()}`} />
+                <img
+                  src={daemonStatus === 'AUTHENTICATED' ? '/nav/daemon-allay-active.png' : '/nav/daemon-allay-inactive.png'}
+                  alt=""
+                  className="h-10 w-10 object-contain drop-shadow-[0_2px_2px_rgba(0,0,0,.45)]"
+                />
               </button>
             </div>
           </header>
