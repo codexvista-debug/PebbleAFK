@@ -155,9 +155,6 @@ export function useDaemonSocket(
       if (Number.isFinite(savedStartedAt) && savedStartedAt > 0) {
         setDaemonStartedAt(savedStartedAt);
         try { localStorage.setItem(`pebbleafk_daemon_started_at_${username}`, String(savedStartedAt)); } catch (_) {}
-      } else if (!startedAt) {
-        setDaemonStartedAt(null);
-        try { localStorage.removeItem(`pebbleafk_daemon_started_at_${username}`); } catch (_) {}
       }
       const savedDisconnectedAt = Number(saved.lastDisconnectedAt);
       const disconnectedAt = Number.isFinite(savedDisconnectedAt) && savedDisconnectedAt > 0 ? savedDisconnectedAt : null;
@@ -464,7 +461,18 @@ export function useDaemonSocket(
               lastPongAtRef.current = Date.now();
               wasAuthenticatedRef.current = true;
               const reportedStartedAt = Number(msg.payload?.daemonStartedAt);
-              const startedAt = Number.isFinite(reportedStartedAt) && reportedStartedAt > 0 ? reportedStartedAt : Date.now();
+              let cachedStartedAt = 0;
+              try {
+                const owner = currentUserRef.current?.trim().toLowerCase();
+                if (owner) cachedStartedAt = Number(localStorage.getItem(`pebbleafk_daemon_started_at_${owner}`));
+              } catch (_) {}
+              // Older daemons omit daemonStartedAt. Keep the last known start time
+              // instead of restarting the displayed uptime on every browser auth.
+              const startedAt = Number.isFinite(reportedStartedAt) && reportedStartedAt > 0
+                ? reportedStartedAt
+                : Number.isFinite(cachedStartedAt) && cachedStartedAt > 0
+                  ? cachedStartedAt
+                  : Date.now();
               setDaemonStartedAt(startedAt);
               try {
                 const owner = currentUserRef.current?.trim().toLowerCase();

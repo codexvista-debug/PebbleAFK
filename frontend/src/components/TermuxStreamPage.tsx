@@ -52,6 +52,17 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
     : uptimeHours > 0
       ? `${uptimeHours}h ${uptimeMinutes}m ${uptimeRemainder}s`
       : `${uptimeMinutes}m ${uptimeRemainder}s`;
+  const lastDisconnectedLabel = lastDisconnectedAt
+    ? (() => {
+        const elapsedSeconds = Math.max(0, Math.floor((now - lastDisconnectedAt) / 1000));
+        if (elapsedSeconds < 60) return `${elapsedSeconds}s ago`;
+        const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+        if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+        const elapsedHours = Math.floor(elapsedMinutes / 60);
+        if (elapsedHours < 24) return `${elapsedHours}h ago`;
+        return `${Math.floor(elapsedHours / 24)}d ago`;
+      })()
+    : 'No disconnect recorded';
 
   // Auto-scroll when new logs arrive (ONLY when autoScroll is active)
   useEffect(() => {
@@ -235,7 +246,7 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
             <div className="min-w-0">
               <div className="text-[9px] font-extrabold uppercase tracking-[0.13em] text-slate-400">Last disconnected</div>
               <div className="truncate text-[11px] font-bold text-slate-800 sm:text-xs" title={lastDisconnectedAt ? new Date(lastDisconnectedAt).toLocaleString() : 'No disconnect recorded'}>
-                {lastDisconnectedAt ? new Date(lastDisconnectedAt).toLocaleString() : 'No disconnect recorded'}
+                {lastDisconnectedLabel}
               </div>
             </div>
           </div>
