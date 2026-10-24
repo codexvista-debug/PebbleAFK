@@ -2060,7 +2060,7 @@ export default function Home() {
                           }}
                           className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer group ${
                             isSelected
-                              ? 'bg-emerald-50 text-emerald-950 border border-emerald-300 shadow-2xs'
+                              ? 'bg-emerald-50 text-white border border-emerald-300 shadow-2xs'
                               : 'text-slate-700 hover:bg-slate-100/80 hover:text-slate-900'
                           }`}
                         >
@@ -3937,8 +3937,11 @@ export default function Home() {
                         </div>
 
                         {/* Card 1: Server Information */}
-                        <div className="p-5 rounded-2xl bg-white border border-slate-200 space-y-4 shadow-xs">
-                          <h3 className="font-bold text-sm text-slate-900">Server information</h3>
+                        <div className="mc-settings-panel p-5 rounded-2xl bg-white border border-slate-200 space-y-4 shadow-xs">
+                          <h3 className="flex items-center gap-2.5 font-bold text-sm text-slate-900">
+                            <ServerLogo host={activeServer.serverHost} name={activeServer.name} size="w-7 h-7" />
+                            <span>Server information</span>
+                          </h3>
 
                           <div className="space-y-1">
                             <label className="text-[11px] font-bold text-slate-600">Profile name</label>
@@ -4011,8 +4014,11 @@ export default function Home() {
                         </div>
 
                         {/* Card 2: Extra Settings (Matching Image 2 pixel-perfect!) */}
-                        <div className="p-5 rounded-2xl bg-white border border-slate-200 space-y-4 shadow-xs">
-                          <h3 className="font-bold text-sm text-slate-900">Extra settings</h3>
+                        <div className="mc-settings-panel p-5 rounded-2xl bg-white border border-slate-200 space-y-4 shadow-xs">
+                          <h3 className="flex items-center gap-2.5 font-bold text-sm text-slate-900">
+                            <img src="/nav/settings-repeater.png" alt="" aria-hidden="true" className="mc-settings-art" />
+                            <span>Extra settings</span>
+                          </h3>
 
                           <div className="space-y-4 divide-y divide-slate-100">
                             {/* Join delay */}
@@ -4285,9 +4291,12 @@ export default function Home() {
                         </div>
 
                         {/* Card 3: Dangerous Settings (Matching Image 2 pixel-perfect!) */}
-                        <div className="p-5 rounded-2xl bg-white border border-slate-200 flex items-center justify-between shadow-xs">
+                        <div className="mc-settings-panel p-5 rounded-2xl bg-white border border-slate-200 flex items-center justify-between shadow-xs">
                           <div>
-                            <h3 className="font-bold text-sm text-slate-900">Dangerous settings</h3>
+                            <h3 className="flex items-center gap-2.5 font-bold text-sm text-slate-900">
+                              <img src="/nav/diagnostics-heart.png" alt="" aria-hidden="true" className="mc-settings-art" />
+                              <span>Dangerous settings</span>
+                            </h3>
                             <p className="text-xs text-slate-500 mt-0.5">
                               Settings for this server profile that are easy to get wrong and hard to undo.
                             </p>
