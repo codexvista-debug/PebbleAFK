@@ -3455,7 +3455,7 @@ export default function Home() {
                             <div className="shrink-0 px-3 sm:px-5 py-2.5 sm:py-3 border-b border-slate-200 flex items-center justify-between gap-2.5 sm:gap-3 bg-slate-50/60">
                               <div className="flex-1 min-w-0 flex items-center mr-2 sm:mr-3">
                                 {isAllSelected ? (
-                                  <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5 w-full" role="group" aria-label="All account status counts">
+                                  <div className="flex w-fit max-w-full flex-wrap items-center gap-1.5 sm:gap-2" role="group" aria-label="All account status counts">
                                     <button
                                       type="button"
                                       title={`${stabilityCounts.stable} stable accounts`}
