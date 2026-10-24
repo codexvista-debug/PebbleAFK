@@ -879,8 +879,11 @@ export default function Home() {
   useEffect(() => {
     if (!currentUser) return;
     let isMounted = true;
+    let tunnelCheckInFlight = false;
 
     const checkTunnel = async () => {
+      if (tunnelCheckInFlight) return;
+      tunnelCheckInFlight = true;
       try {
         const res = await fetch(`/api/tunnel?username=${encodeURIComponent(currentUser)}&_t=${Date.now()}`, {
           cache: 'no-store',
@@ -929,13 +932,18 @@ export default function Home() {
             }
           }
         }
-      } catch (_) {}
+      } catch (_) {
+        // Keep tunnel discovery running through transient network/API errors.
+      } finally {
+        tunnelCheckInFlight = false;
+      }
     };
 
     checkTunnel();
 
-    // Fast polling (1200ms) when disconnected or settings modal is open; relaxed (8000ms) when authenticated
-    const pollInterval = (daemonStatus === 'AUTHENTICATED' && !isSettingsOpen) ? 8000 : 1200;
+    // Discover a freshly launched Termux tunnel quickly, without overlapping
+    // slow API requests while the dashboard is waiting to authenticate.
+    const pollInterval = (daemonStatus === 'AUTHENTICATED' && !isSettingsOpen) ? 8000 : 750;
     const interval = setInterval(checkTunnel, pollInterval);
 
     // Instant trigger when user switches back from Termux to the browser tab
@@ -1656,7 +1664,7 @@ export default function Home() {
     return (
       <main className="mc-boot-scene min-h-screen flex items-center justify-center p-6">
         <div className="mc-loading-card">
-          <div className="mc-loading-mark" aria-hidden="true">⛏</div>
+          <img src="/nav/pebbleafk-pickaxe.png" alt="" className="mc-loading-mark mc-brand-art" />
           <div className="mc-loading-blocks" aria-hidden="true"><i /><i /><i /></div>
           <span className="mc-loading-title">Loading your world…</span>
           <span className="mc-loading-caption">RESTORING YOUR CONTROL DECK</span>
@@ -1670,7 +1678,7 @@ export default function Home() {
       <main className="mc-login-scene min-h-screen flex flex-col p-4 sm:p-7 lg:p-10">
         <div className="mc-login-topbar mx-auto w-full max-w-7xl flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="mc-brand-mark" aria-hidden="true">⛏</div>
+            <img src="/nav/pebbleafk-pickaxe.png" alt="" className="mc-brand-mark mc-brand-art" />
             <div>
               <div className="mc-brand-name">PebbleAFK</div>
               <div className="mc-brand-caption">BEDROCK CONTROL DECK</div>
@@ -1810,28 +1818,22 @@ export default function Home() {
             </div>
           ) : activeTab === 'accounts' ? (
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-violet-100 text-violet-700 border border-violet-200 flex items-center justify-center font-black text-xs shadow-xs">
-                <Users className="w-4 h-4" />
-              </div>
+              <img src="/nav/accounts-player-heads.png" alt="" className="mc-topbar-art" />
               <span className="font-black text-sm text-slate-900 tracking-tight">Accounts</span>
             </div>
           ) : activeTab === 'termux_stream' ? (
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-sky-100 text-sky-700 border border-sky-200 flex items-center justify-center font-mono font-black text-xs shadow-xs">
-                &gt;_
-              </div>
+              <img src="/nav/terminal-crystal.png" alt="" className="mc-topbar-art" />
               <span className="font-black text-sm text-slate-900 tracking-tight">Termux Stream</span>
             </div>
           ) : activeTab === 'diagnostics' ? (
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 border border-amber-200 flex items-center justify-center shadow-xs"><Activity className="w-4 h-4" /></div>
+              <img src="/nav/diagnostics-heart.png" alt="" className="mc-topbar-art" />
               <span className="font-black text-sm text-slate-900 tracking-tight">Diagnostics</span>
             </div>
           ) : (
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center font-black text-xs shadow-xs ring-2 ring-emerald-500/20">
-                ⛏
-              </div>
+              <img src="/nav/pebbleafk-pickaxe.png" alt="" className="mc-topbar-art" />
               <div>
                 <span className="font-black text-sm text-slate-900 tracking-tight">Dashboard</span>
               </div>
@@ -1880,9 +1882,7 @@ export default function Home() {
                 className="flex items-center gap-2.5 text-left group hover:opacity-90 transition cursor-pointer"
                 title="Go to PebbleAFK Dashboard"
               >
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 border border-emerald-400 text-white flex items-center justify-center font-black text-sm shadow-xs ring-2 ring-emerald-500/20 group-hover:scale-105 transition-transform">
-                  ⛏
-                </div>
+                <img src="/nav/pebbleafk-pickaxe.png" alt="" className="mc-brand-art group-hover:scale-110 transition-transform" />
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-black text-sm text-slate-900 tracking-tight group-hover:text-emerald-700 transition-colors">
@@ -1919,9 +1919,7 @@ export default function Home() {
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className="mc-nav-block mc-nav-block--crafting">
-                  <MinecraftCraftingTableIcon className="w-5 h-5" />
-                </div>
+                <img src="/nav/dashboard-crafting.png" alt="" className="mc-nav-block mc-nav-art" />
                 <span>Dashboard</span>
               </button>
 
@@ -1938,9 +1936,7 @@ export default function Home() {
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className="mc-nav-block mc-nav-block--command">
-                    <MinecraftCommandBlockIcon className="w-5 h-5" />
-                  </div>
+                  <img src="/nav/terminal-crystal.png" alt="" className="mc-nav-block mc-nav-art" />
                   <span>Termux Stream</span>
                 </div>
                 <span className={`w-2 h-2 rounded-full ${daemonStatus === 'AUTHENTICATED' ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
@@ -1957,9 +1953,7 @@ export default function Home() {
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className="mc-nav-block mc-nav-block--redstone">
-                  <MinecraftHeartIcon className="w-5 h-5" />
-                </div>
+                <img src="/nav/diagnostics-heart.png" alt="" className="mc-nav-block mc-nav-art" />
                 <span>Diagnostics</span>
               </button>
 
@@ -1974,9 +1968,7 @@ export default function Home() {
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
                 }`}
               >
-                <div className="mc-nav-block mc-nav-block--ender">
-                  <MinecraftEnderChestIcon className="w-5 h-5" />
-                </div>
+                <img src="/nav/servers-ender-chest.png" alt="" className="mc-nav-block mc-nav-art" />
                 <span>Servers</span>
               </button>
 
@@ -1992,9 +1984,7 @@ export default function Home() {
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className="mc-nav-block mc-nav-block--steve">
-                    <MinecraftSteveIcon className="w-5 h-5" />
-                  </div>
+                  <img src="/nav/accounts-player-heads.png" alt="" className="mc-nav-block mc-nav-art" />
                   <span>Accounts</span>
                 </div>
                 <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-mono font-bold">

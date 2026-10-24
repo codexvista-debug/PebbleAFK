@@ -267,7 +267,7 @@ export function useDaemonSocket(
         if (socketRef.current === ws && ws.readyState === WebSocket.CONNECTING) {
           try { ws.close(); } catch (_) {}
         }
-      }, 12000);
+      }, 8000);
 
       ws.onopen = () => {
         if (socketRef.current !== ws) return;
@@ -312,7 +312,7 @@ export function useDaemonSocket(
           if (socketRef.current === ws && ws.readyState === WebSocket.OPEN && !authenticatedAtRef.current) {
             ws.close(4001, 'Daemon authentication timed out');
           }
-        }, 12000);
+        }, 10000);
 
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         pingIntervalRef.current = setInterval(() => {
