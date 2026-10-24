@@ -19,11 +19,30 @@ export const ServerLogo: React.FC<ServerLogoProps> = ({
   const [useInitial, setUseInitial] = useState(false);
 
   const cleanHost = (host || '').trim().split(':')[0];
+  const serverIdentity = `${name || ''} ${cleanHost}`.toLowerCase();
+  const brandedLogo = serverIdentity.includes('freshsmp')
+    ? '/nav/server-freshsmp.png'
+    : serverIdentity.includes('donut')
+      ? '/nav/server-donut.png'
+      : null;
 
   useEffect(() => {
     setUseFallback(false);
     setUseInitial(false);
   }, [host]);
+
+  // Supported server profiles use first-party artwork so every user sees the
+  // same identity, independent of the server's remote favicon or profile owner.
+  if (brandedLogo) {
+    return (
+      <img
+        src={brandedLogo}
+        alt={`${name} server`}
+        title={name}
+        className={`${size} object-contain shrink-0 drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] ${className}`}
+      />
+    );
+  }
 
   if (!cleanHost || useInitial) {
     return (
