@@ -441,6 +441,7 @@ export const TermuxStreamPage: React.FC<TermuxStreamPageProps> = ({
         <div className="px-5 py-3.5 bg-white">
           <p className="text-[11px] text-slate-500 leading-relaxed font-mono">
             💡 <b>{viewingOtherUser ? 'Read-only account stream:' : 'Complete daemon stream:'}</b> All output forwarded by the Termux launcher is retained under @{selectedPebbleUser || pebbleUsername || 'your PebbleAFK account'} for 24 hours. Logs are not filtered by server profile.
+            {viewingOtherUser && ' Refreshing this site does not update their running daemon; they need to press Update from their own Termux Stream page.'}
           </p>
         </div>
       </div>
