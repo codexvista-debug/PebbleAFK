@@ -28,10 +28,29 @@ done
 if [ \${#NEEDED_PKGS[@]} -gt 0 ]; then
   echo -e "      Installing required packages: \\033[1;33m\${NEEDED_PKGS[*]}\\033[0m..."
   pkg update -y >/dev/null 2>&1 || true
-  pkg install -y "\${NEEDED_PKGS[@]}" >/dev/null 2>&1 || true
+  if ! pkg install -y "\${NEEDED_PKGS[@]}" >/dev/null 2>&1; then
+    echo -e "      \\033[1;31m✗ Termux could not install one or more required packages. Run 'pkg update && pkg upgrade' and retry.\\033[0m"
+    exit 1
+  fi
   echo -e "      \\033[1;32m✓ Dependencies installed successfully.\\033[0m"
 else
   echo -e "      \\033[1;32m✓ All dependencies ready.\\033[0m"
+fi
+
+# command -v can find a stale node binary whose Android linker dependencies
+# are broken (common after restoring an old Termux package state). Reinstall
+# Node/npm through Termux so the executable and its shared libraries match.
+if ! node --version >/dev/null 2>&1 || ! npm --version >/dev/null 2>&1; then
+  echo -e "      \\033[1;33m⚠ Node/npm is present but cannot run; repairing Termux Node packages...\\033[0m"
+  pkg update -y >/dev/null 2>&1 || true
+  if ! apt-get install -y --reinstall nodejs-lts npm; then
+    echo -e "      \\033[1;31m✗ Node could not be repaired. In Termux run 'pkg update && pkg upgrade -y && pkg reinstall nodejs-lts npm', then rerun this command.\\033[0m"
+    exit 1
+  fi
+fi
+if ! node --version >/dev/null 2>&1 || ! npm --version >/dev/null 2>&1; then
+  echo -e "      \\033[1;31m✗ Termux Node/npm still cannot start. Update Termux packages and retry the 1-click command.\\033[0m"
+  exit 1
 fi
 
 # 2. Clone or update repository
