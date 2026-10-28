@@ -3,7 +3,7 @@ import dns from 'dns';
 import fs from 'fs';
 import { randomUUID } from 'crypto';
 import { Authflow, Titles } from 'prismarine-auth';
-const bedrock = require('bedrock-protocol');
+const bedrock = require('./bedrockProtocol');
 import { BotConfig, BotLifecycleState, BossBarPayload, DaemonMessage, FreshSmpDiagnosticEvent, FreshSmpDiagnosticPhase, FreshSmpDiagnosticState, TelemetryPayload } from '../types';
 import { getAndSyncTokenFolder, migrateTokenCache } from './tokenManager';
 import { signetCommandRetryDelayMs, signetConnectionRecoveryDelayMs, shouldResetFreshSmpSession } from './signet';
@@ -575,12 +575,14 @@ export class PebbleBotInstance {
       const isOffline = this.config.authType === 'offline';
       const cleanHost = (this.config.host || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
       const cleanPort = Number(this.config.port) || 19132;
+      const isFreshSmpHost = cleanHost.toLowerCase().includes('freshsmp');
+      const freshSmpSignallingUrl = isFreshSmpHost ? `https://${cleanHost}:${cleanPort}` : undefined;
 
       // Keep every RakNet packet in this attempt on one IPv4 (DNS round-robin must not
       // split a session), but rotate to another advertised edge after a silent timeout.
       const ipv4Addresses = await resolveBedrockIpv4Addresses(cleanHost);
       let connectHost = cleanHost;
-      if (ipv4Addresses.length) {
+      if (ipv4Addresses.length && !isFreshSmpHost) {
         const hostKey = cleanHost.toLowerCase();
         const knownWorkingEndpoint = SERVER_WORKING_ENDPOINTS.get(hostKey);
         const knownWorkingIndex = knownWorkingEndpoint ? ipv4Addresses.indexOf(knownWorkingEndpoint) : -1;
@@ -597,44 +599,65 @@ export class PebbleBotInstance {
         console.log(chalk.gray(`[PebbleAFK] Pinned host ${cleanHost} -> IPv4 ${connectHost} (edge ${endpointIndex + 1}/${ipv4Addresses.length})`));
       }
 
-      // The web dashboard/tunnel is intentionally brought online before this
-      // potentially slow first-time native build. Do not silently choose the
-      // weaker JS transport while that build is still in progress.
-      await waitForNativeRaknetPreparation();
+      // FreshSMP now exposes its public NetherNet signalling endpoint over TLS.
+      // Keep its hostname intact for certificate verification; it does not need
+      // the daemon's native RakNet setup or IPv4 edge pinning.
+      if (!isFreshSmpHost) await waitForNativeRaknetPreparation();
       if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
 
       let hasNativeRaknet = false;
-      try {
-        (eval('require'))('raknet-native');
-        hasNativeRaknet = true;
-      } catch (_) {}
+      if (!isFreshSmpHost) {
+        try {
+          (eval('require'))('raknet-native');
+          hasNativeRaknet = true;
+        } catch (_) {}
+      }
 
       const rakBackend = hasNativeRaknet ? 'raknet-native' : 'jsp-raknet';
-      if (!hasNativeRaknet) {
+      if (!isFreshSmpHost && !hasNativeRaknet) {
         this.logActivity('warning', 'Native RakNet is unavailable; using the JavaScript fallback, which some secured Bedrock gateways may reject.');
         if (!ipv4Addresses.length && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(connectHost)) {
           throw new Error(`Could not resolve an IPv4 address for ${cleanHost}; the JavaScript RakNet fallback requires an IPv4 endpoint.`);
         }
       }
 
-      let pingRes: { motd?: string; protocol?: string; version?: string } | null = null;
+      let pingRes: { motd?: string; protocol?: string | number; version?: string; gameVersion?: string } | null = null;
       const rawUserVersion = this.config.version?.trim();
       const isAutoVersion = !rawUserVersion || rawUserVersion.toLowerCase() === 'auto' || rawUserVersion.toLowerCase() === 'default';
 
       if (isAutoVersion) {
-        this.logActivity('status', `🔍 Pinging Bedrock UDP port ${cleanHost}:${cleanPort}...`);
-        try {
-          if (ipv4Addresses.length || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(connectHost)) {
-            pingRes = await pingBedrockJsp(connectHost, cleanPort, 2500);
+        if (isFreshSmpHost) {
+          this.logActivity('status', `🔍 Checking FreshSMP's TLS NetherNet endpoint ${freshSmpSignallingUrl}/v1/join...`);
+          try {
+            const response = await bedrock.ping({
+              transport: 'nethernet',
+              host: cleanHost,
+              port: cleanPort,
+              timeout: 8_000,
+              nethernet: { signalling: 'http', url: freshSmpSignallingUrl },
+            });
+            pingRes = response;
+            const advertisedVersion = response.gameVersion || response.version || 'not supplied';
+            console.log(chalk.cyan(`[PebbleAFK] FreshSMP HTTPS NetherNet response from ${freshSmpSignallingUrl}: protocol=${response.protocol ?? 'not supplied'}, version=${advertisedVersion}`));
+            this.logActivity('status', `✓ FreshSMP NetherNet signalling is online: ${advertisedVersion}, protocol ${response.protocol ?? 'not supplied'}.`);
+          } catch (error: any) {
+            this.logActivity('warning', `⚠️ FreshSMP HTTPS NetherNet discovery failed at ${freshSmpSignallingUrl}: ${error?.message || 'unknown error'}.`);
           }
-          if (pingRes) {
-            console.log(chalk.cyan(`[PebbleAFK] Bedrock ping response from ${cleanHost} (${connectHost}):${cleanPort}: protocol=${pingRes.protocol}, version=${pingRes.version}`));
-            this.logActivity('status', `✓ Bedrock server online: Protocol ${pingRes.protocol || 'auto'}, Version ${pingRes.version || 'auto'}`);
-          } else {
-            this.logActivity('warning', `⚠️ No UDP ping response from ${cleanHost}:${cleanPort}. Server may be offline or filtering Unconnected Ping.`);
+        } else {
+          this.logActivity('status', `🔍 Pinging Bedrock UDP port ${cleanHost}:${cleanPort}...`);
+          try {
+            if (ipv4Addresses.length || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(connectHost)) {
+              pingRes = await pingBedrockJsp(connectHost, cleanPort, 2500);
+            }
+            if (pingRes) {
+              console.log(chalk.cyan(`[PebbleAFK] Bedrock ping response from ${cleanHost} (${connectHost}):${cleanPort}: protocol=${pingRes.protocol}, version=${pingRes.version}`));
+              this.logActivity('status', `✓ Bedrock server online: Protocol ${pingRes.protocol || 'auto'}, Version ${pingRes.version || 'auto'}`);
+            } else {
+              this.logActivity('warning', `⚠️ No UDP ping response from ${cleanHost}:${cleanPort}. Server may be offline or filtering Unconnected Ping.`);
+            }
+          } catch (_) {
+            this.logActivity('warning', `⚠️ UDP ping probe failed for ${cleanHost}:${cleanPort}. Proceeding with default protocol.`);
           }
-        } catch (_) {
-          this.logActivity('warning', `⚠️ UDP ping probe failed for ${cleanHost}:${cleanPort}. Proceeding with default protocol.`);
         }
       }
 
@@ -643,26 +666,49 @@ export class PebbleBotInstance {
       if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
 
       const resolved = resolveBedrockTargetVersion(rawUserVersion, pingRes?.protocol, pingRes?.version, cleanHost);
-      const targetVersion = this.autoVersionOverride || this.currentVersionCandidate || resolved.version;
+      // Automatic profiles use the version advertised by the verified HTTPS
+      // NetherNet probe. bedrockProtocol installs FreshSMP's pinned 26.60
+      // packet schema before the client is loaded.
+      const targetVersion = isFreshSmpHost && isAutoVersion
+        ? resolved.version
+        : this.autoVersionOverride || this.currentVersionCandidate || resolved.version;
       this.lastAttemptedVersion = targetVersion;
 
-      this.logActivity('connect', `🚀 Initiating RakNet handshake with ${cleanHost} (${connectHost}):${cleanPort} (Minecraft Bedrock ${targetVersion}, Transport: ${rakBackend})...`);
-      this.recordFreshSmpEvent('connection', 'info', `RakNet attempt: logical host ${cleanHost}:${cleanPort}, pinned IPv4 ${connectHost}, edge ${ipv4Addresses.indexOf(connectHost) + 1 || 1}/${ipv4Addresses.length || 1}, Bedrock ${targetVersion}, backend ${rakBackend}.`);
+      const advertisedProtocol = Number(pingRes?.protocol);
+      if (isFreshSmpHost && isAutoVersion && Number.isFinite(advertisedProtocol) && advertisedProtocol > 0) {
+        const supportedProtocols = Object.values(getBedrockSupportedVersions().versions);
+        if (!supportedProtocols.includes(advertisedProtocol)) {
+          const advertisedVersion = pingRes?.gameVersion || pingRes?.version || `protocol ${advertisedProtocol}`;
+          this.logActivity('warning', `FreshSMP advertises ${advertisedVersion} (${advertisedProtocol}), which this daemon's packet data does not support yet; trying ${targetVersion} over TLS NetherNet for backward compatibility.`);
+          this.recordFreshSmpEvent('protocol', 'warning', `FreshSMP advertises ${advertisedVersion} (${advertisedProtocol}); this daemon supports through ${getBedrockSupportedVersions().currentVersion} and will try ${targetVersion} over TLS NetherNet.`);
+        }
+      }
+
+      const transportLabel = isFreshSmpHost ? 'NetherNet HTTPS signalling' : `RakNet (${rakBackend})`;
+      this.logActivity('connect', `🚀 Initiating ${transportLabel} connection with ${cleanHost}:${cleanPort} (Minecraft Bedrock ${targetVersion})...`);
+      this.recordFreshSmpEvent('connection', 'info', isFreshSmpHost
+        ? `NetherNet HTTPS attempt: signalling ${freshSmpSignallingUrl}; Bedrock ${targetVersion}.`
+        : `RakNet attempt: logical host ${cleanHost}:${cleanPort}, pinned IPv4 ${connectHost}, edge ${ipv4Addresses.indexOf(connectHost) + 1 || 1}/${ipv4Addresses.length || 1}, Bedrock ${targetVersion}, backend ${rakBackend}.`);
 
       const clientOptions: any = {
-        host: connectHost,
+        host: isFreshSmpHost ? cleanHost : connectHost,
         port: cleanPort,
         username: this.config.username,
         offline: isOffline,
         profilesFolder: isOffline ? undefined : profilesFolder,
         version: targetVersion,
-        transport: 'raknet',
-        raknetBackend: rakBackend,
+        transport: isFreshSmpHost ? 'nethernet' : 'raknet',
+        ...(isFreshSmpHost
+          ? { nethernet: { signalling: 'http', url: freshSmpSignallingUrl, signallingConnectTimeout: 25_000 } }
+          : { raknetBackend: rakBackend }),
         useRaknetWorkers: false,
-        skipPing: rakBackend === 'jsp-raknet' || !pingRes,
+        // The built-in HTTP probe above has already verified the TLS endpoint.
+        // Skip duplicate discovery: FreshSMP's TLS probe above already returned
+        // the protocol/version and selected the transport for this attempt.
+        skipPing: isFreshSmpHost || rakBackend === 'jsp-raknet' || !pingRes,
         // RakNet retries its open-connection request for several seconds. Avoid leaving
         // silent endpoints hanging for 45s before endpoint rotation/reconnect can begin.
-        connectTimeout: 18000,
+        connectTimeout: isFreshSmpHost ? 30_000 : 18_000,
         onMsaCode: (data: any) => {
           console.log(chalk.yellow(`[MS Auth] Code for ${this.config.username}: ${data.user_code}`));
           const directUri = data.user_code
@@ -747,7 +793,7 @@ export class PebbleBotInstance {
         }
         if (startGeneration !== this.startGeneration || this.isExplicitlyStopped) return;
         PebbleBotInstance.lastHandshakeTime = Date.now();
-        console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (version: ${targetVersion}, backend: ${rakBackend})`));
+        console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (version: ${targetVersion}, transport: ${isFreshSmpHost ? 'nethernet-https' : rakBackend})`));
         client = bedrock.createClient(clientOptions);
         this.client = client;
       } finally {

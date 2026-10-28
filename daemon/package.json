@@ -19,7 +19,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "bedrock-protocol": "^3.60.1",
+    "bedrock-protocol": "git+https://github.com/PrismarineJS/bedrock-protocol.git#b4160368b7e5272ccdd435f75459220c167fe4e4",
     "chalk": "^4.1.2",
     "dotenv": "^16.4.5",
     "prismarine-auth": "^3.1.1",
@@ -32,5 +32,11 @@
     "@types/node": "^20.14.9",
     "@types/uuid": "^9.0.8",
     "@types/ws": "^8.5.10"
+  },
+  "overrides": {
+    "bedrock-protocol": {
+      "nethernet": "git+https://github.com/PrismarineJS/node-nethernet.git#6431f0f98a4c82d919e59fdbdb54e576e939b9dd",
+      "prismarine-xbox-services": "git+https://github.com/PrismarineJS/prismarine-xbox-services.git#052a9676f514c5470a723651b1dbb1adcf238944"
+    }
   }
 }
