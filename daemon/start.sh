@@ -117,7 +117,7 @@ is_managed_pid() {
   local pid="$1" process_dir process_cmd
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   [ -r "/proc/$pid/cmdline" ] || return 1
-  process_dir=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+  process_dir=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || readlink "/proc/$pid/cwd" 2>/dev/null || true)
   [ "$process_dir" = "$DAEMON_DIR" ] || return 1
   process_cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
   case "$process_cmd" in
@@ -292,6 +292,7 @@ LOCAL_HEALTH=""
 for i in {1..20}; do
   LOCAL_HEALTH=$(curl -fsS --connect-timeout 1 --max-time 1 http://127.0.0.1:8080/ 2>/dev/null || true)
   if echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then break; fi
+  if grep -q 'EADDRINUSE' daemon.log 2>/dev/null; then break; fi
   if ! kill -0 "$DAEMON_PID" 2>/dev/null; then break; fi
   if ps -o stat= -p "$DAEMON_PID" 2>/dev/null | grep -q '^Z'; then break; fi
   echo -ne "${YELLOW}.${NC}"

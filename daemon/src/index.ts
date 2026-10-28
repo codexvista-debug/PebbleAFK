@@ -648,12 +648,8 @@ async function gracefulShutdown(signal: string) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-let listenRetries = 0;
-const MAX_LISTEN_RETRIES = 12;
-
 function startServerListening() {
   server.listen(PORT, '127.0.0.1', () => {
-    listenRetries = 0;
     console.log(chalk.cyan(`
   ╔═══════════════════════════════════════════════════╗
   ║                PebbleAFK Daemon                   ║
@@ -669,16 +665,7 @@ function startServerListening() {
 
 server.on('error', (err: any) => {
   if (err?.code === 'EADDRINUSE') {
-    listenRetries++;
-    if (listenRetries <= MAX_LISTEN_RETRIES) {
-      console.warn(chalk.yellow(`[Server] Port ${PORT} busy (attempt ${listenRetries}/${MAX_LISTEN_RETRIES}). Re-attempting in 1.5s...`));
-      setTimeout(() => {
-        try { server.close(); } catch (_) {}
-        startServerListening();
-      }, 1500);
-      return;
-    }
-    console.error(chalk.red(`[PebbleAFK Fatal] Port ${PORT} remained busy after ${MAX_LISTEN_RETRIES} attempts.`));
+    console.error(chalk.red(`[PebbleAFK Fatal] Port ${PORT} is already in use. Refusing to wait or disrupt its owner; the launcher will identify PebbleAFK leftovers and retry.`));
     process.exit(43);
   } else {
     console.error(chalk.red(`[PebbleAFK Fatal Server Error] ${err?.message || err}`));

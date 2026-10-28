@@ -19,7 +19,7 @@ echo -e "\\033[0m"
 # 1. Dependency checks
 echo -e "\\033[1;34m[1/3]\\033[0m 📦 Checking environment & dependencies..."
 NEEDED_PKGS=()
-for pkg in git nodejs-lts npm cloudflared termux-api procps coreutils; do
+for pkg in git nodejs-lts npm cloudflared termux-api procps coreutils lsof; do
   if ! command -v $pkg >/dev/null 2>&1; then
     NEEDED_PKGS+=($pkg)
   fi
@@ -119,23 +119,61 @@ fi
 # Scope migration cleanup to this checkout and known commands; never kill
 # unrelated cloudflared/Node processes or every listener on port 8080.
 stop_legacy_pebbleafk() {
-  local daemon_path proc pid proc_cwd proc_cmd
-  daemon_path=$(pwd -P)
+  local daemon_path proc pid proc_cwd proc_cmd attempt remaining
+  daemon_path=$(readlink -f "$(pwd -P)" 2>/dev/null || pwd -P)
+  stop_managed_process() {
+    local managed_pid="$1" wait_attempt
+    kill -TERM "$managed_pid" 2>/dev/null || true
+    for wait_attempt in {1..20}; do
+      kill -0 "$managed_pid" 2>/dev/null || return 0
+      sleep 0.25
+    done
+    kill -KILL "$managed_pid" 2>/dev/null || true
+    for wait_attempt in {1..8}; do
+      kill -0 "$managed_pid" 2>/dev/null || return 0
+      sleep 0.25
+    done
+  }
+
   for proc in /proc/[0-9]*; do
     [ -r "$proc/cmdline" ] || continue
     pid=\${proc##*/}
     [ "$pid" = "$$" ] && continue
     [ "$pid" = "$PPID" ] && continue
-    proc_cwd=$(readlink "$proc/cwd" 2>/dev/null || true)
+    proc_cwd=$(readlink -f "$proc/cwd" 2>/dev/null || readlink "$proc/cwd" 2>/dev/null || true)
     [ "$proc_cwd" = "$daemon_path" ] || continue
     proc_cmd=$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)
     case "$proc_cmd" in
       *"start.sh"*|*"npm run start"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"dist/index.js"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*)
         echo "      Stopping legacy PebbleAFK process $pid ($proc_cmd)"
-        kill -KILL "$pid" 2>/dev/null || true
+        stop_managed_process "$pid"
         ;;
     esac
   done
+
+  # Catch orphaned/older Node builds by inspecting the actual listener on the
+  # daemon port. Only stop a Node listener whose canonical working directory is
+  # this PebbleAFK daemon checkout; never kill a different app using port 8080.
+  if command -v lsof >/dev/null 2>&1; then
+    for pid in $(lsof -t -nP -iTCP:8080 -sTCP:LISTEN 2>/dev/null | sort -u); do
+      [ -r "/proc/$pid/cmdline" ] || continue
+      proc_cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || readlink "/proc/$pid/cwd" 2>/dev/null || true)
+      proc_cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+      if [ "$proc_cwd" = "$daemon_path" ] && [[ "$proc_cmd" == *node* || "$proc_cmd" == *tsx* ]]; then
+        echo "      Stopping orphaned PebbleAFK listener on port 8080 (PID $pid)."
+        stop_managed_process "$pid"
+      else
+        echo -e "      \\033[1;31m✗ Port 8080 is occupied by PID $pid outside this PebbleAFK daemon. It was left untouched; stop that app and rerun the launcher.\\033[0m"
+        exit 1
+      fi
+    done
+
+    remaining=$(lsof -t -nP -iTCP:8080 -sTCP:LISTEN 2>/dev/null | sort -u)
+    if [ -n "$remaining" ]; then
+      echo -e "      \\033[1;31m✗ Port 8080 is still occupied by PID(s) $remaining. The launcher will not terminate unrelated processes.\\033[0m"
+      exit 1
+    fi
+  fi
 }
 stop_legacy_pebbleafk
 sleep 1
