@@ -19,7 +19,7 @@ echo -e "\\033[0m"
 # 1. Dependency checks
 echo -e "\\033[1;34m[1/3]\\033[0m 📦 Checking environment & dependencies..."
 NEEDED_PKGS=()
-for pkg in git nodejs-lts npm cloudflared termux-api procps coreutils; do
+for pkg in git nodejs-lts npm cloudflared termux-api procps coreutils util-linux; do
   if ! command -v $pkg >/dev/null 2>&1; then
     NEEDED_PKGS+=($pkg)
   fi
@@ -142,7 +142,15 @@ sleep 1
 
 # 5. Launch daemon & tunnel
 chmod +x start.sh 2>/dev/null || true
-bash start.sh "$1" "$2"
+if ! command -v setsid >/dev/null 2>&1; then
+  echo -e "      \\033[1;31m✗ setsid is missing; install it with 'pkg install util-linux' and retry.\\033[0m"
+  exit 1
+fi
+LAUNCHER_LOG="$HOME/.pebbleafk-launcher.log"
+nohup setsid bash start.sh "$1" "$2" >> "$LAUNCHER_LOG" 2>&1 < /dev/null &
+echo -e "\\n      \\033[1;32m✓ PebbleAFK startup was launched in a detached session.\\033[0m"
+echo -e "      \\033[0;90mYou can leave this Termux prompt open or return later; monitor logs in the dashboard.\\033[0m"
+echo -e "      \\033[0;90mLauncher output: $LAUNCHER_LOG\\033[0m"
 `;
 
   return new NextResponse(script, {
