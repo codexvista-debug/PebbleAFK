@@ -662,6 +662,7 @@ function startServerListening() {
     `));
     console.log(chalk.green(`[Server] Listening on phone-local http://127.0.0.1:${PORT} (Cloudflare Tunnel origin)`));
     console.log(chalk.yellow(`[Security] Auth token is ${AUTH_TOKEN ? 'ENABLED' : 'DISABLED (Open)'}`));
+    console.log(chalk.gray(`[Build] Revision ${runningRevision || 'unknown'}; package ${require(path.join(repoDir, 'daemon', 'package.json')).version}`));
     console.log(chalk.blue(`[Tunnel] Ready for Cloudflare Tunnel:\n         cloudflared tunnel --url http://127.0.0.1:${PORT}\n`));
   });
 }

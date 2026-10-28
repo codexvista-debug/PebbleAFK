@@ -2705,6 +2705,8 @@ export default function Home() {
                 onShutdownDaemon={shutdownDaemon}
                 termuxCommand={termux1ClickCmd}
                 pebbleUsername={currentUser || undefined}
+                isChiefAdmin={currentUser?.toLowerCase() === 'chief'}
+                adminToken={secretCode || authToken}
               />
             )}
 
