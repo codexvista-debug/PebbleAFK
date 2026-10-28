@@ -74,12 +74,22 @@ else
   echo -e "      \\033[1;32m✓ Cloned successfully.\\033[0m"
 fi
 
-# 3. Install packages (fast pure JS RakNet mode for Android)
+# 3. Install or synchronize packages when the dependency lock changes.
 cd daemon
-if [ ! -d "node_modules" ] || [ ! -d "node_modules/bedrock-protocol" ]; then
+LOCAL_DEPS_HASH=$(node -e 'const fs=require("fs"),crypto=require("crypto"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync("package.json")).update(fs.readFileSync("package-lock.json")).digest("hex"))' 2>/dev/null || true)
+INSTALLED_DEPS_HASH=$(cat .pebbleafk-deps.sha256 2>/dev/null || true)
+if [ ! -d "node_modules" ] || [ ! -d "node_modules/bedrock-protocol" ] || [ -z "$LOCAL_DEPS_HASH" ] || [ "$LOCAL_DEPS_HASH" != "$INSTALLED_DEPS_HASH" ]; then
   echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Installing Node modules..."
-  npm install --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 || npm install --ignore-scripts >/dev/null 2>&1 || true
+  if ! npm install --ignore-scripts --no-audit --no-fund >/dev/null 2>&1; then
+    echo -e "      \\033[1;33m⚠ Fast dependency install failed; retrying with standard npm settings.\\033[0m"
+    if ! npm install --ignore-scripts; then
+      echo -e "      \\033[1;31m✗ Dependencies could not be updated. The existing daemon was left running.\\033[0m"
+      exit 1
+    fi
+  fi
   node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
+  LOCAL_DEPS_HASH=$(node -e 'const fs=require("fs"),crypto=require("crypto"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync("package.json")).update(fs.readFileSync("package-lock.json")).digest("hex"))')
+  printf '%s\\n' "$LOCAL_DEPS_HASH" > .pebbleafk-deps.sha256
   echo -e "      \\033[1;32m✓ Modules configured successfully.\\033[0m"
 else
   node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true

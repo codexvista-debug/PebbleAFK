@@ -58,18 +58,18 @@ function getBedrockSupportedVersions(): { versions: Record<string, number>; curr
   try {
     const opts = (eval('require'))('bedrock-protocol/src/options');
     if (opts && opts.Versions) {
-      const def = opts.defaultVersion || '1.26.30';
+      const def = opts.defaultVersion || opts.CURRENT_VERSION || '1.26.51';
       return { versions: opts.Versions, currentVersion: def };
     }
   } catch (_) {}
-  return { versions: { '1.21.50': 766, '1.26.30': 770, '1.26.51': 2193 }, currentVersion: '1.26.30' };
+  return { versions: { '1.21.50': 766, '1.26.30': 770, '1.26.51': 2193, '1.26.60': 2225 }, currentVersion: '1.26.60' };
 }
 
 // Persistent memory cache of verified working Bedrock versions per host
 const SERVER_VERSION_CACHE: Map<string, string> = new Map([
   ['donutsmp.net', '1.26.51'],
-  ['freshsmp.fun', '1.26.51'],
-  ['play.freshsmp.fun', '1.26.51'],
+  ['freshsmp.fun', '1.26.60'],
+  ['play.freshsmp.fun', '1.26.60'],
 ]);
 const SERVER_ENDPOINT_CURSORS = new Map<string, number>();
 // Once a Bedrock edge has completed the full game handshake, prefer that edge
@@ -165,8 +165,8 @@ function resolveBedrockTargetVersion(
 
   // Known server fallback for cases where the Bedrock UDP ping is unavailable.
   if (cleanHost.includes('freshsmp')) {
-    SERVER_VERSION_CACHE.set(cleanHost, '1.26.51');
-    return { version: '1.26.51', isFallback: false, note: 'Auto-detected FreshSMP Bedrock protocol (1.26.51)' };
+    SERVER_VERSION_CACHE.set(cleanHost, '1.26.60');
+    return { version: '1.26.60', isFallback: false, note: 'Using FreshSMP HTTPS-advertised Bedrock protocol (1.26.60)' };
   }
   if (cleanHost.includes('donutsmp')) {
     SERVER_VERSION_CACHE.set(cleanHost, '1.26.51');
@@ -633,7 +633,7 @@ export class PebbleBotInstance {
               transport: 'nethernet',
               host: cleanHost,
               port: cleanPort,
-              timeout: 8_000,
+              timeout: 15_000,
               nethernet: { signalling: 'http', url: freshSmpSignallingUrl },
             });
             pingRes = response;
