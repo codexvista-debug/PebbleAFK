@@ -121,7 +121,7 @@ is_managed_pid() {
   [ "$process_dir" = "$DAEMON_DIR" ] || return 1
   process_cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
   case "$process_cmd" in
-    *"start.sh"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"npm run start"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*|*"prepare-mobile-raknet.sh"*|*"cmake-js"*) return 0 ;;
+    *"start.sh"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"npm run start"*|*"dist/index.js"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*|*"prepare-mobile-raknet.sh"*|*"cmake-js"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -242,10 +242,6 @@ run_daemon_loop() {
   trap 'stop_daemon_child; exit 0' TERM INT
   RESTART_DELAY=2
   while true; do
-    # Clear dead lingering socket on 8080 before launching child
-    if command -v fuser &>/dev/null; then
-      fuser -k 8080/tcp 2>/dev/null || true
-    fi
     ./node_modules/.bin/tsx src/index.ts >> daemon.log 2>&1 &
     DAEMON_CHILD_PID=$!
     echo "$DAEMON_CHILD_PID" > "$DAEMON_PID_FILE"
@@ -259,11 +255,8 @@ run_daemon_loop() {
       continue
     fi
     if [ "$EXIT_CODE" -eq 43 ]; then
-      echo -e "\n[$(date +%T)] ⚠️ Port 8080 conflict detected. Releasing port and retrying in 3s..." >> daemon.log
-      if command -v fuser &>/dev/null; then
-        fuser -k 8080/tcp 2>/dev/null || true
-      fi
-      sleep 3
+      echo -e "\n[$(date +%T)] ⚠️ Port 8080 is still occupied. PebbleAFK will retry without stopping an unrelated process; check for another daemon copy if this repeats." >> daemon.log
+      sleep 10
       RESTART_DELAY=2
       continue
     fi

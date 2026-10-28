@@ -130,7 +130,7 @@ stop_legacy_pebbleafk() {
     [ "$proc_cwd" = "$daemon_path" ] || continue
     proc_cmd=$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)
     case "$proc_cmd" in
-      *"start.sh"*|*"npm run start"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*)
+      *"start.sh"*|*"npm run start"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"dist/index.js"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*)
         echo "      Stopping legacy PebbleAFK process $pid ($proc_cmd)"
         kill -KILL "$pid" 2>/dev/null || true
         ;;
