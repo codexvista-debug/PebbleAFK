@@ -1397,6 +1397,82 @@ button:hover .mc-nav-mini-block,
   background: linear-gradient(180deg, #514b44, #302d29) !important;
 }
 
+/* Bedrock gateway reachability pill (NetherNet TLS/HTTP + RakNet UDP) */
+.mc-gateway-pill {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  border: 1px solid #574f46;
+  border-bottom: 3px solid #1b1916;
+  background: linear-gradient(180deg, #38342f, #2b2824);
+  color: #f3ede4;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.08), 0 2px 0 rgba(0, 0, 0, 0.26);
+}
+
+.mc-gateway-pill--online {
+  border-color: #559e49 !important;
+  border-bottom-color: #1c3d1e !important;
+  background: linear-gradient(180deg, #2b472e, #203523) !important;
+  color: #e9ffe0 !important;
+}
+
+.mc-gateway-pill--checking {
+  border-color: #5e564d !important;
+  border-bottom-color: #1c1917 !important;
+  background: linear-gradient(180deg, #393530, #2b2825) !important;
+  color: #dfd7cc !important;
+}
+
+.mc-gateway-pill--warning {
+  border-color: #a87b34 !important;
+  border-bottom-color: #2f210d !important;
+  background: linear-gradient(180deg, #47361e, #312515) !important;
+  color: #ffefd1 !important;
+}
+
+.mc-gateway-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: inherit;
+  white-space: nowrap;
+}
+
+.mc-gateway-refresh {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: inherit;
+  cursor: pointer;
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+
+.mc-gateway-refresh:hover:not(:disabled) {
+  filter: brightness(1.2);
+  transform: translateY(-1px);
+}
+
+.mc-gateway-refresh:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 @media (max-width: 639px) {
   .mc-status-strip {
     flex-wrap: nowrap;

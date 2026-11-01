@@ -37,7 +37,7 @@ export function FreshSmpDiagnosticsPage({ servers, accounts, diagnostics, botSta
           </div>
         </div>
         <div className="mt-4 grid gap-2 sm:grid-cols-3">
-          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><Radio className="inline w-4 h-4 mr-2 text-sky-500" />RakNet login and world spawn</div>
+          <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><Radio className="inline w-4 h-4 mr-2 text-sky-500" />NetherNet login and world spawn</div>
           <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><ShieldAlert className="inline w-4 h-4 mr-2 text-amber-500" />Resource-pack exchange observations</div>
           <div className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 text-xs font-bold text-slate-700"><Clock3 className="inline w-4 h-4 mr-2 text-rose-500" />Silent attempts checked at 60 seconds · repeated failures escalate</div>
         </div>

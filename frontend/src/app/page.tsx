@@ -1106,25 +1106,82 @@ export default function Home() {
     setStablePayUsernameDraft(activeServer?.settings?.stablePayUsername || '');
   }, [activeServer?.id, activeServer?.settings?.stablePayUsername]);
 
-  const [gatewayStatus, setGatewayStatus] = useState<{ online: boolean; checking: boolean; version?: string } | null>(null);
+  const gatewayProbeAbortRef = useRef<AbortController | null>(null);
+  const [gatewayStatus, setGatewayStatus] = useState<{
+    online: boolean;
+    checking: boolean;
+    transport?: 'nethernet' | 'raknet';
+    signalling?: 'https' | 'http' | null;
+    version?: string | null;
+    protocol?: number | null;
+    motd?: string | null;
+    levelName?: string | null;
+    players?: { online: number; max: number } | null;
+  } | null>(null);
 
-  useEffect(() => {
+  const probeActiveServerGateway = useCallback((silent = false) => {
+    if (gatewayProbeAbortRef.current) {
+      gatewayProbeAbortRef.current.abort();
+      gatewayProbeAbortRef.current = null;
+    }
     if (!activeServer?.serverHost) {
       setGatewayStatus(null);
       return;
     }
-    setGatewayStatus({ online: true, checking: true });
+    const controller = new AbortController();
+    gatewayProbeAbortRef.current = controller;
     const cleanH = activeServer.serverHost.trim();
     const cleanP = activeServer.serverPort || 19132;
-    fetch(`/api/check-bedrock?host=${encodeURIComponent(cleanH)}&port=${encodeURIComponent(cleanP)}`)
+
+    setGatewayStatus((prev) =>
+      silent && prev
+        ? { ...prev, checking: true }
+        : { online: false, checking: true }
+    );
+
+    fetch(`/api/check-bedrock?host=${encodeURIComponent(cleanH)}&port=${encodeURIComponent(cleanP)}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
       .then((r) => r.json())
       .then((d) => {
-        setGatewayStatus({ online: Boolean(d.online), checking: false, version: d.version });
+        if (controller.signal.aborted) return;
+        setGatewayStatus({
+          online: Boolean(d.online),
+          checking: false,
+          transport: d.transport,
+          signalling: d.signalling ?? null,
+          version: d.version ?? null,
+          protocol: d.protocol ?? null,
+          motd: d.motd ?? null,
+          levelName: d.levelName ?? null,
+          players: d.players ?? null,
+        });
       })
       .catch(() => {
-        setGatewayStatus({ online: true, checking: false });
+        if (controller.signal.aborted) return;
+        setGatewayStatus((prev) => ({
+          ...(prev || { online: false }),
+          checking: false,
+        }));
       });
   }, [activeServer?.id, activeServer?.serverHost, activeServer?.serverPort]);
+
+  useEffect(() => {
+    probeActiveServerGateway(false);
+    const interval = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        probeActiveServerGateway(true);
+      }
+    }, 45_000);
+    return () => {
+      clearInterval(interval);
+      if (gatewayProbeAbortRef.current) {
+        gatewayProbeAbortRef.current.abort();
+        gatewayProbeAbortRef.current = null;
+      }
+    };
+  }, [probeActiveServerGateway]);
 
   // Save server profile to state & Supabase
   const handleSaveServer = async (profile: ServerProfile) => {
@@ -1467,11 +1524,12 @@ export default function Home() {
               'success'
             );
           } else if (st === 'CONNECTING' || st === 'RECONNECTING') {
+            const transportLabel = srv.serverHost.toLowerCase().includes('freshsmp') ? 'NetherNet' : 'RakNet';
             addPlayerLog(
               ign,
               srv.serverHost,
               'connecting',
-              `Attempting RakNet connection to ${srv.serverHost}:${srv.serverPort || 19132}...`,
+              `Attempting ${transportLabel} connection to ${srv.serverHost}:${srv.serverPort || 19132}...`,
               undefined,
               'info'
             );
@@ -2790,23 +2848,88 @@ export default function Home() {
                           </div>
                         </div>
 
-                        {/* Bedrock UDP Gateway Status Alert */}
-                        {gatewayStatus && !gatewayStatus.checking && !gatewayStatus.online && (
-                          <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 text-xs flex items-start gap-2.5 shadow-2xs">
-                            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                            <div className="space-y-0.5">
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold">Bedrock status probe got no reply: {activeServer.serverHost}:{activeServer.serverPort || 19132}</span>
-                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-200">Unverified</span>
+                        {/* Bedrock Gateway Status Pill (NetherNet TLS/HTTP + RakNet UDP) */}
+                        {gatewayStatus && (() => {
+                          const serverEndpoint = `${activeServer.serverHost}:${activeServer.serverPort || 19132}`;
+                          const isOnlineByProbe = Boolean(gatewayStatus.online);
+                          const isOnlineByBots = !isOnlineByProbe && !gatewayStatus.checking && connectedAccountCount > 0;
+                          const isInitialChecking = gatewayStatus.checking && !isOnlineByProbe && connectedAccountCount === 0;
+                          const pillVariant = isOnlineByProbe || isOnlineByBots
+                            ? 'mc-gateway-pill--online'
+                            : isInitialChecking
+                              ? 'mc-gateway-pill--checking'
+                              : 'mc-gateway-pill--warning';
+                          const transportBadge = isOnlineByProbe
+                            ? gatewayStatus.transport === 'nethernet'
+                              ? gatewayStatus.signalling === 'http'
+                                ? 'NetherNet HTTP'
+                                : 'NetherNet TLS'
+                              : 'RakNet UDP'
+                            : isOnlineByBots
+                              ? 'Live Bot Session'
+                              : isInitialChecking
+                                ? 'NetherNet / RakNet'
+                                : 'Unverified';
+                          const cleanVersion = gatewayStatus.version
+                            ? `v${String(gatewayStatus.version).replace(/^v/i, '')}`
+                            : null;
+
+                          return (
+                            <div className={`mc-gateway-pill ${pillVariant}`} role="status" aria-live="polite">
+                              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                {isOnlineByProbe || isOnlineByBots ? (
+                                  <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(74,222,128,0.85)] shrink-0" />
+                                ) : isInitialChecking ? (
+                                  <RefreshCw className="w-3.5 h-3.5 text-amber-300 animate-spin shrink-0" />
+                                ) : (
+                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                                )}
+                                <span className="font-extrabold tracking-tight">
+                                  {isOnlineByProbe
+                                    ? 'Bedrock Gateway Online'
+                                    : isOnlineByBots
+                                      ? 'Bedrock Gateway Reachable'
+                                      : isInitialChecking
+                                        ? 'Probing Bedrock gateway'
+                                        : 'Bedrock status probe got no reply'}
+                                </span>
+                                <span className="opacity-50 hidden sm:inline">·</span>
+                                <span className="font-mono text-[11px] opacity-90 truncate">{serverEndpoint}</span>
                               </div>
-                              <p className="text-[11px] text-amber-800 leading-relaxed">
-                                {connectedAccountCount > 0
-                                  ? `${connectedAccountCount} account${connectedAccountCount === 1 ? ' is' : 's are'} currently connected, so this public ping result does not indicate a global outage. A Lifesteal timeout is an account-specific subserver transfer/queue failure; check that account's logs.`
-                                  : 'A third-party public status check did not receive a Bedrock ping response. Some servers filter status probes, so this alone cannot confirm an outage; verify with an account connection and its daemon logs.'}
-                              </p>
+
+                              <div className="flex items-center gap-1.5 flex-wrap ml-auto">
+                                <span className="mc-gateway-badge">{transportBadge}</span>
+                                {isOnlineByProbe && cleanVersion && (
+                                  <span className="mc-gateway-badge">{cleanVersion}</span>
+                                )}
+                                {isOnlineByProbe && gatewayStatus.players && (
+                                  <span className="mc-gateway-badge tabular-nums">
+                                    {gatewayStatus.players.online.toLocaleString()}
+                                    {gatewayStatus.players.max > 0 ? ` / ${gatewayStatus.players.max.toLocaleString()}` : ''} online
+                                  </span>
+                                )}
+                                {isOnlineByBots && (
+                                  <span className="mc-gateway-badge tabular-nums">
+                                    {connectedAccountCount} {connectedAccountCount === 1 ? 'account' : 'accounts'} connected
+                                  </span>
+                                )}
+                                {!isOnlineByProbe && !isOnlineByBots && !isInitialChecking && (
+                                  <span className="mc-gateway-badge opacity-85">NetherNet + RakNet</span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => probeActiveServerGateway(true)}
+                                  disabled={gatewayStatus.checking}
+                                  className="mc-gateway-refresh"
+                                  title="Re-check Bedrock gateway status"
+                                  aria-label="Re-check Bedrock gateway status"
+                                >
+                                  <RefreshCw className={`w-3 h-3 ${gatewayStatus.checking ? 'animate-spin' : ''}`} />
+                                </button>
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
 
                         {/* Accounts List for this Server Profile (Responsive Mobile Cards + Desktop Table) */}
                         <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
@@ -3986,8 +4109,9 @@ export default function Home() {
                                   className="w-full px-3.5 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 cursor-pointer appearance-none"
                                 >
                                   <option value="auto">Auto Detect (server ping)</option>
-                                  <option value="1.26.30">1.26.30 (Bedrock 26.x)</option>
+                                  <option value="1.26.60">1.26.60 (Bedrock 26.60)</option>
                                   <option value="1.26.51">1.26.51 (Bedrock Preview)</option>
+                                  <option value="1.26.30">1.26.30 (Bedrock 26.x)</option>
                                   <option value="1.21.50">1.21.50 (Bedrock 1.21 Stable)</option>
                                   <option value="1.21.40">1.21.40</option>
                                   <option value="1.21.30">1.21.30</option>
