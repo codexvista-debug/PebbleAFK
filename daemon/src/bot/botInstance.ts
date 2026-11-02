@@ -70,6 +70,9 @@ const SERVER_VERSION_CACHE: Map<string, string> = new Map([
   ['donutsmp.net', '1.26.51'],
   ['freshsmp.fun', '1.26.60'],
   ['play.freshsmp.fun', '1.26.60'],
+  ['beyondmc.net', '1.26.60'],
+  ['play.beyondmc.net', '1.26.60'],
+  ['bedrock.beyondmc.net', '1.26.60'],
 ]);
 const SERVER_ENDPOINT_CURSORS = new Map<string, number>();
 // Once a Bedrock edge has completed the full game handshake, prefer that edge
@@ -171,6 +174,10 @@ function resolveBedrockTargetVersion(
   if (cleanHost.includes('donutsmp')) {
     SERVER_VERSION_CACHE.set(cleanHost, '1.26.51');
     return { version: '1.26.51', isFallback: false, note: 'Auto-detected DonutSMP Bedrock protocol (1.26.51)' };
+  }
+  if (cleanHost.includes('beyondmc')) {
+    SERVER_VERSION_CACHE.set(cleanHost, '1.26.60');
+    return { version: '1.26.60', isFallback: false, note: 'Auto-detected BeyondMC Bedrock protocol (1.26.60)' };
   }
 
   return {

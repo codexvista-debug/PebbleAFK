@@ -24,7 +24,9 @@ export const ServerLogo: React.FC<ServerLogoProps> = ({
     ? '/nav/server-freshsmp.png'
     : serverIdentity.includes('donut')
       ? '/nav/server-donut.png'
-      : null;
+      : serverIdentity.includes('beyond')
+        ? '/nav/server-beyond.png'
+        : null;
 
   useEffect(() => {
     setUseFallback(false);

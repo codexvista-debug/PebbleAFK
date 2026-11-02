@@ -1187,9 +1187,18 @@ export default function Home() {
   const handleSaveServer = async (profile: ServerProfile) => {
     const existingProfile = servers.find((server) => server.id === profile.id);
     const normalizedHost = (host: string) => host.trim().toLowerCase().replace(/\.$/, '');
-    const supportedHosts = new Set(['play.freshsmp.fun', 'bedrock.donutsmp.net']);
+    const supportedHosts = new Set([
+      'play.freshsmp.fun',
+      'freshsmp.fun',
+      'bedrock.donutsmp.net',
+      'donutsmp.net',
+      'play.donutsmp.net',
+      'beyondmc.net',
+      'play.beyondmc.net',
+      'bedrock.beyondmc.net',
+    ]);
     if (!existingProfile && !supportedHosts.has(normalizedHost(profile.serverHost))) {
-      throw new Error('Only FreshSMP and DonutSMP profiles can be created right now.');
+      throw new Error('Only FreshSMP, DonutSMP, and BeyondMC profiles can be created right now.');
     }
     const duplicate = servers.find((server) => server.id !== profile.id && (
       normalizedHost(server.serverHost) === normalizedHost(profile.serverHost) ||

@@ -39,6 +39,7 @@ const BEDROCK_VERSIONS = [
 const POPULAR_BEDROCK_SETUPS = [
   { name: 'FreshSMP', host: 'play.freshsmp.fun', port: 19132, version: 'auto' },
   { name: 'DonutSMP', host: 'bedrock.donutsmp.net', port: 19132, version: 'auto' },
+  { name: 'BeyondMC', host: 'beyondmc.net', port: 19132, version: 'auto' },
 ];
 
 const normalizeHost = (host: string) => host.trim().toLowerCase().replace(/\.$/, '');
@@ -84,12 +85,22 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
 
   if (!isOpen) return null;
 
-  const selectedSetup = POPULAR_BEDROCK_SETUPS.find((setup) => normalizeHost(setup.host) === normalizeHost(serverHost));
+  const selectedSetup = POPULAR_BEDROCK_SETUPS.find((setup) => {
+    const normSetup = normalizeHost(setup.host);
+    const normInput = normalizeHost(serverHost);
+    if (normSetup === normInput) return true;
+    if (setup.name === 'BeyondMC' && (normInput === 'beyondmc.net' || normInput === 'play.beyondmc.net' || normInput === 'bedrock.beyondmc.net')) return true;
+    if (setup.name === 'DonutSMP' && (normInput === 'donutsmp.net' || normInput === 'bedrock.donutsmp.net' || normInput === 'play.donutsmp.net')) return true;
+    if (setup.name === 'FreshSMP' && (normInput === 'freshsmp.fun' || normInput === 'play.freshsmp.fun')) return true;
+    return false;
+  });
   const legacyProfile = Boolean(initialProfile && !selectedSetup);
   const isSetupAlreadyAdded = (setup: typeof POPULAR_BEDROCK_SETUPS[number]) => serverProfiles.some((profile) =>
     profile.id !== initialProfile?.id && (
       normalizeHost(profile.serverHost) === normalizeHost(setup.host) ||
-      (profile.name || '').trim().toLowerCase() === setup.name.toLowerCase()
+      (profile.name || '').trim().toLowerCase() === setup.name.toLowerCase() ||
+      (setup.name === 'BeyondMC' && (normalizeHost(profile.serverHost) === 'beyondmc.net' || normalizeHost(profile.serverHost) === 'play.beyondmc.net' || normalizeHost(profile.serverHost) === 'bedrock.beyondmc.net')) ||
+      (setup.name === 'DonutSMP' && (normalizeHost(profile.serverHost) === 'donutsmp.net' || normalizeHost(profile.serverHost) === 'play.donutsmp.net' || normalizeHost(profile.serverHost) === 'bedrock.donutsmp.net'))
     )
   );
 
@@ -97,7 +108,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
     e.preventDefault();
     setFormError('');
     if (!selectedSetup) {
-      setFormError('Only FreshSMP and DonutSMP profiles are supported right now.');
+      setFormError('Only FreshSMP, DonutSMP, and BeyondMC profiles are supported right now.');
       return;
     }
 
@@ -159,7 +170,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
               {isEditing ? 'Edit Server Profile' : 'Add a server'}
             </h2>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              For now, profiles are limited to FreshSMP and DonutSMP, with one profile per server.
+              For now, profiles are limited to FreshSMP, DonutSMP, and BeyondMC, with one profile per server.
             </p>
           </div>
           <button
@@ -184,7 +195,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
                 required
                 value={serverHost}
                 readOnly
-                placeholder="Choose FreshSMP or DonutSMP"
+                placeholder="Choose FreshSMP, DonutSMP, or BeyondMC"
                 className="flex-1 bg-white border border-slate-200 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/10 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 font-medium focus:outline-none transition shadow-2xs"
               />
               <button
@@ -230,7 +241,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
             </div>
           </div>
 
-          {legacyProfile && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">This existing profile is outside the current FreshSMP/DonutSMP test scope. Delete it before creating a supported profile.</p>}
+          {legacyProfile && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">This existing profile is outside the current FreshSMP/DonutSMP/BeyondMC test scope. Delete it before creating a supported profile.</p>}
           {formError && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-700">{formError}</p>}
 
           {/* 2-Column: Bedrock Version & Fixed Bedrock Port */}
