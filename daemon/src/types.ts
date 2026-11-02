@@ -18,6 +18,7 @@ export interface BotSettings {
   subserverJoinCommand?: string;
   subserverJoinCommandDelay?: number;
   stableRewardEnabled?: boolean;
+  stableRewardCommand?: string;
   stablePayEnabled?: boolean;
   stablePayUsername?: string;
 }

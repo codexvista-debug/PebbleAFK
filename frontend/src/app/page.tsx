@@ -59,7 +59,7 @@ import { ServerLogo } from '@/components/ServerLogo';
 import { RelativeTime } from '@/components/RelativeTime';
 import { MinecraftText } from '@/components/MinecraftText';
 import { DaemonRun, useDaemonSocket } from '@/lib/useDaemonSocket';
-import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType, MAX_BEDROCK_ACCOUNTS, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS } from '@/types';
+import { BedrockAccount, ServerProfile, BotSettings, ChatMessage, BotLifecycleState, PlayerLogEntry, PlayerLogType, MAX_BEDROCK_ACCOUNTS, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS, BEYONDMC_DEFAULT_BOT_SETTINGS } from '@/types';
 
 const getPlayerSkinHeadUrl = (name: string, size = 32) => {
   const clean = (name || 'Steve').replace(/^@/, '').trim();
@@ -358,6 +358,9 @@ export default function Home() {
   const [chatSourceTooltipId, setChatSourceTooltipId] = useState<string | null>(null);
   const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const [isChatAccountDropdownOpen, setIsChatAccountDropdownOpen] = useState(false);
+  const [joinCommandDraft, setJoinCommandDraft] = useState('');
+  const [subserverJoinCommandDraft, setSubserverJoinCommandDraft] = useState('');
+  const [scheduledCommandDraft, setScheduledCommandDraft] = useState('');
   const [stablePayUsernameDraft, setStablePayUsernameDraft] = useState('');
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -1096,15 +1099,115 @@ export default function Home() {
   // Active selected server profile
   const activeServer = servers.find((s) => s.id === activeServerId) || servers[0] || null;
   const activeServerIsFreshSmp = Boolean(activeServer && /freshsmp/i.test(`${activeServer.name} ${activeServer.serverHost}`));
-  const subserverJoinCommandEnabled = activeServer?.settings?.subserverJoinCommandEnabled ?? activeServerIsFreshSmp;
-  const subserverJoinCommand = activeServer?.settings?.subserverJoinCommand ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommand : DEFAULT_BOT_SETTINGS.subserverJoinCommand);
-  const subserverJoinCommandDelay = activeServer?.settings?.subserverJoinCommandDelay ?? (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay : DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay);
-  const stableRewardEnabled = activeServer?.settings?.stableRewardEnabled ?? activeServerIsFreshSmp;
+  const activeServerIsBeyondMc = Boolean(activeServer && /beyondmc/i.test(`${activeServer.name} ${activeServer.serverHost}`));
+  const activeServerHasLifesteal = activeServerIsFreshSmp || activeServerIsBeyondMc;
+  const subserverJoinCommandEnabled = activeServer?.settings?.subserverJoinCommandEnabled ?? activeServerHasLifesteal;
+  const subserverJoinCommand = activeServer?.settings?.subserverJoinCommand ?? (
+    activeServerIsBeyondMc
+      ? BEYONDMC_DEFAULT_BOT_SETTINGS.subserverJoinCommand
+      : (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommand : DEFAULT_BOT_SETTINGS.subserverJoinCommand)
+  );
+  const subserverJoinCommandDelay = activeServer?.settings?.subserverJoinCommandDelay ?? (
+    activeServerIsBeyondMc
+      ? BEYONDMC_DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay
+      : (activeServerIsFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay : DEFAULT_BOT_SETTINGS.subserverJoinCommandDelay)
+  );
+  const stableRewardEnabled = activeServer?.settings?.stableRewardEnabled ?? (activeServerIsFreshSmp ? true : false);
   const stablePayEnabled = activeServer?.settings?.stablePayEnabled ?? false;
 
   useEffect(() => {
-    setStablePayUsernameDraft(activeServer?.settings?.stablePayUsername || '');
-  }, [activeServer?.id, activeServer?.settings?.stablePayUsername]);
+    if (!activeServer) {
+      setJoinCommandDraft('');
+      setSubserverJoinCommandDraft('');
+      setScheduledCommandDraft('');
+      setStablePayUsernameDraft('');
+      return;
+    }
+    const isBeyond = /beyondmc/i.test(`${activeServer.name} ${activeServer.serverHost}`);
+    const isFresh = /freshsmp/i.test(`${activeServer.name} ${activeServer.serverHost}`);
+    setJoinCommandDraft(activeServer.settings?.joinCommand ?? ((isBeyond || isFresh) ? '/lifesteal' : ''));
+    setSubserverJoinCommandDraft(
+      activeServer.settings?.subserverJoinCommand ?? (isBeyond ? '/afk' : (isFresh ? '/warp afk' : ''))
+    );
+    setScheduledCommandDraft(
+      activeServer.settings?.stableRewardCommand ?? (isFresh ? '/afkrewards spin' : '')
+    );
+    setStablePayUsernameDraft(activeServer.settings?.stablePayUsername || '');
+  }, [activeServer?.id]);
+
+  useEffect(() => {
+    if (!activeServer) return;
+    const t = setTimeout(() => {
+      const cur = activeServer.settings?.joinCommand ?? '';
+      if (joinCommandDraft !== cur) {
+        handleUpdateServerSetting('joinCommand', joinCommandDraft);
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [joinCommandDraft, activeServer?.id]);
+
+  useEffect(() => {
+    if (!activeServer) return;
+    const t = setTimeout(() => {
+      const cur = activeServer.settings?.subserverJoinCommand ?? '';
+      if (subserverJoinCommandDraft !== cur) {
+        handleUpdateServerSetting('subserverJoinCommand', subserverJoinCommandDraft);
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [subserverJoinCommandDraft, activeServer?.id]);
+
+  useEffect(() => {
+    if (!activeServer) return;
+    const t = setTimeout(() => {
+      const cur = activeServer.settings?.stableRewardCommand ?? '';
+      if (scheduledCommandDraft !== cur) {
+        handleUpdateServerSetting('stableRewardCommand', scheduledCommandDraft);
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [scheduledCommandDraft, activeServer?.id]);
+
+  useEffect(() => {
+    if (!activeServer) return;
+    const t = setTimeout(() => {
+      const cleanUsername = stablePayUsernameDraft.trim().replace(/^@/, '');
+      const cur = activeServer.settings?.stablePayUsername ?? '';
+      if (cleanUsername !== cur) {
+        handleUpdateServerSetting('stablePayUsername', cleanUsername);
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [stablePayUsernameDraft, activeServer?.id]);
+
+  const commitJoinCommand = (val: string) => {
+    if (!activeServer) return;
+    if (val !== (activeServer.settings?.joinCommand ?? '')) {
+      handleUpdateServerSetting('joinCommand', val);
+    }
+  };
+
+  const commitSubserverJoinCommand = (val: string) => {
+    if (!activeServer) return;
+    if (val !== (activeServer.settings?.subserverJoinCommand ?? '')) {
+      handleUpdateServerSetting('subserverJoinCommand', val);
+    }
+  };
+
+  const commitScheduledCommand = (val: string) => {
+    if (!activeServer) return;
+    if (val !== (activeServer.settings?.stableRewardCommand ?? '')) {
+      handleUpdateServerSetting('stableRewardCommand', val);
+    }
+  };
+
+  const commitStablePayUsername = (val: string) => {
+    if (!activeServer) return;
+    const clean = val.trim().replace(/^@/, '');
+    if (clean !== (activeServer.settings?.stablePayUsername ?? '')) {
+      handleUpdateServerSetting('stablePayUsername', clean);
+    }
+  };
 
   const gatewayProbeAbortRef = useRef<AbortController | null>(null);
   const [gatewayStatus, setGatewayStatus] = useState<{
@@ -1257,8 +1360,9 @@ export default function Home() {
   const handleUpdateServerSettings = (partialSettings: Partial<BotSettings>) => {
     if (!activeServer) return;
     const isFreshSmp = /freshsmp/i.test(activeServer.name) || /(?:^|\.)freshsmp\.fun$/i.test(activeServer.serverHost);
+    const isBeyondMc = /beyondmc/i.test(activeServer.name) || /(?:^|\.)beyondmc\.net$/i.test(activeServer.serverHost);
     const updatedSettings: BotSettings = {
-      ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
+      ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : (isBeyondMc ? BEYONDMC_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS)),
       ...(activeServer.settings || {}),
       ...partialSettings,
     };
@@ -1457,11 +1561,12 @@ export default function Home() {
       'info'
     );
     const isFreshSmp = /freshsmp/i.test(srv.serverHost) || /freshsmp/i.test(srv.name);
+    const isBeyondMc = /beyondmc/i.test(srv.serverHost) || /beyondmc/i.test(srv.name);
     const effectiveSettings: BotSettings = {
-      ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
+      ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : (isBeyondMc ? BEYONDMC_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS)),
       ...(srv.settings || {}),
     };
-    if (isFreshSmp) {
+    if (isFreshSmp || isBeyondMc) {
       effectiveSettings.joinCommandEnabled = true;
       if (!effectiveSettings.joinCommand) effectiveSettings.joinCommand = '/lifesteal';
       if (!effectiveSettings.joinCommandDelay || effectiveSettings.joinCommandDelay < 8) {
@@ -3004,11 +3109,11 @@ export default function Home() {
                                     : srvTel && typeof srvTel.connectedAt === 'number' && srvTel.connectedAt > 0
                                     ? Math.max(0, Math.floor((nowTick - srvTel.connectedAt) / 1000))
                                     : 0;
-                                const freshSmpDiagnostic = activeServerIsFreshSmp ? freshSmpDiagnostics[botId] : undefined;
+                                const freshSmpDiagnostic = activeServerHasLifesteal ? freshSmpDiagnostics[botId] : undefined;
                                 const lifestealStartedAt = freshSmpDiagnostic?.lifestealSessionStartedAt;
                                 const isFreshSmpStable = Boolean(isConnected && freshSmpDiagnostic?.phase === 'lifesteal' &&
                                   typeof lifestealStartedAt === 'number' && nowTick - lifestealStartedAt >= 60_000);
-                                const accountUptime = activeServerIsFreshSmp
+                                const accountUptime = activeServerHasLifesteal
                                   ? (isFreshSmpStable && typeof lifestealStartedAt === 'number' ? Math.floor((nowTick - lifestealStartedAt - 60_000) / 1000) : 0)
                                   : ((daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0);
 
@@ -3098,13 +3203,13 @@ export default function Home() {
                                           className="inline-flex items-center cursor-pointer active:scale-95 transition"
                                           title={isConnected ? 'Click to disconnect' : 'Click to connect'}
                                         >
-                                          {activeServerIsFreshSmp && isConnected
+                                          {activeServerHasLifesteal && isConnected
                                             ? getFreshSmpStatusBadge(isFreshSmpStable, freshSmpDiagnostic?.phase)
                                             : getStatusBadge(botState as BotLifecycleState)}
                                         </button>
 
                                         {/* Live Uptime */}
-                                        {isConnected && (!activeServerIsFreshSmp || isFreshSmpStable) ? (
+                                        {isConnected && (!activeServerHasLifesteal || isFreshSmpStable) ? (
                                           <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-mono text-[11px] font-bold">
                                             <Clock className="w-3 h-3 text-emerald-600 shrink-0" />
                                             <span>{formatUptime(accountUptime)}</span>
@@ -3192,11 +3297,11 @@ export default function Home() {
                                         : srvTel && typeof srvTel.connectedAt === 'number' && srvTel.connectedAt > 0
                                         ? Math.max(0, Math.floor((nowTick - srvTel.connectedAt) / 1000))
                                         : 0;
-                                    const freshSmpDiagnostic = activeServerIsFreshSmp ? freshSmpDiagnostics[botId] : undefined;
+                                    const freshSmpDiagnostic = activeServerHasLifesteal ? freshSmpDiagnostics[botId] : undefined;
                                     const lifestealStartedAt = freshSmpDiagnostic?.lifestealSessionStartedAt;
                                     const isFreshSmpStable = Boolean(isConnected && freshSmpDiagnostic?.phase === 'lifesteal' &&
                                       typeof lifestealStartedAt === 'number' && nowTick - lifestealStartedAt >= 60_000);
-                                    const accountUptime = activeServerIsFreshSmp
+                                    const accountUptime = activeServerHasLifesteal
                                       ? (isFreshSmpStable && typeof lifestealStartedAt === 'number' ? Math.floor((nowTick - lifestealStartedAt - 60_000) / 1000) : 0)
                                       : ((daemonStatus === 'AUTHENTICATED' && isConnected) ? Math.max(daemonUptime, localSec) : 0);
 
@@ -3280,13 +3385,13 @@ export default function Home() {
                                                 : `Offline • Click to connect @${acc.ign || acc.username}`
                                             }
                                           >
-                                            {activeServerIsFreshSmp && isConnected
+                                            {activeServerHasLifesteal && isConnected
                                               ? getFreshSmpStatusBadge(isFreshSmpStable, freshSmpDiagnostic?.phase)
                                               : getStatusBadge(botState as BotLifecycleState)}
                                           </button>
                                         </td>
                                         <td className="p-3">
-                                          {isConnected && (!activeServerIsFreshSmp || isFreshSmpStable) ? (
+                                          {isConnected && (!activeServerHasLifesteal || isFreshSmpStable) ? (
                                             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-mono text-xs font-bold shadow-2xs">
                                               <Clock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                                               <span>{formatUptime(accountUptime)}</span>
@@ -4222,19 +4327,23 @@ export default function Home() {
                               <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
                                 <input
                                   type="text"
-                                  value={activeServer.settings?.joinCommand ?? ''}
-                                  onChange={(e) => handleUpdateServerSetting('joinCommand', e.target.value)}
+                                  value={joinCommandDraft}
+                                  onChange={(e) => setJoinCommandDraft(e.target.value)}
+                                  onBlur={() => commitJoinCommand(joinCommandDraft)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') e.currentTarget.blur();
+                                  }}
                                   disabled={!(activeServer.settings?.joinCommandEnabled ?? false)}
                                   placeholder="/lifesteal"
                                   aria-label="Command to run after joining"
-                                  className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400"
+                                  className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400 font-mono"
                                 />
                                 <div className="flex shrink-0 items-center bg-slate-50 border border-slate-200 rounded-xl px-2 py-1" title="Delay after spawn">
                                   <input
                                     type="number"
                                     min={0}
                                     max={300}
-                                    value={activeServer.settings?.joinCommandDelay ?? 3}
+                                    value={activeServer.settings?.joinCommandDelay ?? (activeServerHasLifesteal ? 10 : 3)}
                                     onChange={(e) => {
                                       const seconds = Math.min(300, Math.max(0, parseInt(e.target.value, 10) || 0));
                                       handleUpdateServerSetting('joinCommandDelay', seconds);
@@ -4249,7 +4358,13 @@ export default function Home() {
                                   role="switch"
                                   aria-checked={activeServer.settings?.joinCommandEnabled ?? false}
                                   aria-label="Enable command on join"
-                                  onClick={() => handleUpdateServerSetting('joinCommandEnabled', !(activeServer.settings?.joinCommandEnabled ?? false))}
+                                  onClick={() => {
+                                    const nextEnabled = !(activeServer.settings?.joinCommandEnabled ?? false);
+                                    handleUpdateServerSettings({
+                                      joinCommandEnabled: nextEnabled,
+                                      joinCommand: joinCommandDraft.trim() || (activeServerHasLifesteal ? '/lifesteal' : '')
+                                    });
+                                  }}
                                   className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
                                     activeServer.settings?.joinCommandEnabled ? 'bg-emerald-600' : 'bg-slate-200'
                                   }`}
@@ -4263,23 +4378,27 @@ export default function Home() {
                               </div>
                             </div>
 
-                            {activeServerIsFreshSmp && (
+                            {activeServerHasLifesteal && (
                               <div className="flex flex-col gap-3 pt-3 sm:flex-row sm:items-center sm:justify-between">
                                 <div className="flex-1 pr-4">
                                   <label className="text-xs font-bold text-slate-800 block">Command on subserver join</label>
                                   <span className="text-[11px] text-slate-400 block mt-0.5">
-                                    Optional command after FreshSMP transfers the bot into Lifesteal. Delay starts after the subserver spawn.
+                                    Optional command after {activeServerIsBeyondMc ? 'BeyondMC' : 'FreshSMP'} transfers the bot into Lifesteal. Delay starts after the subserver spawn.
                                   </span>
                                 </div>
                                 <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
                                   <input
                                     type="text"
-                                    value={subserverJoinCommand}
-                                    onChange={(e) => handleUpdateServerSetting('subserverJoinCommand', e.target.value)}
+                                    value={subserverJoinCommandDraft}
+                                    onChange={(e) => setSubserverJoinCommandDraft(e.target.value)}
+                                    onBlur={() => commitSubserverJoinCommand(subserverJoinCommandDraft)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') e.currentTarget.blur();
+                                    }}
                                     disabled={!subserverJoinCommandEnabled}
-                                    placeholder="/warp afk"
+                                    placeholder={activeServerIsBeyondMc ? '/afk' : '/warp afk'}
                                     aria-label="Command to run after joining a subserver"
-                                    className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400"
+                                    className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400 font-mono"
                                   />
                                   <div className="flex shrink-0 items-center bg-slate-50 border border-slate-200 rounded-xl px-2 py-1" title="Delay after subserver spawn">
                                     <input
@@ -4301,7 +4420,13 @@ export default function Home() {
                                     role="switch"
                                     aria-checked={subserverJoinCommandEnabled}
                                     aria-label="Enable command on subserver join"
-                                    onClick={() => handleUpdateServerSetting('subserverJoinCommandEnabled', !subserverJoinCommandEnabled)}
+                                    onClick={() => {
+                                      const nextEnabled = !subserverJoinCommandEnabled;
+                                      handleUpdateServerSettings({
+                                        subserverJoinCommandEnabled: nextEnabled,
+                                        subserverJoinCommand: subserverJoinCommandDraft.trim() || (activeServerIsBeyondMc ? '/afk' : '/warp afk')
+                                      });
+                                    }}
                                     className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${subserverJoinCommandEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
                                   >
                                     <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${subserverJoinCommandEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
@@ -4310,7 +4435,7 @@ export default function Home() {
                               </div>
                             )}
 
-                            {activeServerIsFreshSmp && (
+                            {activeServerHasLifesteal && (
                               <>
                                 <div className="flex flex-col gap-3 pt-3 sm:flex-row sm:items-center sm:justify-between">
                                   <div className="flex-1 pr-4">
@@ -4319,17 +4444,33 @@ export default function Home() {
                                       Runs only while an account is stable in Lifesteal, once every 5 minutes.
                                     </span>
                                   </div>
-                                  <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-start">
-                                    <code className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-mono font-bold text-slate-700">
-                                      /afkrewards spin
-                                    </code>
+                                  <div className="flex w-full items-center gap-2 sm:w-auto sm:max-w-[440px]">
+                                    <input
+                                      type="text"
+                                      value={scheduledCommandDraft}
+                                      onChange={(e) => setScheduledCommandDraft(e.target.value)}
+                                      onBlur={() => commitScheduledCommand(scheduledCommandDraft)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') e.currentTarget.blur();
+                                      }}
+                                      disabled={!stableRewardEnabled}
+                                      placeholder={activeServerIsBeyondMc ? 'e.g. /afk or custom command' : '/afkrewards spin'}
+                                      aria-label="Scheduled command for stable accounts"
+                                      className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 disabled:bg-slate-50 disabled:text-slate-400 font-mono"
+                                    />
                                     <span className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-mono font-bold text-slate-600">5 min</span>
                                     <button
                                       type="button"
                                       role="switch"
                                       aria-checked={stableRewardEnabled}
-                                      aria-label="Enable /afkrewards spin for stable accounts"
-                                      onClick={() => handleUpdateServerSetting('stableRewardEnabled', !stableRewardEnabled)}
+                                      aria-label="Enable scheduled command for stable accounts"
+                                      onClick={() => {
+                                        const nextEnabled = !stableRewardEnabled;
+                                        handleUpdateServerSettings({
+                                          stableRewardEnabled: nextEnabled,
+                                          stableRewardCommand: scheduledCommandDraft.trim() || (activeServerIsFreshSmp ? '/afkrewards spin' : '')
+                                        });
+                                      }}
                                       className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${stableRewardEnabled ? 'bg-emerald-600' : 'bg-slate-200'}`}
                                     >
                                       <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${stableRewardEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
@@ -4349,12 +4490,7 @@ export default function Home() {
                                       type="text"
                                       value={stablePayUsernameDraft}
                                       onChange={(event) => setStablePayUsernameDraft(event.target.value)}
-                                      onBlur={() => {
-                                        const username = stablePayUsernameDraft.trim().replace(/^@/, '');
-                                        if (username !== (activeServer.settings?.stablePayUsername || '')) {
-                                          handleUpdateServerSetting('stablePayUsername', username);
-                                        }
-                                      }}
+                                      onBlur={() => commitStablePayUsername(stablePayUsernameDraft)}
                                       onKeyDown={(event) => {
                                         if (event.key === 'Enter') event.currentTarget.blur();
                                       }}
@@ -4363,7 +4499,7 @@ export default function Home() {
                                       autoCapitalize="none"
                                       autoCorrect="off"
                                       spellCheck={false}
-                                      className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500"
+                                      className="min-w-0 flex-1 px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 font-mono"
                                     />
                                     <button
                                       type="button"

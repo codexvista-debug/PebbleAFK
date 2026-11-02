@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ServerProfile, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS } from '../types';
+import { ServerProfile, DEFAULT_BOT_SETTINGS, FRESHSMP_DEFAULT_BOT_SETTINGS, BEYONDMC_DEFAULT_BOT_SETTINGS } from '../types';
 import { X, Info, ChevronDown, Check } from 'lucide-react';
 import { ConfirmModal } from './ConfirmModal';
 import { ServerLogo } from './ServerLogo';
@@ -119,6 +119,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
 
     const effectiveName = selectedSetup.name;
     const isFreshSmp = selectedSetup.name === 'FreshSMP';
+    const isBeyondMc = selectedSetup.name === 'BeyondMC';
     const effectiveAccountId = initialProfile ? (initialProfile.accountId || '') : '';
     const effectiveAssignedAccountIds = initialProfile
       ? (initialProfile.assignedAccountIds || (initialProfile.accountId ? [initialProfile.accountId] : []))
@@ -138,7 +139,7 @@ export const ServerProfileModal: React.FC<ServerProfileModalProps> = ({
         authType: 'microsoft',
         autoReconnect: initialProfile?.autoReconnect ?? true,
         settings: initialProfile?.settings || {
-          ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS),
+          ...(isFreshSmp ? FRESHSMP_DEFAULT_BOT_SETTINGS : (isBeyondMc ? BEYONDMC_DEFAULT_BOT_SETTINGS : DEFAULT_BOT_SETTINGS)),
         },
       };
 

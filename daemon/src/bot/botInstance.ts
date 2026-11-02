@@ -387,8 +387,16 @@ export class PebbleBotInstance {
     return `${this.originalHost} ${this.config.host}`.toLowerCase().includes('freshsmp');
   }
 
+  private isBeyondMcProfile(): boolean {
+    return `${this.originalHost} ${this.config.host}`.toLowerCase().includes('beyondmc');
+  }
+
+  private isLifestealSubserverProfile(): boolean {
+    return this.isFreshSmpProfile() || this.isBeyondMcProfile();
+  }
+
   public getFreshSmpDiagnostics(): FreshSmpDiagnosticState | null {
-    if (!this.isFreshSmpProfile()) return null;
+    if (!this.isLifestealSubserverProfile()) return null;
     return {
       botId: this.config.id,
       serverId: this.config.serverId,
@@ -415,7 +423,7 @@ export class PebbleBotInstance {
   }
 
   private setFreshSmpPhase(phase: FreshSmpDiagnosticPhase) {
-    if (!this.isFreshSmpProfile()) return;
+    if (!this.isLifestealSubserverProfile()) return;
     if (phase === 'lobby') {
       this.hasTransferredToFreshSmpSubserver = false;
       this.hasTransferredToSubserver = false;
@@ -428,7 +436,7 @@ export class PebbleBotInstance {
   }
 
   private recordFreshSmpEvent(category: FreshSmpDiagnosticEvent['category'], severity: FreshSmpDiagnosticEvent['severity'], message: string, durationMs?: number) {
-    if (!this.isFreshSmpProfile()) return;
+    if (!this.isLifestealSubserverProfile()) return;
     this.freshSmpEvents = [...this.freshSmpEvents.slice(-99), {
       id: randomUUID(), timestamp: Date.now(), category, severity, message, durationMs,
     }];
@@ -545,7 +553,7 @@ export class PebbleBotInstance {
   }
 
   private armLifestealStabilityTimer() {
-    if (!this.isFreshSmpProfile() || !this.lifestealSessionStartedAt) return;
+    if (!this.isLifestealSubserverProfile() || !this.lifestealSessionStartedAt) return;
     if (this.lifestealStabilityTimer) clearTimeout(this.lifestealStabilityTimer);
     this.lifestealStabilityTimer = setTimeout(() => {
       this.lifestealStabilityTimer = null;
@@ -556,7 +564,7 @@ export class PebbleBotInstance {
       this.subserverQueueTimeoutCount = 0;
       this.freshSmpRecoveryCount = 0;
       this.setSignetNextAction();
-      const detail = 'Account remained confirmed in FreshSMP Lifesteal for 60 seconds; recovery backoff reset.';
+      const detail = 'Account remained confirmed in Lifesteal for 60 seconds; recovery backoff reset.';
       this.recordFreshSmpEvent('subserver', 'success', detail, duration);
       this.logActivity('status', detail);
       this.setupStableAccountAutomations(this.client);
@@ -1023,6 +1031,17 @@ export class PebbleBotInstance {
           // subsequent radius updates are responses and must not be echoed.
           client.write('request_chunk_radius', { chunk_radius: 2 });
         } catch (_) {}
+
+        if (this.isLifestealSubserverProfile()) {
+          this.hasTransferredToSubserver = true;
+          this.isInSubserver = true;
+          if (!this.lifestealSessionStartedAt) {
+            this.lifestealSessionStartedAt = Date.now();
+            this.setFreshSmpPhase('lifesteal');
+            this.armLifestealStabilityTimer();
+          }
+          this.scheduleSubserverJoinCommand(client);
+        }
       });
 
       client.on('respawn', (packet: any) => {
@@ -1418,7 +1437,8 @@ export class PebbleBotInstance {
     }
 
     const isFreshSmp = this.isFreshSmpProfile();
-    const configuredCommand = this.config.settings?.joinCommand?.trim().slice(0, 256) || (isFreshSmp ? '/lifesteal' : '');
+    const isBeyondMc = this.isBeyondMcProfile();
+    const configuredCommand = this.config.settings?.joinCommand?.trim().slice(0, 256) || ((isFreshSmp || isBeyondMc) ? '/lifesteal' : '');
     if (!configuredCommand) {
       this.setSignetNextAction();
       return;
@@ -1461,10 +1481,11 @@ export class PebbleBotInstance {
 
     // A fresh client is created after a transfer. Do not issue /lifesteal
     // again on the destination server or reset the queue/session it just joined.
-    if (this.isFreshSmpProfile() && this.hasTransferredToFreshSmpSubserver) return;
+    if ((this.isFreshSmpProfile() || this.isBeyondMcProfile()) && this.hasTransferredToSubserver) return;
 
     const isFreshSmp = this.isFreshSmpProfile();
-    const delaySeconds = isFreshSmp ? 10 : Math.min(300, Math.max(3, Number(this.config.settings?.joinCommandDelay ?? 3) || 3));
+    const isBeyondMc = this.isBeyondMcProfile();
+    const delaySeconds = (isFreshSmp || isBeyondMc) ? 10 : Math.min(300, Math.max(3, Number(this.config.settings?.joinCommandDelay ?? 3) || 3));
     this.triggerJoinCommandRetry(delaySeconds * 1000);
   }
 
@@ -1481,7 +1502,8 @@ export class PebbleBotInstance {
     this.cancelSubserverJoinCommand();
 
     const settings = this.config.settings;
-    const configuredCommand = settings?.subserverJoinCommand?.trim().slice(0, 256) || '';
+    const defaultSubserverCmd = this.isBeyondMcProfile() ? '/afk' : (this.isFreshSmpProfile() ? '/warp afk' : '');
+    const configuredCommand = settings?.subserverJoinCommand?.trim().slice(0, 256) || defaultSubserverCmd;
     if (settings?.subserverJoinCommandEnabled !== true || !configuredCommand) return;
 
     const command = configuredCommand.startsWith('/') ? configuredCommand : `/${configuredCommand}`;
@@ -1588,7 +1610,8 @@ export class PebbleBotInstance {
   public isStableFreshSmpSession(client = this.client): boolean {
     return Boolean(
       client && this.client === client && this.state === 'SPAWNED' &&
-      this.isFreshSmpProfile() && this.isInSubserver && this.freshSmpPhase === 'lifesteal' &&
+      this.isLifestealSubserverProfile() && this.isInSubserver &&
+      (this.isFreshSmpProfile() ? this.freshSmpPhase === 'lifesteal' : true) &&
       this.lifestealSessionStartedAt > 0 && Date.now() - this.lifestealSessionStartedAt >= 60_000
     );
   }
@@ -1604,15 +1627,17 @@ export class PebbleBotInstance {
     this.stableRewardInterval = null;
     this.stableBalanceInterval = null;
 
-    if (!client || this.client !== client || !this.isFreshSmpProfile()) return;
+    if (!client || this.client !== client || !this.isLifestealSubserverProfile()) return;
 
     const settings = this.config.settings || ({} as BotConfig['settings']);
-    if (settings.stableRewardEnabled ?? true) {
+    const defaultRewardCmd = this.isFreshSmpProfile() ? '/afkrewards spin' : '';
+    const scheduledCommand = (settings.stableRewardCommand || defaultRewardCmd).trim();
+
+    if ((settings.stableRewardEnabled ?? (this.isFreshSmpProfile())) && scheduledCommand) {
       this.stableRewardInterval = setInterval(() => {
         if (!this.isStableFreshSmpSession(client)) return;
-        const command = '/afkrewards spin';
-        this.logActivity('command', `Running scheduled stable-account command: ${command}`);
-        this.sendChat(command);
+        this.logActivity('command', `Running scheduled stable-account command: ${scheduledCommand}`);
+        this.sendChat(scheduledCommand);
       }, 5 * 60_000);
     }
 

@@ -18,6 +18,7 @@ export interface BotSettings {
   subserverJoinCommand?: string;
   subserverJoinCommandDelay?: number;
   stableRewardEnabled?: boolean;
+  stableRewardCommand?: string;
   stablePayEnabled?: boolean;
   stablePayUsername?: string;
 }
@@ -44,6 +45,7 @@ export const DEFAULT_BOT_SETTINGS: BotSettings = {
   subserverJoinCommand: '',
   subserverJoinCommandDelay: 5,
   stableRewardEnabled: false,
+  stableRewardCommand: '',
   stablePayEnabled: false,
   stablePayUsername: '',
 };
@@ -59,6 +61,23 @@ export const FRESHSMP_DEFAULT_BOT_SETTINGS: BotSettings = {
   subserverJoinCommand: '/warp afk',
   subserverJoinCommandDelay: 5,
   stableRewardEnabled: true,
+  stableRewardCommand: '/afkrewards spin',
+  stablePayEnabled: false,
+  stablePayUsername: '',
+};
+
+export const BEYONDMC_DEFAULT_BOT_SETTINGS: BotSettings = {
+  ...DEFAULT_BOT_SETTINGS,
+  physics: true,
+  acceptResourcePacks: true,
+  joinCommandEnabled: true,
+  joinCommand: '/lifesteal',
+  joinCommandDelay: 10,
+  subserverJoinCommandEnabled: true,
+  subserverJoinCommand: '/afk',
+  subserverJoinCommandDelay: 5,
+  stableRewardEnabled: false,
+  stableRewardCommand: '',
   stablePayEnabled: false,
   stablePayUsername: '',
 };
