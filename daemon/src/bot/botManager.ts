@@ -25,6 +25,8 @@ export class BotManager {
   private desiredBots: Map<string, BotConfig> = new Map();
   private broadcastFn: (msg: DaemonMessage) => void;
   private currentVerificationId: number = 0;
+  private activeAuthCodePayload: { verificationId: number; botId: string; userCode: string; url: string; message: string; targetEmail?: string; createdAt: number } | null = null;
+  private recentlyVerifiedAccounts: Map<string, { botId: string; email: string; ign: string; uuid?: string; avatarUrl?: string; verifiedAt: number }> = new Map();
   private readonly desiredBotsPath = path.join(process.cwd(), '.pebbleafk-bots.json');
 
   constructor(broadcastFn: (msg: DaemonMessage) => void) {
@@ -284,6 +286,39 @@ export class BotManager {
             }
           }
         }
+
+        // Replay active Microsoft device code if verification is still in progress
+        if (this.activeAuthCodePayload && Date.now() - this.activeAuthCodePayload.createdAt < 10 * 60 * 1000) {
+          this.broadcastFn({
+            type: 'MS_AUTH_CODE',
+            payload: {
+              botId: this.activeAuthCodePayload.botId,
+              userCode: this.activeAuthCodePayload.userCode,
+              url: this.activeAuthCodePayload.url,
+              message: this.activeAuthCodePayload.message,
+              targetEmail: this.activeAuthCodePayload.targetEmail,
+            },
+          });
+        }
+
+        // Replay recently verified accounts (last 15m) so accounts verified while the browser tab was backgrounded are never lost
+        const cutoff = Date.now() - 15 * 60 * 1000;
+        for (const [ignKey, entry] of Array.from(this.recentlyVerifiedAccounts.entries())) {
+          if (entry.verifiedAt < cutoff) {
+            this.recentlyVerifiedAccounts.delete(ignKey);
+            continue;
+          }
+          this.broadcastFn({
+            type: 'ACCOUNT_VERIFIED',
+            payload: {
+              botId: entry.botId,
+              email: entry.email,
+              ign: entry.ign,
+              uuid: entry.uuid,
+              avatarUrl: entry.avatarUrl,
+            },
+          });
+        }
         break;
       }
     }
@@ -314,6 +349,15 @@ export class BotManager {
           ? `https://login.live.com/oauth20_remoteconnect.srf?otc=${encodeURIComponent(data.user_code)}${loginHint ? `&login_hint=${encodeURIComponent(loginHint)}` : ''}&prompt=login`
           : (data.verification_uri || 'https://login.live.com/oauth20_remoteconnect.srf');
 
+        this.activeAuthCodePayload = {
+          verificationId,
+          botId: accountId,
+          userCode: data.user_code,
+          url: directUri,
+          message: data.message,
+          targetEmail: loginHint,
+          createdAt: Date.now(),
+        };
         this.broadcastFn({
           type: 'MS_AUTH_CODE',
           payload: {
@@ -424,19 +468,30 @@ export class BotManager {
         migrateTokenCache(profilesFolder, authKey, canonicalAuthKey, true);
       }
 
+      if (this.activeAuthCodePayload?.verificationId === verificationId) {
+        this.activeAuthCodePayload = null;
+      }
+      const verifiedPayload = {
+        botId: accountId,
+        email: cleanEmail || authKey,
+        ign: realGamertag,
+        uuid: xuid,
+        avatarUrl: xboxAvatarUrl,
+      };
+      this.recentlyVerifiedAccounts.set(realGamertag.toLowerCase(), {
+        ...verifiedPayload,
+        verifiedAt: Date.now(),
+      });
       this.broadcastFn({
         type: 'ACCOUNT_VERIFIED',
-        payload: {
-          botId: accountId,
-          email: cleanEmail || authKey,
-          ign: realGamertag,
-          uuid: xuid,
-          avatarUrl: xboxAvatarUrl,
-        },
+        payload: verifiedPayload,
       });
       console.log(chalk.green(`[Auth Success] Bedrock/Xbox verified as: ${realGamertag} (XUID: ${xuid})`));
     } catch (err: any) {
       if (verificationId !== this.currentVerificationId) return;
+      if (this.activeAuthCodePayload?.verificationId === verificationId) {
+        this.activeAuthCodePayload = null;
+      }
       console.error(chalk.red(`[Auth] Device verification error:`), err.message);
       this.broadcastFn({
         type: 'ACCOUNT_VERIFY_RESULT',

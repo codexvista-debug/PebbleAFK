@@ -273,7 +273,7 @@ export async function GET(req: NextRequest) {
       // The daemon's exact server/account identity is authoritative when the
       // profile metadata predates explicit account assignments.
       const runtimeAssignments = runtimeBots
-        .filter((bot) => bot.accountId === accountId || bot.accountId === rowId.toLowerCase())
+        .filter((bot) => bot.accountId === accountId || bot.accountId === rowId.toLowerCase() || bot.username.replace(/^@/, '') === cleanBotName)
         .map((bot) => userServers.find((server) => server.id?.toLowerCase() === bot.serverId?.toLowerCase()))
         .filter(Boolean);
       runtimeAssignments.forEach((server) => {
@@ -299,7 +299,8 @@ export async function GET(req: NextRequest) {
         const serverId = server?.id ? String(server.id) : undefined;
         const botId = serverId ? `${serverId}__${accountId}` : accountId;
         const probe = runtimeBots.find((candidate) => candidate.botId === botId.toLowerCase()) ||
-          runtimeBots.find((candidate) => candidate.accountId === accountId && candidate.serverId?.toLowerCase() === serverId?.toLowerCase());
+          runtimeBots.find((candidate) => candidate.accountId === accountId && candidate.serverId?.toLowerCase() === serverId?.toLowerCase()) ||
+          runtimeBots.find((candidate) => candidate.username.replace(/^@/, '') === cleanBotName && (!serverId || !candidate.serverId || candidate.serverId.toLowerCase() === serverId.toLowerCase()));
         const daemonReachable = Boolean(daemonProbe?.reachable);
         const runtimeState = probe?.state || (daemonReachable ? 'DISCONNECTED' : userTunnel?.url ? 'UNKNOWN' : 'DISCONNECTED');
         const isConnected = runtimeState === 'SPAWNED' || runtimeState === 'LOGGED_IN';

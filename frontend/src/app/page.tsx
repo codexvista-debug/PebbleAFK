@@ -370,6 +370,11 @@ export default function Home() {
   const sleepStartTimestampRef = useRef<number | null>(null);
   const checkTunnelRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const deletedAccountIgnsRef = useRef<Set<string>>(new Set());
+  const serversRef = useRef<ServerProfile[]>([]);
+  serversRef.current = servers;
+  const activeServerIdRef = useRef<string | null>(null);
+  activeServerIdRef.current = activeServerId;
 
   const handleTogglePin = (accId: string) => {
     setPinnedAccountIds((prev) => {
@@ -534,28 +539,42 @@ export default function Home() {
   const handleAccountVerified = useCallback(
     (payload: { botId: string; email: string; ign: string; uuid?: string; avatarUrl?: string }) => {
       setMsAuthError(null);
-      const verifiedIgn = payload.ign.trim();
+      const verifiedIgn = (payload.ign || '').trim().replace(/^@/, '');
 
       if (!verifiedIgn || verifiedIgn.startsWith('bedrock_user_')) {
         showToast('Verification failed: Could not retrieve real Xbox Gamertag.', 'error');
         return;
       }
 
+      const lowerIgn = verifiedIgn.toLowerCase();
+      deletedAccountIgnsRef.current.delete(lowerIgn);
+
       setAccounts((prev) => {
         // Remove any old placeholder account with bedrock_user_
         const filtered = prev.filter((a) => !a.ign?.startsWith('bedrock_user_') && !a.username?.startsWith('bedrock_user_'));
         const existingIndex = filtered.findIndex(
-          (a) => a.id === payload.botId || a.ign?.toLowerCase() === verifiedIgn.toLowerCase()
+          (a) =>
+            a.id === payload.botId ||
+            (a.ign || a.username || '').replace(/^@/, '').trim().toLowerCase() === lowerIgn
         );
+        const existingAccount = existingIndex >= 0 ? filtered[existingIndex] : null;
+        const alreadyVerifiedSame =
+          existingAccount &&
+          existingAccount.verified &&
+          !existingAccount.authError &&
+          (existingAccount.ign || '').toLowerCase() === lowerIgn &&
+          (!payload.uuid || existingAccount.uuid === payload.uuid);
+
         let updated: BedrockAccount[];
+        const accountIdToAssign = existingAccount?.id || payload.botId || `acc_${Date.now()}`;
         if (existingIndex >= 0) {
           updated = [...filtered];
           updated[existingIndex] = {
             ...updated[existingIndex],
             ign: verifiedIgn,
-            username: payload.email,
-            uuid: payload.uuid,
-            avatarUrl: payload.avatarUrl,
+            username: payload.email && !payload.email.startsWith('bedrock_user_') ? payload.email : (updated[existingIndex].username || verifiedIgn),
+            uuid: payload.uuid || updated[existingIndex].uuid,
+            avatarUrl: payload.avatarUrl || updated[existingIndex].avatarUrl,
             verified: true,
             authError: undefined,
           };
@@ -563,8 +582,8 @@ export default function Home() {
           updated = [
             ...filtered,
             {
-              id: payload.botId || `acc_${Date.now()}`,
-              username: payload.email,
+              id: accountIdToAssign,
+              username: payload.email && !payload.email.startsWith('bedrock_user_') ? payload.email : verifiedIgn,
               ign: verifiedIgn,
               auth_type: 'microsoft',
               uuid: payload.uuid,
@@ -575,16 +594,52 @@ export default function Home() {
           ];
         }
 
+        // Auto-assign newly verified account to the active server profile (or single server profile) if not already assigned
+        let updatedServers = serversRef.current;
+        if (updatedServers.length > 0) {
+          const targetSrvId = activeServerIdRef.current || updatedServers[0].id;
+          const targetIdx = updatedServers.findIndex((s) => s.id === targetSrvId);
+          if (targetIdx >= 0) {
+            const targetSrv = updatedServers[targetIdx];
+            const currentAssigned = Array.isArray(targetSrv.assignedAccountIds) ? targetSrv.assignedAccountIds : [];
+            const alreadyInSrv = currentAssigned.some((id) => {
+              const clean = String(id || '').replace(/^@/, '').trim().toLowerCase();
+              return clean === accountIdToAssign.toLowerCase() || clean === lowerIgn;
+            });
+            if (!alreadyInSrv) {
+              const nextSrv: ServerProfile = {
+                ...targetSrv,
+                assignedAccountIds: [...currentAssigned, accountIdToAssign],
+                accountId: targetSrv.accountId || accountIdToAssign,
+              };
+              updatedServers = [...updatedServers];
+              updatedServers[targetIdx] = nextSrv;
+              serversRef.current = updatedServers;
+              setServers(updatedServers);
+              if (currentUser && typeof window !== 'undefined') {
+                localStorage.setItem(`pebbleafk_servers_${currentUser.toLowerCase()}`, JSON.stringify(updatedServers));
+              }
+            }
+          }
+        }
+
         if (currentUser) {
-          syncAllToSupabase(currentUser, updated);
           if (typeof window !== 'undefined') {
             localStorage.setItem(`pebbleafk_accounts_${currentUser.toLowerCase()}`, JSON.stringify(updated));
           }
+          if (!alreadyVerifiedSame) {
+            isSyncingRef.current = true;
+            syncAllToSupabase(currentUser, updated, updatedServers).finally(() => {
+              isSyncingRef.current = false;
+            });
+          }
+        }
+
+        if (!alreadyVerifiedSame) {
+          showToast(`Verified Bedrock account: @${verifiedIgn}`, 'success');
         }
         return updated;
       });
-
-      showToast(`Verified Bedrock account: @${verifiedIgn}`, 'success');
     },
     [currentUser, showToast]
   );
@@ -734,12 +789,38 @@ export default function Home() {
             } catch (_) {}
           }
 
-          // Load accounts from Supabase (filter out any old dummy names)
+          // Load accounts from Supabase (filter out any old dummy names and merge with local cache)
           loadAccountsFromSupabase(savedUser).then((accs) => {
             if (accs && accs.length > 0) {
               const cleanAccs = accs.filter((a) => !a.ign?.startsWith('bedrock_user_') && !a.username?.startsWith('bedrock_user_'));
-              setAccounts(cleanAccs);
-              localStorage.setItem(`pebbleafk_accounts_${savedUser.toLowerCase()}`, JSON.stringify(cleanAccs));
+              setAccounts((prev) => {
+                const remoteByIgn = new Map<string, BedrockAccount>();
+                cleanAccs.forEach((a) => {
+                  const k = (a.ign || a.username || '').replace(/^@/, '').trim().toLowerCase();
+                  if (k && !deletedAccountIgnsRef.current.has(k)) remoteByIgn.set(k, a);
+                });
+                const merged: BedrockAccount[] = Array.from(remoteByIgn.values());
+                const seenIgns = new Set(Array.from(remoteByIgn.keys()));
+                prev.forEach((localAcc) => {
+                  const k = (localAcc.ign || localAcc.username || '').replace(/^@/, '').trim().toLowerCase();
+                  if (!k || k.startsWith('bedrock_user_') || deletedAccountIgnsRef.current.has(k)) return;
+                  if (!seenIgns.has(k) && localAcc.verified) {
+                    merged.push(localAcc);
+                    seenIgns.add(k);
+                  } else if (seenIgns.has(k)) {
+                    const idx = merged.findIndex((m) => (m.ign || m.username || '').replace(/^@/, '').trim().toLowerCase() === k);
+                    if (idx >= 0) {
+                      merged[idx] = {
+                        ...merged[idx],
+                        uuid: merged[idx].uuid || localAcc.uuid,
+                        avatarUrl: merged[idx].avatarUrl || localAcc.avatarUrl,
+                      };
+                    }
+                  }
+                });
+                localStorage.setItem(`pebbleafk_accounts_${savedUser.toLowerCase()}`, JSON.stringify(merged));
+                return merged;
+              });
             }
           });
 
@@ -830,34 +911,89 @@ export default function Home() {
     if (!user || isSyncingRef.current) return;
     isSyncingRef.current = true;
     try {
-      // 1. Sync accounts from Supabase
+      // 1. Sync accounts from Supabase (merge with local verified accounts so newly verified accounts are never wiped out)
       const remoteAccs = await loadAccountsFromSupabase(user);
       if (Array.isArray(remoteAccs)) {
         const cleanAccs = remoteAccs.filter((a) => !a.ign?.startsWith('bedrock_user_') && !a.username?.startsWith('bedrock_user_'));
+        let unsyncedLocalAccounts: BedrockAccount[] = [];
+        let mergedSnapshot: BedrockAccount[] = [];
+
         setAccounts((prev) => {
+          const remoteByIgn = new Map<string, BedrockAccount>();
+          cleanAccs.forEach((a) => {
+            const k = (a.ign || a.username || '').replace(/^@/, '').trim().toLowerCase();
+            if (k && !deletedAccountIgnsRef.current.has(k)) {
+              remoteByIgn.set(k, a);
+            }
+          });
+
+          const merged: BedrockAccount[] = Array.from(remoteByIgn.values());
+          const seenIgns = new Set(Array.from(remoteByIgn.keys()));
+
+          prev.forEach((localAcc) => {
+            const k = (localAcc.ign || localAcc.username || '').replace(/^@/, '').trim().toLowerCase();
+            if (!k || k.startsWith('bedrock_user_') || deletedAccountIgnsRef.current.has(k)) return;
+            if (!seenIgns.has(k) && localAcc.verified) {
+              merged.push(localAcc);
+              seenIgns.add(k);
+              unsyncedLocalAccounts.push(localAcc);
+            } else if (seenIgns.has(k)) {
+              const idx = merged.findIndex(
+                (m) => (m.ign || m.username || '').replace(/^@/, '').trim().toLowerCase() === k
+              );
+              if (idx >= 0) {
+                merged[idx] = {
+                  ...merged[idx],
+                  uuid: merged[idx].uuid || localAcc.uuid,
+                  avatarUrl: merged[idx].avatarUrl || localAcc.avatarUrl,
+                };
+              }
+            }
+          });
+
+          mergedSnapshot = merged;
           const prevKey = JSON.stringify(prev);
-          const newKey = JSON.stringify(cleanAccs);
+          const newKey = JSON.stringify(merged);
           if (prevKey !== newKey) {
             if (typeof window !== 'undefined') {
-              localStorage.setItem(`pebbleafk_accounts_${user.toLowerCase()}`, JSON.stringify(cleanAccs));
+              localStorage.setItem(`pebbleafk_accounts_${user.toLowerCase()}`, JSON.stringify(merged));
             }
-            return cleanAccs;
+            return merged;
           }
           return prev;
         });
+
+        // If local has verified accounts that haven't landed in Supabase yet, push them up
+        if (unsyncedLocalAccounts.length > 0 && mergedSnapshot.length > 0) {
+          await syncAllToSupabase(user, mergedSnapshot, serversRef.current);
+        }
       }
 
-      // 2. Sync server profiles from Supabase
+      // 2. Sync server profiles from Supabase (preserve local assignedAccountIds if local added new assignments)
       const remoteServers = await loadServersFromSupabase(user);
       if (Array.isArray(remoteServers) && remoteServers.length > 0) {
         setServers((prev) => {
+          const mergedServers = remoteServers.map((remoteSrv) => {
+            const localSrv = prev.find((s) => s.id === remoteSrv.id);
+            if (!localSrv) return remoteSrv;
+            const combinedIds = Array.from(
+              new Set([
+                ...(Array.isArray(remoteSrv.assignedAccountIds) ? remoteSrv.assignedAccountIds : []),
+                ...(Array.isArray(localSrv.assignedAccountIds) ? localSrv.assignedAccountIds : []),
+              ])
+            );
+            return {
+              ...remoteSrv,
+              assignedAccountIds: combinedIds,
+            };
+          });
           const prevKey = JSON.stringify(prev);
-          const newKey = JSON.stringify(remoteServers);
+          const newKey = JSON.stringify(mergedServers);
           if (prevKey !== newKey) {
             if (typeof window !== 'undefined') {
-              localStorage.setItem(`pebbleafk_servers_${user.toLowerCase()}`, JSON.stringify(remoteServers));
+              localStorage.setItem(`pebbleafk_servers_${user.toLowerCase()}`, JSON.stringify(mergedServers));
             }
-            return remoteServers;
+            return mergedServers;
           }
           return prev;
         });
@@ -1143,9 +1279,17 @@ export default function Home() {
   // Delete / Unlink Account
   const handleDeleteAccount = async (id: string) => {
     const acc = accounts.find((a) => a.id === id);
-    if (acc && currentUser) {
-      const ign = acc.ign || acc.username;
-      await deleteAccountFromSupabase(currentUser, ign);
+    if (acc) {
+      const ign = (acc.ign || acc.username || '').replace(/^@/, '').trim();
+      if (ign) {
+        deletedAccountIgnsRef.current.add(ign.toLowerCase());
+      }
+      if (currentUser && ign) {
+        isSyncingRef.current = true;
+        await deleteAccountFromSupabase(currentUser, ign).finally(() => {
+          isSyncingRef.current = false;
+        });
+      }
     }
     setAccounts((prev) => {
       const updated = prev.filter((a) => a.id !== id);
@@ -1443,20 +1587,43 @@ export default function Home() {
   // Accounts assigned to current Server Profile (strictly filtered to existing accounts, plus active bots reported by daemon)
   const profileAccountIds = useMemo(() => {
     if (!activeServer) return [];
-    const validAccountIds = new Set(accounts.map((a) => a.id));
+    const accountById = new Map<string, BedrockAccount>();
+    const accountByIgn = new Map<string, BedrockAccount>();
+    accounts.forEach((a) => {
+      accountById.set(a.id.toLowerCase(), a);
+      const rawId = a.id.replace(/^acc_/i, '').toLowerCase();
+      if (rawId) accountById.set(rawId, a);
+      const ignKey = (a.ign || a.username || '').replace(/^@/, '').trim().toLowerCase();
+      if (ignKey) accountByIgn.set(ignKey, a);
+    });
+    const resolveToAccountId = (raw: unknown): string | null => {
+      const key = String(raw || '').replace(/^@/, '').trim().toLowerCase();
+      if (!key) return null;
+      const byId = accountById.get(key) || accountById.get(key.replace(/^acc_/i, ''));
+      if (byId) return byId.id;
+      const byIgn = accountByIgn.get(key);
+      if (byIgn) return byIgn.id;
+      return null;
+    };
     const result = new Set<string>();
     if (Array.isArray(activeServer.assignedAccountIds)) {
       activeServer.assignedAccountIds.forEach((id) => {
-        if (validAccountIds.has(id)) result.add(id);
+        const resolved = resolveToAccountId(id);
+        if (resolved) result.add(resolved);
       });
     }
-    if (activeServer.accountId && validAccountIds.has(activeServer.accountId)) {
-      result.add(activeServer.accountId);
+    if (activeServer.accountId) {
+      const resolved = resolveToAccountId(activeServer.accountId);
+      if (resolved) result.add(resolved);
     }
     // Also include any account actively reporting SPAWNED, LOGGED_IN, or CONNECTING for this server
     if (daemonStatus === 'AUTHENTICATED') {
       accounts.forEach((acc) => {
-        const st = botStates[`${activeServer.id}__${acc.id}`] || botStates[acc.id];
+        const ign = (acc.ign || acc.username || '').replace(/^@/, '').trim();
+        const st =
+          botStates[`${activeServer.id}__${acc.id}`] ||
+          (ign ? botStates[`${activeServer.id}__${ign}`] : undefined) ||
+          botStates[acc.id];
         if (st === 'SPAWNED' || st === 'LOGGED_IN' || st === 'CONNECTING') {
           result.add(acc.id);
         }
@@ -1584,6 +1751,18 @@ export default function Home() {
     showToast(`Added @${targetAcc?.ign || targetAcc?.username || 'account'} to ${activeServer.name}`, 'success');
   };
 
+  const handleAddAllAccountsToProfile = () => {
+    if (!activeServer || availableAccounts.length === 0) return;
+    const updatedIds = Array.from(new Set([...profileAccountIds, ...availableAccounts.map((a) => a.id)]));
+    const updatedServer: ServerProfile = {
+      ...activeServer,
+      assignedAccountIds: updatedIds,
+      accountId: activeServer.accountId || updatedIds[0] || '',
+    };
+    handleSaveServer(updatedServer);
+    showToast(`Added all ${availableAccounts.length} available account(s) to ${activeServer.name}`, 'success');
+  };
+
   const isActiveServerRunning = daemonStatus === 'AUTHENTICATED' && assignedAccounts.some((acc) => {
     const botId = `${activeServer?.id}__${acc.id}`;
     const st = botStates[botId];
@@ -1636,6 +1815,8 @@ export default function Home() {
     }
     const botConfig = {
       id: botId,
+      serverId: srv.id,
+      accountId: acc.id,
       username: acc.ign || acc.username,
       authCacheKey: acc.uuid ? `xuid_${acc.uuid}` : undefined,
       host: srv.serverHost,
@@ -2244,14 +2425,21 @@ export default function Home() {
                 <div className="space-y-1">
                   {servers.map((srv) => {
                     const isSelected = activeTab === 'servers' && activeServer?.id === srv.id;
-                    const srvAssignedIds = Array.isArray(srv.assignedAccountIds)
+                    const srvAssignedRaw = Array.isArray(srv.assignedAccountIds)
                       ? srv.assignedAccountIds
                       : (srv.accountId ? [srv.accountId] : []);
-                    const srvAssignedCount = accounts.filter((a) => srvAssignedIds.includes(a.id)).length;
+                    const srvAssignedLower = new Set(srvAssignedRaw.map((id) => String(id || '').replace(/^@/, '').trim().toLowerCase()).filter(Boolean));
+                    const isAccAssignedToSrv = (acc: BedrockAccount) => {
+                      const idKey = acc.id.toLowerCase();
+                      const rawIdKey = acc.id.replace(/^acc_/i, '').toLowerCase();
+                      const ignKey = (acc.ign || acc.username || '').replace(/^@/, '').trim().toLowerCase();
+                      return srvAssignedLower.has(idKey) || (rawIdKey && srvAssignedLower.has(rawIdKey)) || (ignKey && srvAssignedLower.has(ignKey));
+                    };
+                    const srvAssignedCount = accounts.filter(isAccAssignedToSrv).length;
                     const onlineCount = daemonStatus === 'AUTHENTICATED' ? (() => {
                       const fromAssigned = accounts.filter(
                         (acc) =>
-                          srvAssignedIds.includes(acc.id) &&
+                          isAccAssignedToSrv(acc) &&
                           (botStates[`${srv.id}__${acc.id}`] === 'SPAWNED' ||
                            botStates[`${srv.id}__${acc.id}`] === 'LOGGED_IN' ||
                            botStates[acc.id] === 'SPAWNED' ||
@@ -2259,7 +2447,7 @@ export default function Home() {
                       ).length;
                       const fromBotStates = Object.entries(botStates).filter(([key, state]) =>
                         (state === 'SPAWNED' || state === 'LOGGED_IN') &&
-                        (key.startsWith(`${srv.id}__`) || srvAssignedIds.includes(key))
+                        (key.startsWith(`${srv.id}__`) || srvAssignedLower.has(key.toLowerCase()))
                       ).length;
                       return Math.max(fromAssigned, fromBotStates);
                     })() : 0;
@@ -3001,7 +3189,7 @@ export default function Home() {
                       <div className="space-y-4">
                         {/* Top Action Bar */}
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <button
                               type="button"
                               onClick={handleConnectSelected}
@@ -3019,6 +3207,16 @@ export default function Home() {
                             >
                               <Square className="w-3.5 h-3.5 fill-current" />
                               <span>Disconnect Selected</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={verifiedAccountsCount >= MAX_BEDROCK_ACCOUNTS}
+                              onClick={() => handleStartMicrosoftLogin()}
+                              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold transition shadow-2xs cursor-pointer active:scale-95"
+                              title="Authenticate and link a new Microsoft Bedrock account"
+                            >
+                              <UserPlus className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>+ Link New Account</span>
                             </button>
                           </div>
 
@@ -3510,9 +3708,25 @@ export default function Home() {
                         {/* Available Accounts to Add (+) to this Server Profile */}
                         {availableAccounts.length > 0 && (
                           <div className="space-y-2 pt-2">
-                            <div className="flex items-center justify-between px-1">
-                              <span className="text-xs font-bold text-slate-700">Available Accounts (Not in this profile)</span>
-                              <span className="text-[11px] text-slate-400 font-medium">Click &ldquo;+ Add to Profile&rdquo; to assign</span>
+                            <div className="flex items-center justify-between px-1 gap-2 flex-wrap">
+                              <span className="text-xs font-bold text-slate-700">
+                                Available Accounts ({availableAccounts.length} not in this profile)
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
+                                  Click &ldquo;+ Add to Profile&rdquo; to assign
+                                </span>
+                                {availableAccounts.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={handleAddAllAccountsToProfile}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold transition cursor-pointer shadow-2xs active:scale-95"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                    <span>Add All ({availableAccounts.length}) to Profile</span>
+                                  </button>
+                                )}
+                              </div>
                             </div>
                             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
                               {/* Mobile Available Accounts List */}
