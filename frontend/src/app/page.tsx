@@ -55,6 +55,7 @@ import { MicrosoftAuthModal } from '@/components/MicrosoftAuthModal';
 import { ServerProfileModal } from '@/components/ServerProfileModal';
 import { DangerousSettingsModal } from '@/components/DangerousSettingsModal';
 import { AccountLogsModal } from '@/components/AccountLogsModal';
+import { SignetReconnectModal } from '@/components/SignetReconnectModal';
 import { ServerLogo } from '@/components/ServerLogo';
 import { RelativeTime } from '@/components/RelativeTime';
 import { MinecraftText } from '@/components/MinecraftText';
@@ -362,6 +363,12 @@ export default function Home() {
   const [subserverJoinCommandDraft, setSubserverJoinCommandDraft] = useState('');
   const [scheduledCommandDraft, setScheduledCommandDraft] = useState('');
   const [stablePayUsernameDraft, setStablePayUsernameDraft] = useState('');
+  const [isSignetReconnectOpen, setIsSignetReconnectOpen] = useState(false);
+  const [signetReconnectAttempt, setSignetReconnectAttempt] = useState(1);
+  const wasEverConnectedRef = useRef(false);
+  const lastActiveTimestampRef = useRef<number>(Date.now());
+  const sleepStartTimestampRef = useRef<number | null>(null);
+  const checkTunnelRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const handleTogglePin = (accId: string) => {
@@ -623,6 +630,19 @@ export default function Home() {
     updateBotSettings,
     stopBot,
   } = useDaemonSocket(currentUser, handleAccountVerified);
+
+  useEffect(() => {
+    if (daemonStatus === 'AUTHENTICATED') {
+      wasEverConnectedRef.current = true;
+      if (isSignetReconnectOpen) {
+        const timer = setTimeout(() => {
+          setIsSignetReconnectOpen(false);
+          setSignetReconnectAttempt(1);
+        }, 1400);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [daemonStatus, isSignetReconnectOpen]);
 
   useEffect(() => {
     const diagnostics = Object.values(freshSmpDiagnostics);
@@ -943,8 +963,8 @@ export default function Home() {
                 setDaemonUrl(cleanTarget);
                 reconnect(true);
               } else if (isDisconnected) {
-                // Target URL is already saved and socket is disconnected; allow gentle reconnect without killing connecting handshake
-                reconnect(false);
+                // Target URL is already saved and socket is disconnected; force reconnect to wake up Termux session
+                reconnect(true);
               }
               if (targetToken) setAuthToken(targetToken);
             }
@@ -957,6 +977,7 @@ export default function Home() {
       }
     };
 
+    checkTunnelRef.current = checkTunnel;
     checkTunnel();
 
     // Discover a freshly launched Termux tunnel quickly, without overlapping
@@ -964,24 +985,64 @@ export default function Home() {
     const pollInterval = (daemonStatus === 'AUTHENTICATED' && !isSettingsOpen) ? 8000 : 750;
     const interval = setInterval(checkTunnel, pollInterval);
 
-    // Instant trigger when user switches back from Termux to the browser tab
+    // Instant trigger when user switches back from Termux or wakes up from AFK
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
+        const wasAway = sleepStartTimestampRef.current && (Date.now() - sleepStartTimestampRef.current > 8000);
+        const isOffline = daemonStatusRef.current !== 'AUTHENTICATED';
+        const hasTunnel = Boolean(daemonUrlRef.current || (currentUser && typeof window !== 'undefined' && localStorage.getItem(`pebbleafk_daemon_url_${currentUser.toLowerCase()}`)));
+        if (isOffline && (wasAway || wasEverConnectedRef.current || hasTunnel)) {
+          setIsSignetReconnectOpen(true);
+          setSignetReconnectAttempt((prev) => prev + 1);
+          reconnectNow();
+        }
+        sleepStartTimestampRef.current = null;
         checkTunnel();
+      } else {
+        sleepStartTimestampRef.current = Date.now();
       }
     };
+
     const handleFocus = () => {
+      const isOffline = daemonStatusRef.current !== 'AUTHENTICATED';
+      const hasTunnel = Boolean(daemonUrlRef.current || (currentUser && typeof window !== 'undefined' && localStorage.getItem(`pebbleafk_daemon_url_${currentUser.toLowerCase()}`)));
+      const idleTime = Date.now() - lastActiveTimestampRef.current;
+      if (isOffline && (idleTime > 15000 || wasEverConnectedRef.current || hasTunnel)) {
+        setIsSignetReconnectOpen(true);
+        setSignetReconnectAttempt((prev) => prev + 1);
+        reconnectNow();
+      }
+      lastActiveTimestampRef.current = Date.now();
       checkTunnel();
+    };
+
+    const handleUserActivity = () => {
+      const now = Date.now();
+      const idleMs = now - lastActiveTimestampRef.current;
+      lastActiveTimestampRef.current = now;
+      if (idleMs > 25000 && daemonStatusRef.current !== 'AUTHENTICATED') {
+        const hasTunnel = Boolean(daemonUrlRef.current || (currentUser && typeof window !== 'undefined' && localStorage.getItem(`pebbleafk_daemon_url_${currentUser.toLowerCase()}`)));
+        if (wasEverConnectedRef.current || hasTunnel) {
+          setIsSignetReconnectOpen(true);
+          setSignetReconnectAttempt((prev) => prev + 1);
+          checkTunnel();
+          reconnectNow();
+        }
+      }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleFocus);
+    window.addEventListener('pointerdown', handleUserActivity, { passive: true });
+    window.addEventListener('keydown', handleUserActivity, { passive: true });
 
     return () => {
       isMounted = false;
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pointerdown', handleUserActivity);
+      window.removeEventListener('keydown', handleUserActivity);
     };
   }, [currentUser, daemonStatus, isSettingsOpen, secretCode, setDaemonUrl, setAuthToken, reconnect]);
 
@@ -2436,7 +2497,18 @@ export default function Home() {
                   {daemonStatus !== 'AUTHENTICATED' && (
                     <div className="px-5 py-3 flex items-center justify-between gap-3 border-b border-slate-100">
                       <p className="text-xs text-slate-500">Session controls are unavailable until the daemon socket reconnects.</p>
-                      <button type="button" onClick={reconnectNow} className="shrink-0 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50">Reconnect now</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsSignetReconnectOpen(true);
+                          setSignetReconnectAttempt((prev) => prev + 1);
+                          void checkTunnelRef.current();
+                          reconnectNow();
+                        }}
+                        className="shrink-0 px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer transition active:scale-95"
+                      >
+                        Reconnect now
+                      </button>
                     </div>
                   )}
                   {deviceSessions.length === 0 ? (
@@ -4722,6 +4794,21 @@ export default function Home() {
               botStates[selectedLogsAccount.id] === 'SPAWNED' ||
               botStates[selectedLogsAccount.id] === 'LOGGED_IN')
         )}
+      />
+
+      {/* Signet Middle Popup Notification (AFK Wakeup & WebSocket Auto-Reconnection) */}
+      <SignetReconnectModal
+        isOpen={isSignetReconnectOpen}
+        onClose={() => setIsSignetReconnectOpen(false)}
+        daemonStatus={daemonStatus}
+        daemonUrl={daemonUrl}
+        onReconnectNow={() => {
+          setSignetReconnectAttempt((prev) => prev + 1);
+          void checkTunnelRef.current();
+          reconnectNow();
+        }}
+        termuxCommand={termux1ClickCmd}
+        reconnectAttempt={signetReconnectAttempt}
       />
     </div>
   );

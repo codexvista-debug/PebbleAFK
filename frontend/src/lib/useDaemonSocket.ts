@@ -165,6 +165,8 @@ export function useDaemonSocket(
   daemonUrlRef.current = daemonUrl;
   const authTokenRef = useRef(authToken);
   authTokenRef.current = authToken;
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const safeClose = (ws: WebSocket | null) => {
     if (!ws) return;
@@ -701,11 +703,10 @@ export function useDaemonSocket(
     const reconnectIfNeeded = () => {
       if (!currentUserRef.current || !daemonUrlRef.current) return;
       const ws = socketRef.current;
-      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING || statusRef.current !== 'AUTHENTICATED') {
         connect(true);
+        return;
       } else if (ws.readyState === WebSocket.OPEN) {
-        // A stale timestamp is expected after background tabs are throttled. Probe
-        // the existing socket first instead of tearing down a healthy session.
         const probeStartedAt = Date.now();
         try {
           pingStartTimeRef.current = probeStartedAt;
@@ -722,9 +723,10 @@ export function useDaemonSocket(
             ws.readyState === WebSocket.OPEN &&
             lastPongAtRef.current <= probeStartedAt
           ) {
-            ws.close(4000, 'No response to foreground reconnect probe');
+            try { ws.close(4000, 'No response to foreground reconnect probe'); } catch (_) {}
+            connect(true);
           }
-        }, 12000);
+        }, 2500);
       } else if (ws.readyState === WebSocket.CONNECTING) {
         // Let an in-progress tunnel handshake finish; its own timeout/retry handles failure.
       }
