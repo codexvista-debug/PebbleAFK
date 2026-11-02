@@ -262,6 +262,8 @@ export class PebbleBotInstance {
   private handshakeDelayResolver: (() => void) | null = null;
   private startGeneration: number = 0;
   private connectStartTime: number = 0;
+  private lastPacketReceivedAt: number = 0;
+  private lastChatReceivedAt: number = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private tickSyncInterval: NodeJS.Timeout | null = null;
   private playerAuthInterval: NodeJS.Timeout | null = null;
@@ -349,6 +351,21 @@ export class PebbleBotInstance {
 
   public getConnectedAt(): number | undefined {
     return this.connectStartTime || undefined;
+  }
+
+  public getLastPacketReceivedAt(): number {
+    return this.lastPacketReceivedAt;
+  }
+
+  public getLastChatReceivedAt(): number {
+    return this.lastChatReceivedAt;
+  }
+
+  public isStreamStale(thresholdMs = 60_000): boolean {
+    if (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN') return false;
+    const reference = this.lastPacketReceivedAt || this.connectStartTime;
+    if (!reference) return false;
+    return Date.now() - reference > thresholdMs;
   }
 
   public getLastDisconnectReason(): string {
@@ -807,6 +824,7 @@ export class PebbleBotInstance {
         this.recordFreshSmpEvent('protocol', status === 0 ? 'warning' : 'info', `bedrock-protocol client status changed to ${clientStatuses[Number(status)] || status}.`);
       });
       client.on('packet', (decoded: any) => {
+        this.lastPacketReceivedAt = Date.now();
         const packetName = decoded?.data?.name;
         const params = decoded?.data?.params || {};
         if (!packetName) return;
@@ -874,6 +892,7 @@ export class PebbleBotInstance {
       client.on('join', () => {
         this.hookConnectionDiagnostics(client);
         this.connectStartTime = Date.now();
+        this.lastPacketReceivedAt = Date.now();
         this.updateState('LOGGED_IN');
         this.recordFreshSmpEvent('connection', 'success', 'Bedrock encryption handshake completed; awaiting server login_success and world spawn.');
         this.logActivity('connect', `Successfully joined Bedrock server ${this.config.host}:${this.config.port}`);
@@ -1656,6 +1675,27 @@ export class PebbleBotInstance {
     if (this.telemetryInterval) clearInterval(this.telemetryInterval);
     this.telemetryInterval = setInterval(() => {
       if (this.state === 'SPAWNED') {
+        // Detect half-open WebRTC/RakNet transport where no packets have arrived for >90s
+        const lastPacketRef = this.lastPacketReceivedAt || this.connectStartTime;
+        if (lastPacketRef && Date.now() - lastPacketRef > 90_000 && !this.isTransferring && !this.isExplicitlyStopped) {
+          const staleSec = Math.floor((Date.now() - lastPacketRef) / 1000);
+          const staleReason = `Server stream stalled (no inbound Bedrock packets for ${staleSec}s)`;
+          console.warn(chalk.yellow(`[PebbleAFK] ⚠️ @${this.config.username}: ${staleReason}; resetting connection...`));
+          this.logActivity('warning', `${staleReason}. Triggering automatic reconnect.`);
+          this.lastDisconnectReason = staleReason;
+          this.finishLifestealAttempt(staleReason, 'error');
+          this.recordFreshSmpEvent('connection', 'error', staleReason);
+          this.setFreshSmpPhase('reconnecting');
+          this.isInSubserver = false;
+          this.isSubserverQueueActive = false;
+          this.cleanup();
+          const deadClient = this.client;
+          this.client = null;
+          try { deadClient?.close?.(); } catch (_) {}
+          this.updateState('DISCONNECTED', staleReason);
+          this.handleAutoReconnect(staleReason);
+          return;
+        }
         this.emitTelemetry();
       }
     }, 2000);
@@ -1695,6 +1735,7 @@ export class PebbleBotInstance {
   }
 
   public pushChat(chatMsg: any) {
+    this.lastChatReceivedAt = Date.now();
     this.chatHistory.push(chatMsg);
     if (this.chatHistory.length > 250) {
       this.chatHistory.shift();

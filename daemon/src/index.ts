@@ -4,7 +4,7 @@ import * as dotenv from 'dotenv';
 import chalk from 'chalk';
 import { BotManager } from './bot/botManager';
 import { ClientMessage, DaemonMessage } from './types';
-import { startTermuxNotificationTicker, updateTermuxNotification } from './termuxNotification';
+import { clearTermuxNotification, startTermuxNotificationTicker, updateTermuxNotification } from './termuxNotification';
 
 dotenv.config();
 
@@ -250,7 +250,7 @@ function broadcast(message: DaemonMessage) {
       client.send(json);
     }
   }
-  if (message.type === 'BOT_STATE') {
+  if (message.type === 'BOT_STATE' || message.type === 'FRESHSMP_DIAGNOSTICS') {
     updateTermuxNotification(botManager);
   }
 }
@@ -639,6 +639,7 @@ async function updateDaemonFromDashboard(ws: WebSocket) {
 async function gracefulShutdown(signal: string) {
   if (shutdownRequested) return;
   shutdownRequested = true;
+  clearTermuxNotification();
   console.log(chalk.yellow(`[Daemon] Received ${signal}. Closing server sockets cleanly...`));
   await syncDaemonStatus(false);
   try {

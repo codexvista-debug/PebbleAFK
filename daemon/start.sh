@@ -275,6 +275,9 @@ run_daemon_loop() {
       exit 0
     fi
     [ "${STOPPING:-0}" = "1" ] && exit 0
+    if command -v termux-notification &> /dev/null; then
+      termux-notification --id pebbleafk_status --title "PebbleAFK • Recovering" --content "⚠️ Daemon exited (code ${EXIT_CODE}) · Restarting in ${RESTART_DELAY}s..." --ongoing --priority low --alert-once 2>/dev/null &
+    fi
     echo -e "\n[$(date +%T)] ⚠️ Daemon process exited with code ${EXIT_CODE}. Restarting in ${RESTART_DELAY}s..." >> daemon.log
     sleep "$RESTART_DELAY"
     RESTART_DELAY=$((RESTART_DELAY * 2))
@@ -477,6 +480,9 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
         HEALTH_MISS_COUNT=0
       else
         HEALTH_MISS_COUNT=$((HEALTH_MISS_COUNT + 1))
+        if command -v termux-notification &> /dev/null; then
+          termux-notification --id pebbleafk_status --title "PebbleAFK • Daemon Unresponsive" --content "🔴 Daemon stopped responding (${HEALTH_MISS_COUNT}/3) · Recovering..." --ongoing --priority low --alert-once 2>/dev/null &
+        fi
         if [ "$HEALTH_MISS_COUNT" -le 2 ]; then
           echo -e "[$(date +%T)] ⚠️ Daemon health check missed (${HEALTH_MISS_COUNT}/3); waiting for recovery..." >> daemon.log
         elif [ "$HEALTH_MISS_COUNT" -ge 3 ]; then
