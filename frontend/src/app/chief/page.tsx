@@ -41,8 +41,13 @@ import {
   UserCheck,
   UserX,
   Menu,
+  Maximize2,
+  Terminal,
+  Send,
+  LayoutGrid,
+  Layers,
 } from 'lucide-react';
-import { MinecraftChatMessage } from '@/components/MinecraftChatMessage';
+import { MinecraftChatMessage, stripMinecraftFormatting } from '@/components/MinecraftChatMessage';
 import { FreshSmpDiagnosticState } from '@/types';
 
 interface UserItem {
@@ -128,6 +133,16 @@ export default function ChiefAdminPage() {
   const [accountStatusFilter, setAccountStatusFilter] = useState<'all' | 'online' | 'offline' | 'legit' | 'suspicious'>('online');
   const [accountUserFilter, setAccountUserFilter] = useState<string>('all');
   const [accountSortBy, setAccountSortBy] = useState<'username-asc' | 'username-desc' | 'online-first' | 'uptime' | 'recent'>('username-asc');
+  const [viewMode, setViewMode] = useState<'grid' | 'detailed'>('grid');
+
+  // Live Chat & Diagnostics Inspector Modal
+  const [inspectingAccount, setInspectingAccount] = useState<AccountItem | null>(null);
+  const [inspectorSearch, setInspectorSearch] = useState<string>('');
+  const [inspectorFilter, setInspectorFilter] = useState<'all' | 'chat' | 'system' | 'rewards'>('all');
+  const [inspectorAutoScroll, setInspectorAutoScroll] = useState<boolean>(true);
+  const [inspectorCustomCommand, setInspectorCustomCommand] = useState<string>('');
+  const [inspectorSending, setInspectorSending] = useState<boolean>(false);
+  const inspectorChatEndRef = useRef<HTMLDivElement>(null);
 
   // System Config States
   const [isRegistrationsPaused, setIsRegistrationsPaused] = useState<boolean>(false);
@@ -156,8 +171,15 @@ export default function ChiefAdminPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Live Chat Map for Connected Bots: key -> array of up to 25 ChatMessage items
+  // Live Chat Map for Connected Bots: key -> array of up to 200 ChatMessage items
   const [liveChats, setLiveChats] = useState<Record<string, Array<{ text: string; raw?: string; message?: string; formatted?: string; formattedText?: string; sender?: string; id?: string; type?: string; timestamp: number }>>>({});
+
+  // Auto-scroll inspector chat to bottom when new messages arrive
+  useEffect(() => {
+    if (inspectingAccount && inspectorAutoScroll && inspectorChatEndRef.current) {
+      inspectorChatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [inspectingAccount, liveChats, inspectorAutoScroll]);
   const [freshSmpDiagnostics, setFreshSmpDiagnostics] = useState<Record<string, FreshSmpDiagnosticState>>({});
   const [daemonConnections, setDaemonConnections] = useState<Record<string, { state: 'connecting' | 'authenticating' | 'connected' | 'offline' | 'auth-error'; lastSeenAt?: number; error?: string }>>({});
   const daemonSocketsRef = useRef<Map<string, WebSocket>>(new Map());
@@ -300,7 +322,8 @@ export default function ChiefAdminPage() {
                   const accountMatches = Boolean(accountId) && (acc.id.toLowerCase() === accountId.replace(/^acc_/, '') || `acc_${acc.id}`.toLowerCase() === accountId);
                   const exactBot = (acc.botId || '').toLowerCase() === botId;
                   const exactServerAccount = accountMatches && (!serverId || !acc.serverId || acc.serverId.toLowerCase() === serverId);
-                  if (matchOwner && (exactBot || exactServerAccount)) {
+                  const ignMatches = Boolean(p.username) && acc.ign.replace(/^@/, '').toLowerCase().trim() === String(p.username).replace(/^@/, '').toLowerCase().trim();
+                  if (matchOwner && (exactBot || exactServerAccount || ignMatches)) {
                     matched = true;
                     return {
                       ...acc,
@@ -393,7 +416,7 @@ export default function ChiefAdminPage() {
                 const next = { ...prev };
                 const existing = next[chatKey] || [];
                 if (existing.some((item) => item.id === entry.id)) return prev;
-                next[chatKey] = [...existing.slice(-24), entry];
+                next[chatKey] = [...existing.slice(-199), entry];
                 return next;
               });
             }
@@ -471,7 +494,32 @@ export default function ChiefAdminPage() {
         totalTunnels: 0,
       });
       setUsers(data.users || []);
-      setAccounts(data.accounts || []);
+      setAccounts((prev) => {
+        const incoming = (data.accounts || []) as AccountItem[];
+        if (incoming.length === 0) return prev;
+        const prevMap = new Map<string, AccountItem>();
+        prev.forEach((p) => {
+          const key = `${p.owner.toLowerCase().trim()}::${(p.botId || `${p.serverId || 'unassigned'}__${p.id}`).toLowerCase()}`;
+          prevMap.set(key, p);
+        });
+
+        return incoming.map((acc: AccountItem) => {
+          const key = `${acc.owner.toLowerCase().trim()}::${(acc.botId || `${acc.serverId || 'unassigned'}__${acc.id}`).toLowerCase()}`;
+          const existing = prevMap.get(key);
+          if (existing && existing.isConnected) {
+            return {
+              ...acc,
+              isConnected: true,
+              runtimeState: existing.runtimeState || 'SPAWNED',
+              runtimeReason: existing.runtimeReason,
+              connectedAt: existing.connectedAt || acc.connectedAt,
+              daemonUrl: existing.daemonUrl || acc.daemonUrl,
+              legitimacy: existing.legitimacy || acc.legitimacy,
+            };
+          }
+          return acc;
+        });
+      });
       setTunnels(data.tunnels || []);
       if (data.isRegistrationsPaused !== undefined) {
         setIsRegistrationsPaused(Boolean(data.isRegistrationsPaused));
@@ -634,6 +682,51 @@ export default function ChiefAdminPage() {
     } catch (err: any) {
       showToast(err.message, 'error');
     }
+  };
+
+  // Handle sending in-game chat or command directly to bot via active daemon WebSocket
+  const handleSendCommand = (targetAccount: AccountItem, commandText: string) => {
+    const cleanCmd = commandText.trim();
+    if (!cleanCmd) return;
+    const url = (targetAccount.daemonUrl || targetAccount.registeredTunnel || '').trim();
+    if (!url) {
+      showToast(`No registered tunnel found for @${targetAccount.owner}`, 'error');
+      return;
+    }
+    const ws = daemonSocketsRef.current.get(url);
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      showToast(`Daemon socket for @${targetAccount.owner} is not currently open`, 'error');
+      return;
+    }
+    try {
+      ws.send(JSON.stringify({
+        type: 'SEND_CHAT',
+        payload: {
+          botId: targetAccount.botId,
+          message: cleanCmd,
+        }
+      }));
+      showToast(`Sent "${cleanCmd}" to ${targetAccount.ign}`, 'success');
+    } catch (err: any) {
+      showToast(`Failed to send command: ${err.message}`, 'error');
+    }
+  };
+
+  // Copy full chat history
+  const handleCopyChatHistory = (chatKey: string, botIgn: string) => {
+    const messages = liveChats[chatKey] || [];
+    if (messages.length === 0) {
+      showToast(`No chat history to copy for ${botIgn} yet.`, 'info');
+      return;
+    }
+    const logText = messages.map((m) => {
+      const time = new Date(m.timestamp).toLocaleTimeString([], { hour12: false });
+      const clean = stripMinecraftFormatting(m.raw || m.text || m.message || '');
+      return `[${time}] ${clean}`;
+    }).join('\n');
+
+    navigator.clipboard.writeText(`=== PebbleAFK Chat Log: ${botIgn} (${messages.length} msgs) ===\n${logText}`);
+    showToast(`Copied ${messages.length} chat messages for ${botIgn} to clipboard!`, 'success');
   };
 
   // Filtered Users
@@ -978,23 +1071,23 @@ export default function ChiefAdminPage() {
             onClick={() => setActiveTab('stats')}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
               activeTab === 'stats'
-                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
+                ? 'bg-[#29402c] text-[#a4f57c] border border-[#48873c] shadow-xs'
+                : 'text-[#d1c9c0] hover:text-[#fff8ef] hover:bg-[#34302c] border border-transparent'
             }`}
           >
             <div className="flex items-center gap-3">
-              <div className={`p-1 rounded-lg ${activeTab === 'stats' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+              <div className={`p-1 rounded-lg ${activeTab === 'stats' ? 'bg-[#59b947] text-white shadow-2xs' : 'bg-[#272523] text-[#a8a096] border border-[#3c3732]'}`}>
                 <BarChart3 className="w-3.5 h-3.5" />
               </div>
               <span>Total Stats</span>
             </div>
             {liveConnectedBots.length > 0 ? (
-              <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] font-black font-mono bg-[#181614] text-[#8cda61] border border-[#3e3935]">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#59b947] animate-pulse" />
                 Live
               </span>
             ) : (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-100 text-slate-600">
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black font-mono bg-[#24211e] text-[#a8a096] border border-[#3c3732]">
                 Overview
               </span>
             )}
@@ -1005,18 +1098,18 @@ export default function ChiefAdminPage() {
             onClick={() => setActiveTab('users')}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
               activeTab === 'users'
-                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
+                ? 'bg-[#29402c] text-[#a4f57c] border border-[#48873c] shadow-xs'
+                : 'text-[#d1c9c0] hover:text-[#fff8ef] hover:bg-[#34302c] border border-transparent'
             }`}
           >
             <div className="flex items-center gap-3">
-              <div className={`p-1 rounded-lg ${activeTab === 'users' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+              <div className={`p-1 rounded-lg ${activeTab === 'users' ? 'bg-[#59b947] text-white shadow-2xs' : 'bg-[#272523] text-[#a8a096] border border-[#3c3732]'}`}>
                 <Users className="w-3.5 h-3.5" />
               </div>
               <span>Users</span>
             </div>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-              activeTab === 'users' ? 'bg-emerald-200/80 text-emerald-900' : 'bg-slate-100 text-slate-600'
+            <span className={`px-2 py-0.5 rounded-full text-[10.5px] font-black font-mono border ${
+              activeTab === 'users' ? 'bg-[#181614] text-[#8cda61] border-[#3e3935]' : 'bg-[#24211e] text-[#a8a096] border-[#3c3732]'
             }`}>
               {users.length}
             </span>
@@ -1027,22 +1120,22 @@ export default function ChiefAdminPage() {
             onClick={() => setActiveTab('accounts')}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
               activeTab === 'accounts'
-                ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/90 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/70'
+                ? 'bg-[#29402c] text-[#a4f57c] border border-[#48873c] shadow-xs'
+                : 'text-[#d1c9c0] hover:text-[#fff8ef] hover:bg-[#34302c] border border-transparent'
             }`}
           >
             <div className="flex items-center gap-3">
-              <div className={`p-1 rounded-lg ${activeTab === 'accounts' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+              <div className={`p-1 rounded-lg ${activeTab === 'accounts' ? 'bg-[#59b947] text-white shadow-2xs' : 'bg-[#272523] text-[#a8a096] border border-[#3c3732]'}`}>
                 <Server className="w-3.5 h-3.5" />
               </div>
               <span>Bedrock Accounts</span>
             </div>
             <div className="flex items-center gap-1.5">
               {liveConnectedBots.length > 0 && (
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title={`${liveConnectedBots.length} online`} />
+                <span className="w-2 h-2 rounded-full bg-[#59b947] animate-pulse" title={`${liveConnectedBots.length} online`} />
               )}
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                activeTab === 'accounts' ? 'bg-emerald-200/80 text-emerald-900' : 'bg-slate-100 text-slate-600'
+              <span className={`px-2 py-0.5 rounded-full text-[10.5px] font-black font-mono border ${
+                activeTab === 'accounts' ? 'bg-[#181614] text-[#8cda61] border-[#3e3935]' : 'bg-[#24211e] text-[#a8a096] border-[#3c3732]'
               }`}>
                 {accounts.length}
               </span>
@@ -1622,6 +1715,34 @@ export default function ChiefAdminPage() {
                       <option value="offline">Offline Only ({accounts.filter((a) => !a.isConnected).length})</option>
                     </select>
                   </div>
+
+                  {/* View Mode Toggle */}
+                  <div className="flex items-center rounded-xl border border-slate-200 bg-slate-100 p-0.5 ml-auto">
+                    <button
+                      onClick={() => setViewMode('grid')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        viewMode === 'grid'
+                          ? 'bg-white text-emerald-800 shadow-2xs'
+                          : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                      title="Grid Cards View"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                      <span>Grid</span>
+                    </button>
+                    <button
+                      onClick={() => setViewMode('detailed')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        viewMode === 'detailed'
+                          ? 'bg-white text-emerald-800 shadow-2xs'
+                          : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                      title="Detailed Inspector View"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>Detailed</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1666,12 +1787,30 @@ export default function ChiefAdminPage() {
                         </div>
 
                         {userGroup.tunnelUrl && (
-                          <div className="flex items-center gap-2 self-start sm:self-auto text-xs bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-slate-600 shadow-2xs">
+                          <div className="flex items-center gap-2 self-start sm:self-auto text-xs bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-slate-600 shadow-2xs max-w-full flex-wrap">
                             <span className={`w-2 h-2 rounded-full shrink-0 ${userGroup.isTunnelActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                            <span className="font-mono text-[11px] truncate max-w-[240px]" title={userGroup.tunnelUrl}>
+                            <span className="font-mono text-[11px] truncate max-w-[200px] sm:max-w-[280px]" title={userGroup.tunnelUrl}>
                               {userGroup.tunnelUrl}
                             </span>
-                            <span className={`text-[10px] font-bold uppercase ${userGroup.daemonState === 'connected' ? 'text-emerald-700' : userGroup.daemonState === 'connecting' || userGroup.daemonState === 'authenticating' ? 'text-amber-700' : userGroup.daemonState === 'auth-error' ? 'text-rose-700' : 'text-slate-500'}`}>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(userGroup.tunnelUrl!);
+                                showToast('Copied daemon tunnel URL', 'info');
+                              }}
+                              className="text-slate-400 hover:text-slate-700 p-0.5 shrink-0 cursor-pointer"
+                              title="Copy tunnel URL"
+                            >
+                              <Copy className="w-3 h-3" />
+                            </button>
+                            <span className={`text-[10px] font-bold font-mono uppercase px-2.5 py-0.5 rounded-full border shrink-0 ${
+                              userGroup.daemonState === 'connected'
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : userGroup.daemonState === 'connecting' || userGroup.daemonState === 'authenticating'
+                                ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                : userGroup.daemonState === 'auth-error'
+                                ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                : 'bg-slate-100 text-slate-600 border-slate-200'
+                            }`}>
                               {userGroup.daemonState === 'heartbeat-only' ? 'Heartbeat only' : userGroup.daemonState === 'probe-live' ? 'Probe live' : userGroup.daemonState || 'Unknown'}
                             </span>
                           </div>
@@ -1703,7 +1842,7 @@ export default function ChiefAdminPage() {
                             </div>
 
                             {/* Account Cards Grid */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                            <div className={viewMode === 'grid' ? "grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-5" : "space-y-4"}>
                               {srv.accounts.map((a) => {
                                 const uptimeSec =
                                   a.isConnected && a.connectedAt
@@ -1729,11 +1868,11 @@ export default function ChiefAdminPage() {
                                             ? 'Error'
                                             : 'Offline';
                                 const stateStyle = a.isConnected
-                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                                   : runtimeState === 'CONNECTING' || runtimeState === 'RECONNECTING'
-                                    ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                    ? 'bg-amber-100 text-amber-800 border-amber-300'
                                     : runtimeState === 'ERROR' || runtimeState === 'KICKED'
-                                      ? 'bg-rose-100 text-rose-700 border-rose-200'
+                                      ? 'bg-rose-100 text-rose-800 border-rose-300'
                                       : 'bg-slate-100 text-slate-600 border-slate-200';
                                 const isFreshSmp = /freshsmp/i.test(`${a.serverName || ''} ${a.serverHost || ''}`);
                                 const diagnostic = freshSmpDiagnostics[`${a.owner.toLowerCase()}::${(a.botId || '').toLowerCase()}`];
@@ -1750,20 +1889,20 @@ export default function ChiefAdminPage() {
                                     ? 'IN LOBBY'
                                     : 'UNSTABLE';
                                 const freshSmpStyle = freshSmpStable
-                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                                   : freshSmpLabel === 'IN LOBBY'
-                                    ? 'bg-slate-100 text-slate-600 border-slate-200'
-                                    : 'bg-rose-100 text-rose-700 border-rose-200';
+                                    ? 'bg-slate-100 text-slate-700 border-slate-300'
+                                    : 'bg-rose-100 text-rose-800 border-rose-300';
 
                                 return (
                                   <div
                                     key={a.botId || `${a.id}:${a.serverId || 'unassigned'}`}
                                     className="bg-white border border-slate-200 rounded-3xl p-5 shadow-2xs hover:shadow-md transition-all flex flex-col justify-between space-y-4"
                                   >
-                                    {/* Top Header: Head Skin, IGN, Owner, Status & Actions */}
-                                    <div className="flex items-start justify-between gap-3">
-                                      <div className="flex items-center gap-3 min-w-0">
-                                        <div className="w-12 h-12 rounded-2xl overflow-hidden border-2 border-slate-200 bg-slate-100 shrink-0 shadow-xs flex items-center justify-center">
+                                    {/* Top Header: Head Skin, Full Untruncated IGN + Copy, Actions */}
+                                    <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+                                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                                        <div className="w-11 h-11 rounded-2xl overflow-hidden border-2 border-slate-200 bg-slate-100 shrink-0 shadow-xs flex items-center justify-center">
                                           <img
                                             src={`https://crafthead.net/helm/${encodeURIComponent(cleanIgn)}/64`}
                                             alt={a.ign}
@@ -1773,36 +1912,40 @@ export default function ChiefAdminPage() {
                                             }}
                                           />
                                         </div>
-                                        <div className="min-w-0">
-                                          <h3 className="font-black text-sm text-slate-900 tracking-tight truncate" title={a.ign}>
-                                            {a.ign}
-                                          </h3>
-                                          <div className="flex items-center gap-1.5 mt-0.5">
-                                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold font-mono">
-                                              @{a.owner}
-                                            </span>
-                                            <span className="text-[10px] text-slate-400 font-mono">
-                                              #{a.id.substring(0, 6)}
-                                            </span>
+                                        <div className="min-w-0 flex-1">
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            <h3 className="font-black text-sm text-slate-900 tracking-tight font-mono select-all" title={a.ign}>
+                                              {a.ign}
+                                            </h3>
+                                            <button
+                                              onClick={() => {
+                                                navigator.clipboard.writeText(cleanIgn);
+                                                showToast(`Copied IGN ${cleanIgn}`, 'info');
+                                              }}
+                                              className="p-1 text-slate-400 hover:text-slate-700 transition cursor-pointer"
+                                              title="Copy Minecraft username"
+                                            >
+                                              <Copy className="w-3 h-3" />
+                                            </button>
+                                          </div>
+                                          <div className="flex items-center gap-1.5 text-[10.5px] text-slate-500 font-mono mt-0.5 flex-wrap">
+                                            <span className="font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">@{a.owner}</span>
+                                            <span className="text-slate-400">•</span>
+                                            <span className="text-slate-400" title={`Account ID: ${a.id}`}>#{a.id.substring(0, 8)}</span>
                                           </div>
                                         </div>
                                       </div>
 
-                                      {/* Status & Actions */}
+                                      {/* Top Right Actions */}
                                       <div className="flex items-center gap-1.5 shrink-0">
-                                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black border shadow-2xs ${stateStyle}`} title={a.runtimeReason || `Daemon reported ${runtimeState.toLowerCase()}`}>
-                                          <span className={`w-2 h-2 rounded-full ${a.isConnected ? 'bg-emerald-500 animate-pulse' : runtimeState === 'ERROR' || runtimeState === 'KICKED' ? 'bg-rose-500' : runtimeState === 'CONNECTING' || runtimeState === 'RECONNECTING' ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`} />
-                                          {stateLabel}
-                                        </span>
-
-                                        {isFreshSmp && (
-                                          <span
-                                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[9px] font-black border ${freshSmpStyle}`}
-                                            title={diagnostic ? `FreshSMP phase: ${diagnostic.phase}. Stability requires 60 seconds in /lifesteal.` : 'Waiting for live FreshSMP diagnostics.'}
-                                          >
-                                            {freshSmpLabel}
-                                          </span>
-                                        )}
+                                        <button
+                                          onClick={() => setInspectingAccount(a)}
+                                          className="px-2.5 py-1.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-bold transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                                          title="Open Full Chat & Diagnostics Inspector"
+                                        >
+                                          <Maximize2 className="w-3.5 h-3.5 text-emerald-600" />
+                                          <span className="hidden sm:inline">Inspect</span>
+                                        </button>
 
                                         {a.isConnected && (
                                           <button
@@ -1824,9 +1967,46 @@ export default function ChiefAdminPage() {
                                       </div>
                                     </div>
 
-                                    {/* Middle Details Box */}
-                                    <div className="space-y-2.5 text-xs bg-slate-50/70 p-3.5 rounded-2xl border border-slate-200/80">
-                                      {/* Server Destination */}
+                                    {/* Status Badges Row (Wrapping, never squeezed!) */}
+                                    <div className="flex items-center gap-2 flex-wrap text-[10.5px] font-black">
+                                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border shadow-2xs font-mono ${stateStyle}`} title={a.runtimeReason || `Daemon reported ${runtimeState.toLowerCase()}`}>
+                                        <span className={`w-2 h-2 rounded-full ${a.isConnected ? 'bg-emerald-500 animate-pulse' : runtimeState === 'ERROR' || runtimeState === 'KICKED' ? 'bg-rose-500' : runtimeState === 'CONNECTING' || runtimeState === 'RECONNECTING' ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`} />
+                                        {stateLabel}
+                                      </span>
+
+                                      {isFreshSmp && (
+                                        <span
+                                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border font-mono ${freshSmpStyle}`}
+                                          title={diagnostic ? `FreshSMP phase: ${diagnostic.phase}. Stability requires 60s in /lifesteal.` : 'Waiting for live FreshSMP diagnostics.'}
+                                        >
+                                          {freshSmpStable ? '🛡️ STABLE' : freshSmpLabel === 'IN LOBBY' ? '⏳ IN LOBBY' : '⚠️ UNSTABLE'}
+                                        </span>
+                                      )}
+
+                                      {a.legitimacy?.status === 'legit' ? (
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                          <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                                          Legit
+                                        </span>
+                                      ) : a.legitimacy?.status === 'leak' ? (
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-50 text-rose-800 border border-rose-300" title={a.legitimacy.description}>
+                                          <ShieldAlert className="w-3 h-3 text-rose-600" />
+                                          {a.legitimacy.badge}
+                                        </span>
+                                      ) : null}
+
+                                      <div className="ml-auto flex items-center gap-1 font-mono text-[11px] font-bold text-slate-500">
+                                        <Clock className="w-3 h-3 text-slate-400" />
+                                        {a.isConnected ? (
+                                          <span className="text-emerald-700">{formatUptime(uptimeSec)}</span>
+                                        ) : (
+                                          <span className="text-slate-400">Offline</span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Server & Tunnel Info Box */}
+                                    <div className="space-y-2 text-xs bg-slate-50/70 p-3.5 rounded-2xl border border-slate-200/80">
                                       <div className="flex items-center justify-between gap-2">
                                         <span className="text-[11px] font-medium text-slate-500 flex items-center gap-1.5 shrink-0">
                                           <Server className="w-3.5 h-3.5 text-slate-400" />
@@ -1847,14 +2027,13 @@ export default function ChiefAdminPage() {
                                         </span>
                                       </div>
 
-                                      {/* Tunnel Daemon */}
                                       <div className="flex items-center justify-between gap-2">
                                         <span className="text-[11px] font-medium text-slate-500 flex items-center gap-1.5 shrink-0">
                                           <Globe className="w-3.5 h-3.5 text-slate-400" />
                                           Tunnel:
                                         </span>
                                         {displayTunnel ? (
-                                          <div className="flex items-center gap-1 max-w-[200px] truncate bg-white px-2 py-0.5 rounded-md border border-slate-200 font-mono text-[10.5px] text-slate-700">
+                                          <div className="flex items-center gap-1 max-w-[240px] truncate bg-white px-2 py-0.5 rounded-md border border-slate-200 font-mono text-[10.5px] text-slate-700">
                                             <span className="truncate" title={displayTunnel}>
                                               {displayTunnel}
                                             </span>
@@ -1874,72 +2053,100 @@ export default function ChiefAdminPage() {
                                         )}
                                       </div>
 
-                                      {/* Security / Legitimacy & Uptime */}
-                                      <div className="flex items-center justify-between pt-1 border-t border-slate-200/70">
-                                        {a.legitimacy?.status === 'legit' ? (
-                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                            <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                                            Verified Legit
-                                          </span>
-                                        ) : a.legitimacy?.status === 'leak' ? (
-                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300" title={a.legitimacy.description}>
-                                            <ShieldAlert className="w-3 h-3 text-rose-600" />
-                                            {a.legitimacy.badge}
-                                          </span>
-                                        ) : a.legitimacy?.status === 'unverified' ? (
-                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title={a.legitimacy.description}>
-                                            <AlertTriangle className="w-3 h-3 text-amber-600" />
-                                            {a.legitimacy.badge}
-                                          </span>
-                                        ) : (
-                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
-                                            <Clock className="w-3 h-3 text-slate-400" />
-                                            Standby
-                                          </span>
-                                        )}
-
-                                        <div className="flex items-center gap-1 font-mono text-[11px] font-bold text-slate-600">
-                                          <Clock className="w-3 h-3 text-slate-400" />
-                                          {a.isConnected ? (
-                                            <span className="text-emerald-700">{formatUptime(uptimeSec)}</span>
-                                          ) : (
-                                            <span className="text-slate-400">Offline</span>
-                                          )}
+                                      {/* If disconnected or error, show reason clearly */}
+                                      {!a.isConnected && a.runtimeReason && (
+                                        <div className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded-xl font-mono">
+                                          ⚠️ Last status: {a.runtimeReason}
                                         </div>
-                                      </div>
+                                      )}
                                     </div>
 
                                     {/* Live Server Chat */}
-                                    {a.isConnected && (
-                                      <div className="p-3.5 rounded-2xl bg-white border border-slate-200 text-xs shadow-2xs space-y-2">
-                                        <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
+                                    <div className="p-3.5 rounded-2xl bg-white border border-slate-200 text-xs shadow-2xs space-y-2">
+                                      <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
+                                        <div className="flex items-center gap-2">
                                           <span className="flex items-center gap-1.5 text-[10px] font-black text-emerald-700 uppercase tracking-wider">
-                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                            <span className={`w-1.5 h-1.5 rounded-full ${a.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
                                             Live Bedrock Chat
                                           </span>
-                                          <span className="text-[10px] text-slate-400 font-sans font-medium">
-                                            last 5 msgs
+                                          <span className="px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-600 font-mono text-[9.5px] font-bold">
+                                            {botChats.length} msgs
                                           </span>
                                         </div>
-
-                                        {botChats.length === 0 ? (
-                                          <div className="text-slate-400 italic text-[11px] py-3 text-center bg-slate-50/50 rounded-xl border border-slate-200/60">
-                                            Listening for server messages...
-                                          </div>
-                                        ) : (
-                                          <div className="space-y-1 bg-slate-50/50 p-2 rounded-xl border border-slate-200/80 max-h-[170px] overflow-y-auto">
-                                            {botChats.slice(-5).map((c, i) => (
-                                              <MinecraftChatMessage
-                                                key={c.id || i}
-                                                message={c}
-                                                compact={true}
-                                                showTimestamp={true}
-                                              />
-                                            ))}
-                                          </div>
-                                        )}
+                                        <div className="flex items-center gap-1">
+                                          <button
+                                            onClick={() => handleCopyChatHistory(chatKey, a.ign)}
+                                            className="p-1 text-slate-400 hover:text-slate-700 transition cursor-pointer"
+                                            title="Copy recent chat messages"
+                                          >
+                                            <Copy className="w-3 h-3" />
+                                          </button>
+                                          <button
+                                            onClick={() => setInspectingAccount(a)}
+                                            className="p-1 text-emerald-600 hover:text-emerald-800 transition cursor-pointer"
+                                            title="Expand live chat inspector"
+                                          >
+                                            <Maximize2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
                                       </div>
-                                    )}
+
+                                      {botChats.length === 0 ? (
+                                        <div
+                                          onClick={() => setInspectingAccount(a)}
+                                          className="text-slate-400 italic text-[11px] py-4 text-center bg-slate-50/50 rounded-xl border border-slate-200/60 cursor-pointer hover:bg-slate-50 transition"
+                                        >
+                                          {a.isConnected ? 'Listening for server messages... (click to inspect)' : 'Bot is currently offline'}
+                                        </div>
+                                      ) : (
+                                        <div
+                                          onClick={() => setInspectingAccount(a)}
+                                          className="space-y-1 bg-slate-50/50 p-2.5 rounded-xl border border-slate-200/80 max-h-[175px] overflow-y-auto cursor-pointer hover:border-emerald-300 transition"
+                                          title="Click to open full chat inspector & console"
+                                        >
+                                          {botChats.slice(-8).map((c, i) => (
+                                            <MinecraftChatMessage
+                                              key={c.id || i}
+                                              message={c}
+                                              compact={true}
+                                              showTimestamp={true}
+                                            />
+                                          ))}
+                                        </div>
+                                      )}
+
+                                      {/* Quick In-Game Command Actions */}
+                                      {a.isConnected && (
+                                        <div className="flex items-center gap-1.5 pt-1 overflow-x-auto text-[10px] font-mono font-bold">
+                                          <span className="text-slate-400 text-[9px] uppercase tracking-wider shrink-0">Quick Cmds:</span>
+                                          <button
+                                            onClick={() => handleSendCommand(a, '/spawn')}
+                                            className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition cursor-pointer shrink-0"
+                                          >
+                                            /spawn
+                                          </button>
+                                          <button
+                                            onClick={() => handleSendCommand(a, '/lifesteal')}
+                                            className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition cursor-pointer shrink-0"
+                                          >
+                                            /lifesteal
+                                          </button>
+                                          <button
+                                            onClick={() => handleSendCommand(a, '/afk')}
+                                            className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition cursor-pointer shrink-0"
+                                          >
+                                            /afk
+                                          </button>
+                                          <button
+                                            onClick={() => setInspectingAccount(a)}
+                                            className="ml-auto px-2 py-0.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition cursor-pointer shrink-0 flex items-center gap-1"
+                                          >
+                                            <Terminal className="w-2.5 h-2.5" />
+                                            <span>Console...</span>
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
                                 );
                               })}
@@ -2001,6 +2208,357 @@ export default function ChiefAdminPage() {
           <span>Dashboard</span>
         </Link>
       </nav>
+
+      {/* MODAL: LIVE CHAT & BOT DIAGNOSTICS INSPECTOR */}
+      {inspectingAccount && (() => {
+        const target = accounts.find((acc) =>
+          acc.owner.toLowerCase() === inspectingAccount.owner.toLowerCase() &&
+          (acc.botId || '').toLowerCase() === (inspectingAccount.botId || '').toLowerCase()
+        ) || inspectingAccount;
+
+        const cleanIgn = target.ign.replace(/^@/, '').trim();
+        const chatKey = `${target.owner.toLowerCase()}::${(target.botId || '').toLowerCase()}`;
+        const allChats = liveChats[chatKey] || [];
+        const diagnostic = freshSmpDiagnostics[chatKey];
+        const isFreshSmp = /freshsmp/i.test(`${target.serverName || ''} ${target.serverHost || ''}`);
+        const daemonConnection = daemonConnections[target.daemonUrl || target.registeredTunnel || ''];
+
+        const filteredChats = allChats.filter((msg) => {
+          const text = (msg.raw || msg.text || msg.message || '').toLowerCase();
+          const sender = (msg.sender || '').toLowerCase();
+          const q = inspectorSearch.toLowerCase().trim();
+          if (q && !text.includes(q) && !sender.includes(q)) return false;
+
+          if (inspectorFilter === 'chat') {
+            return text.includes('<') || (!text.startsWith('[system]') && !text.startsWith('🟢') && !text.startsWith('★'));
+          }
+          if (inspectorFilter === 'system') {
+            return text.startsWith('[system]') || text.includes('[pebbleafk]') || text.includes('dimension') || text.includes('connected');
+          }
+          if (inspectorFilter === 'rewards') {
+            return text.includes('afk') || text.includes('reward') || text.includes('coinflip') || text.includes('$') || text.includes('order');
+          }
+          return true;
+        });
+
+        const uptimeSec =
+          target.isConnected && target.connectedAt
+            ? Math.max(0, Math.floor((nowTick - target.connectedAt) / 1000))
+            : 0;
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/75 backdrop-blur-sm animate-in fade-in">
+            <div className="bg-[#1e1c1a] border-2 border-[#423d38] rounded-3xl max-w-4xl w-full max-h-[92vh] shadow-2xl flex flex-col overflow-hidden text-[#f3eee7]">
+              {/* Header */}
+              <div className="p-4 sm:p-5 border-b border-[#36322f] bg-[#242220] flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-12 h-12 rounded-2xl overflow-hidden border-2 border-[#514a44] bg-[#2b2724] shrink-0 flex items-center justify-center shadow-md">
+                    <img
+                      src={`https://crafthead.net/helm/${encodeURIComponent(cleanIgn)}/64`}
+                      alt={target.ign}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-base sm:text-lg font-black text-white font-mono tracking-tight select-all">
+                        {target.ign}
+                      </h2>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(cleanIgn);
+                          showToast(`Copied ${cleanIgn}`, 'info');
+                        }}
+                        className="text-stone-400 hover:text-white transition p-0.5"
+                        title="Copy username"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                      <span className={`text-[10px] font-black uppercase font-mono px-2 py-0.5 rounded-full border ${
+                        target.isConnected
+                          ? 'bg-emerald-950/80 text-emerald-400 border-emerald-700'
+                          : 'bg-stone-900 text-stone-400 border-stone-700'
+                      }`}>
+                        {target.isConnected ? '🟢 In-Game' : 'Offline'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-[#b9b0a6] mt-0.5 font-mono flex-wrap">
+                      <span className="text-[#8cda61] font-bold">@{target.owner}</span>
+                      <span>•</span>
+                      <span>{target.serverName || target.serverHost}:{target.serverPort}</span>
+                      <span>•</span>
+                      <span className="text-stone-400">{target.isConnected ? `Uptime: ${formatUptime(uptimeSec)}` : 'Disconnected'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => handleCopyChatHistory(chatKey, target.ign)}
+                    className="px-3 py-1.5 rounded-xl border border-[#514a44] bg-[#2a2724] hover:bg-[#34302c] text-xs font-bold text-[#f3eee7] transition flex items-center gap-1.5 cursor-pointer"
+                    title="Copy entire chat history"
+                  >
+                    <Copy className="w-3.5 h-3.5 text-stone-400" />
+                    <span className="hidden sm:inline">Copy Logs</span>
+                  </button>
+
+                  {target.isConnected && (
+                    <button
+                      onClick={() => handleDisconnectAccount(target.id, target.ign, target.botId)}
+                      className="px-3 py-1.5 rounded-xl border border-rose-800/80 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                      title="Disconnect bot immediately"
+                    >
+                      <Power className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Disconnect</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => setInspectingAccount(null)}
+                    className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-[#34302c] transition cursor-pointer"
+                    title="Close Inspector"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* 4 Telemetry Diagnostic Strip */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 p-3.5 bg-[#171615] border-b border-[#36322f] text-xs font-mono shrink-0">
+                {/* 1. Stream & WebSocket Health */}
+                <div className="p-2.5 rounded-xl bg-[#22201d] border border-[#3e3935] space-y-1">
+                  <span className="text-[10px] text-stone-400 uppercase tracking-wider block">Daemon Socket</span>
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <span className={`w-2 h-2 rounded-full ${daemonConnection?.state === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-stone-500'}`} />
+                    <span className={daemonConnection?.state === 'connected' ? 'text-emerald-400' : 'text-stone-400'}>
+                      {daemonConnection?.state === 'connected' ? 'Tunnel Live' : daemonConnection?.state || 'Offline'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-stone-400 truncate block" title={target.daemonUrl || target.registeredTunnel}>
+                    {target.daemonUrl || target.registeredTunnel || 'No tunnel registered'}
+                  </span>
+                </div>
+
+                {/* 2. FreshSMP Phase & Stability */}
+                <div className="p-2.5 rounded-xl bg-[#22201d] border border-[#3e3935] space-y-1">
+                  <span className="text-[10px] text-stone-400 uppercase tracking-wider block">Server Phase</span>
+                  <div className="font-bold text-[#8cda61] truncate">
+                    {isFreshSmp ? (
+                      diagnostic?.phase ? diagnostic.phase.toUpperCase() : target.isConnected ? 'IN LOBBY' : 'OFFLINE'
+                    ) : (
+                      target.runtimeState || 'SPAWNED'
+                    )}
+                  </div>
+                  <span className="text-[10px] text-stone-400 truncate block">
+                    {isFreshSmp && diagnostic?.lifestealSessionStartedAt
+                      ? `Lifesteal: ${Math.max(0, Math.floor((nowTick - diagnostic.lifestealSessionStartedAt) / 1000))}s`
+                      : `Server: ${target.serverHost}`}
+                  </span>
+                </div>
+
+                {/* 3. Account ID & Protocol */}
+                <div className="p-2.5 rounded-xl bg-[#22201d] border border-[#3e3935] space-y-1">
+                  <span className="text-[10px] text-stone-400 uppercase tracking-wider block">Deployment ID</span>
+                  <div className="font-bold text-stone-300 truncate" title={target.botId}>
+                    {target.botId || `acc_${target.id}`}
+                  </div>
+                  <span className="text-[10px] text-stone-400 truncate block">
+                    {target.settings?.version || '1.21.130 (Bedrock)'}
+                  </span>
+                </div>
+
+                {/* 4. Last Reason / Status */}
+                <div className="p-2.5 rounded-xl bg-[#22201d] border border-[#3e3935] space-y-1">
+                  <span className="text-[10px] text-stone-400 uppercase tracking-wider block">Runtime Health</span>
+                  <div className="font-bold truncate text-emerald-400">
+                    {target.isConnected ? 'Streaming 100%' : target.runtimeReason ? 'Kicked / Disconnected' : 'Standby'}
+                  </div>
+                  <span className="text-[10px] text-stone-400 truncate block" title={target.runtimeReason || 'Healthy session'}>
+                    {target.runtimeReason || `${allChats.length} msgs captured`}
+                  </span>
+                </div>
+              </div>
+
+              {/* Chat Filters & Search Strip */}
+              <div className="p-3 bg-[#1e1c1a] border-b border-[#36322f] flex flex-wrap items-center justify-between gap-2 shrink-0 text-xs">
+                {/* Search */}
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                  <input
+                    type="text"
+                    placeholder="Search in chat (e.g. /spawn, afk, reward, coinflip)..."
+                    value={inspectorSearch}
+                    onChange={(e) => setInspectorSearch(e.target.value)}
+                    className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-[#141312] border border-[#3e3935] text-xs font-mono text-[#f3eee7] placeholder-stone-500 focus:outline-none focus:border-[#77ca5b]"
+                  />
+                  {inspectorSearch && (
+                    <button
+                      onClick={() => setInspectorSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-white"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Pills */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    onClick={() => setInspectorFilter('all')}
+                    className={`px-2.5 py-1 rounded-lg font-mono font-bold text-[11px] transition cursor-pointer border ${
+                      inspectorFilter === 'all'
+                        ? 'bg-[#29402c] text-[#a4f57c] border-[#48873c]'
+                        : 'bg-[#22201d] text-stone-400 border-[#383430] hover:text-stone-200'
+                    }`}
+                  >
+                    All ({allChats.length})
+                  </button>
+                  <button
+                    onClick={() => setInspectorFilter('chat')}
+                    className={`px-2.5 py-1 rounded-lg font-mono font-bold text-[11px] transition cursor-pointer border ${
+                      inspectorFilter === 'chat'
+                        ? 'bg-[#29402c] text-[#a4f57c] border-[#48873c]'
+                        : 'bg-[#22201d] text-stone-400 border-[#383430] hover:text-stone-200'
+                    }`}
+                  >
+                    Player Chat
+                  </button>
+                  <button
+                    onClick={() => setInspectorFilter('system')}
+                    className={`px-2.5 py-1 rounded-lg font-mono font-bold text-[11px] transition cursor-pointer border ${
+                      inspectorFilter === 'system'
+                        ? 'bg-[#29402c] text-[#a4f57c] border-[#48873c]'
+                        : 'bg-[#22201d] text-stone-400 border-[#383430] hover:text-stone-200'
+                    }`}
+                  >
+                    System
+                  </button>
+                  <button
+                    onClick={() => setInspectorFilter('rewards')}
+                    className={`px-2.5 py-1 rounded-lg font-mono font-bold text-[11px] transition cursor-pointer border ${
+                      inspectorFilter === 'rewards'
+                        ? 'bg-[#29402c] text-[#a4f57c] border-[#48873c]'
+                        : 'bg-[#22201d] text-stone-400 border-[#383430] hover:text-stone-200'
+                    }`}
+                  >
+                    Rewards & Economy
+                  </button>
+
+                  <button
+                    onClick={() => setInspectorAutoScroll((prev) => !prev)}
+                    className={`px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold border transition cursor-pointer ${
+                      inspectorAutoScroll
+                        ? 'bg-[#181614] text-[#8cda61] border-[#3e3935]'
+                        : 'bg-[#22201d] text-stone-500 border-[#383430]'
+                    }`}
+                    title="Toggle automatic scrolling on new incoming messages"
+                  >
+                    Auto-scroll: {inspectorAutoScroll ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Main Chat Stream */}
+              <div className="flex-1 min-h-[300px] max-h-[460px] overflow-y-auto p-4 space-y-1.5 bg-[#171615] font-mono">
+                {filteredChats.length === 0 ? (
+                  <div className="text-center py-12 text-stone-500 italic text-xs">
+                    {allChats.length === 0
+                      ? 'No server chat messages captured yet. Listening to daemon stream...'
+                      : 'No messages match your search filter.'}
+                  </div>
+                ) : (
+                  filteredChats.map((c, i) => (
+                    <MinecraftChatMessage
+                      key={c.id || i}
+                      message={c}
+                      compact={false}
+                      showTimestamp={true}
+                    />
+                  ))
+                )}
+                <div ref={inspectorChatEndRef} />
+              </div>
+
+              {/* Interactive In-Game Command Console Footer */}
+              <div className="p-3.5 bg-[#242220] border-t border-[#36322f] space-y-2 shrink-0">
+                {/* Quick Command Buttons */}
+                <div className="flex items-center gap-1.5 flex-wrap text-xs font-mono">
+                  <span className="text-stone-400 text-[10px] font-bold uppercase tracking-wider mr-1">Presets:</span>
+                  <button
+                    onClick={() => handleSendCommand(target, '/spawn')}
+                    disabled={!target.isConnected}
+                    className="px-2.5 py-1 rounded-lg bg-[#2d2926] hover:bg-[#38332f] text-stone-300 border border-[#423d38] transition cursor-pointer disabled:opacity-40"
+                  >
+                    /spawn
+                  </button>
+                  <button
+                    onClick={() => handleSendCommand(target, '/lifesteal')}
+                    disabled={!target.isConnected}
+                    className="px-2.5 py-1 rounded-lg bg-[#2d2926] hover:bg-[#38332f] text-stone-300 border border-[#423d38] transition cursor-pointer disabled:opacity-40"
+                  >
+                    /lifesteal
+                  </button>
+                  <button
+                    onClick={() => handleSendCommand(target, '/afk')}
+                    disabled={!target.isConnected}
+                    className="px-2.5 py-1 rounded-lg bg-[#2d2926] hover:bg-[#38332f] text-stone-300 border border-[#423d38] transition cursor-pointer disabled:opacity-40"
+                  >
+                    /afk
+                  </button>
+                  <button
+                    onClick={() => handleSendCommand(target, '/orders')}
+                    disabled={!target.isConnected}
+                    className="px-2.5 py-1 rounded-lg bg-[#2d2926] hover:bg-[#38332f] text-stone-300 border border-[#423d38] transition cursor-pointer disabled:opacity-40"
+                  >
+                    /orders
+                  </button>
+                  <button
+                    onClick={() => handleSendCommand(target, '/daily')}
+                    disabled={!target.isConnected}
+                    className="px-2.5 py-1 rounded-lg bg-[#2d2926] hover:bg-[#38332f] text-stone-300 border border-[#423d38] transition cursor-pointer disabled:opacity-40"
+                  >
+                    /daily
+                  </button>
+                </div>
+
+                {/* Command Input Form */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!inspectorCustomCommand.trim()) return;
+                    handleSendCommand(target, inspectorCustomCommand);
+                    setInspectorCustomCommand('');
+                  }}
+                  className="flex items-center gap-2"
+                >
+                  <div className="relative flex-1">
+                    <Terminal className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                    <input
+                      type="text"
+                      disabled={!target.isConnected}
+                      placeholder={target.isConnected ? `Send in-game command or chat as ${target.ign} (e.g. /spawn)...` : 'Bot must be connected to send commands'}
+                      value={inspectorCustomCommand}
+                      onChange={(e) => setInspectorCustomCommand(e.target.value)}
+                      className="w-full pl-8 pr-3 py-2 rounded-xl bg-[#141312] border border-[#423d38] text-xs font-mono text-[#f3eee7] placeholder-stone-500 focus:outline-none focus:border-[#77ca5b] disabled:opacity-50"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={!target.isConnected || !inspectorCustomCommand.trim()}
+                    className="px-4 py-2 rounded-xl bg-[#59b947] hover:bg-[#4ba342] disabled:opacity-40 text-black font-black text-xs transition flex items-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send</span>
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* MODAL: RESET PASSWORD */}
       {resetPasswordUser && (
