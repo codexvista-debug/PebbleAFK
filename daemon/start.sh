@@ -121,7 +121,7 @@ is_managed_pid() {
   [ "$process_dir" = "$DAEMON_DIR" ] || return 1
   process_cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
   case "$process_cmd" in
-    *"start.sh"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"npm run start"*|*"dist/index.js"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*|*"prepare-mobile-raknet.sh"*|*"cmake-js"*) return 0 ;;
+    *"start.sh"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"npm run start"*|*"dist/index.js"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*|*"tail -F daemon.log"*|*"prepare-mobile-raknet.sh"*|*"cmake-js"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -196,25 +196,22 @@ fi
 # Apply pure-JS high-speed RakNet transport patches for Android/Termux
 node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
 
-# Do not make the dashboard wait for a potentially one-time native C++ build.
-# Prepare it in parallel with the daemon and Cloudflare tunnel, and expose a
-# status file so account connection attempts can wait for the stronger transport.
+# Build TypeScript to plain JS once so the daemon runs via direct `node dist/index.js`
+# without `tsx` / esbuild IPC child-process overhead inside Termux.
+if [ ! -f "dist/index.js" ] || [ "src/index.ts" -nt "dist/index.js" ] || [ "src/bot/botInstance.ts" -nt "dist/index.js" ] || [ "src/bot/bedrockProtocol.ts" -nt "dist/index.js" ]; then
+  ./node_modules/.bin/tsc >/dev/null 2>&1 || true
+fi
+
+# Note: FreshSMP uses TLS NetherNet (WebRTC), and non-FreshSMP servers use patched
+# jsp-raknet unless raknet-native is already compiled. Do NOT run background
+# `pkg install` + `clang++` C++ compilation while 13 bots are connecting, as
+# clang++ spikes RAM by ~600MB and triggers Android's Phantom Process Killer / LMKD!
 if node -e "require('raknet-native')" >/dev/null 2>&1; then
   printf 'ready\n' > "$NATIVE_STATUS_FILE"
   echo "[Startup] Native RakNet is already available; starting the daemon immediately." >> daemon.log
 else
-  printf 'pending\n' > "$NATIVE_STATUS_FILE"
-  echo "[Startup] Preparing native RakNet in the background while the dashboard tunnel starts." >> daemon.log
-  (
-    bash ./scripts/prepare-mobile-raknet.sh || true
-    NATIVE_STATE="fallback"
-    if node -e "require('raknet-native')" >/dev/null 2>&1; then NATIVE_STATE="ready"; fi
-    printf '%s\n' "$NATIVE_STATE" > "$NATIVE_STATUS_FILE.tmp"
-    mv -f "$NATIVE_STATUS_FILE.tmp" "$NATIVE_STATUS_FILE"
-    echo "[Startup] Native RakNet preparation finished: ${NATIVE_STATE}." >> daemon.log
-  ) >> daemon.log 2>&1 &
-  NATIVE_PREP_PID=$!
-  echo "$NATIVE_PREP_PID" > "$NATIVE_PREP_PID_FILE"
+  printf 'fallback\n' > "$NATIVE_STATUS_FILE"
+  echo "[Startup] Using pre-patched mobile transport (NetherNet TLS + high-speed JS RakNet) to avoid background C++ compiler memory spikes." >> daemon.log
 fi
 
 umask 077
@@ -249,7 +246,11 @@ run_daemon_loop() {
       export PEBBLEAFK_CRASH_RECOVERY=0
     fi
     LOOP_ITERATION=$((LOOP_ITERATION + 1))
-    ./node_modules/.bin/tsx src/index.ts >> daemon.log 2>&1 &
+    if [ -f "dist/index.js" ]; then
+      node dist/index.js >> daemon.log 2>&1 &
+    else
+      ./node_modules/.bin/tsx src/index.ts >> daemon.log 2>&1 &
+    fi
     DAEMON_CHILD_PID=$!
     echo "$DAEMON_CHILD_PID" > "$DAEMON_PID_FILE"
     wait "$DAEMON_CHILD_PID"
@@ -473,30 +474,35 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
       if [ "${LOG_SIZE:-0}" -gt 4194304 ]; then
         tail -n 2000 daemon.log > daemon.log.tmp 2>/dev/null && cat daemon.log.tmp > daemon.log && rm -f daemon.log.tmp
       fi
+    fi
 
-      HEALTH_CHILD_PID=$(tr -cd '0-9' < "$DAEMON_PID_FILE" 2>/dev/null || true)
-      LOCAL_HEALTH=$(curl -fsS --connect-timeout 2 --max-time 4 http://127.0.0.1:8080/ 2>/dev/null || true)
-      if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID" && echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
+    HEALTH_CHILD_PID=$(tr -cd '0-9' < "$DAEMON_PID_FILE" 2>/dev/null || true)
+    if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID"; then
+      LOCAL_HEALTH=$(curl -fsS --connect-timeout 3 --max-time 6 http://127.0.0.1:8080/ 2>/dev/null || true)
+      if echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
         HEALTH_MISS_COUNT=0
       else
         HEALTH_MISS_COUNT=$((HEALTH_MISS_COUNT + 1))
-        if command -v termux-notification &> /dev/null; then
-          termux-notification --id pebbleafk_status --title "PebbleAFK • Daemon Unresponsive" --content "🔴 Daemon stopped responding (${HEALTH_MISS_COUNT}/3) · Recovering..." --ongoing --priority low --alert-once 2>/dev/null &
-        fi
-        if [ "$HEALTH_MISS_COUNT" -le 2 ]; then
+        if [ "$HEALTH_MISS_COUNT" -eq 2 ]; then
+          if command -v termux-notification &> /dev/null; then
+            termux-notification --id pebbleafk_status --title "PebbleAFK • Daemon Unresponsive" --content "🔴 Daemon stopped responding (${HEALTH_MISS_COUNT}/3) · Recovering..." --ongoing --priority low --alert-once 2>/dev/null &
+          fi
           echo -e "[$(date +%T)] ⚠️ Daemon health check missed (${HEALTH_MISS_COUNT}/3); waiting for recovery..." >> daemon.log
         elif [ "$HEALTH_MISS_COUNT" -ge 3 ]; then
           HEALTH_MISS_COUNT=0
-          if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID"; then
-            echo -e "[$(date +%T)] 🔄 Daemon process (PID ${HEALTH_CHILD_PID}) is unresponsive on port 8080; cycling process for automatic crash recovery..." >> daemon.log
-            kill -TERM "$HEALTH_CHILD_PID" 2>/dev/null || true
-            sleep 2
-            if is_managed_pid "$HEALTH_CHILD_PID"; then
-              kill -KILL "$HEALTH_CHILD_PID" 2>/dev/null || true
-            fi
+          if command -v termux-notification &> /dev/null; then
+            termux-notification --id pebbleafk_status --title "PebbleAFK • Restarting Daemon" --content "🔄 Cycling unresponsive daemon process for automatic recovery..." --ongoing --priority low --alert-once 2>/dev/null &
+          fi
+          echo -e "[$(date +%T)] 🔄 Daemon process (PID ${HEALTH_CHILD_PID}) is unresponsive on port 8080; cycling process for automatic crash recovery..." >> daemon.log
+          kill -TERM "$HEALTH_CHILD_PID" 2>/dev/null || true
+          sleep 2
+          if is_managed_pid "$HEALTH_CHILD_PID"; then
+            kill -KILL "$HEALTH_CHILD_PID" 2>/dev/null || true
           fi
         fi
       fi
+    else
+      HEALTH_MISS_COUNT=0
     fi
 
     curl -s --connect-timeout 5 --max-time 10 -X POST "$DASHBOARD_SYNC_URL" \

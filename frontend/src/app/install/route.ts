@@ -107,11 +107,13 @@ if [ ! -d "node_modules" ] || [ ! -d "node_modules/bedrock-protocol" ] || [ -z "
     fi
   fi
   node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
+  npm run build >/dev/null 2>&1 || true
   LOCAL_DEPS_HASH=$(node -e 'const fs=require("fs"),crypto=require("crypto"); process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync("package.json")).update(fs.readFileSync("package-lock.json")).digest("hex"))')
   printf '%s\\n' "$LOCAL_DEPS_HASH" > .pebbleafk-deps.sha256
   echo -e "      \\033[1;32m✓ Modules configured successfully.\\033[0m"
 else
   node ./scripts/patch-mobile-raknet.cjs >/dev/null 2>&1 || true
+  npm run build >/dev/null 2>&1 || true
   echo -e "\\n\\033[1;34m[3/3]\\033[0m ⚙️  Modules verified."
 fi
 
@@ -144,7 +146,7 @@ stop_legacy_pebbleafk() {
     [ "$proc_cwd" = "$daemon_path" ] || continue
     proc_cmd=$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)
     case "$proc_cmd" in
-      *"start.sh"*|*"npm run start"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"dist/index.js"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*)
+      *"start.sh"*|*"npm run start"*|*"tsx src/index.ts"*|*"node_modules/.bin/tsx"*|*"dist/index.js"*|*"cloudflared tunnel"*|*"tail -f daemon.log"*|*"tail -F daemon.log"*)
         echo "      Stopping legacy PebbleAFK process $pid ($proc_cmd)"
         stop_managed_process "$pid"
         ;;

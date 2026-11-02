@@ -715,6 +715,7 @@ export class PebbleBotInstance {
         profilesFolder: isOffline ? undefined : profilesFolder,
         version: targetVersion,
         transport: isFreshSmpHost ? 'nethernet' : 'raknet',
+        viewDistance: 2,
         ...(isFreshSmpHost
           ? { nethernet: { signalling: 'http', url: freshSmpSignallingUrl, signallingConnectTimeout: 25_000 } }
           : { raknetBackend: rakBackend }),
@@ -1013,7 +1014,7 @@ export class PebbleBotInstance {
           });
           // A dimension transition needs one radius request; the server's
           // subsequent radius updates are responses and must not be echoed.
-          client.write('request_chunk_radius', { chunk_radius: 8 });
+          client.write('request_chunk_radius', { chunk_radius: 2 });
         } catch (_) {}
       });
 
@@ -1040,7 +1041,7 @@ export class PebbleBotInstance {
             result_position: respawnPosition,
             face: 0,
           });
-          client.write('request_chunk_radius', { chunk_radius: 8 });
+          client.write('request_chunk_radius', { chunk_radius: 2 });
         } catch (_) {}
       });
 

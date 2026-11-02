@@ -88,9 +88,14 @@ if (!minecraftData.versions.bedrock.some((entry: any) => entry.minecraftVersion 
 // multiple bots does not re-generate and eval() ~40MB of protocol JS on every
 // serializer/deserializer instantiation (which blocks the event loop and OOMs
 // Termux's V8 heap after 10-15 minutes with 10+ bots).
+// IMPORTANT: Must patch Client.prototype.init directly because
+// bedrock-protocol/src/client.js destructures { createDeserializer, createSerializer }
+// at require time!
 try {
   const bpSerializer = runtimeRequire('bedrock-protocol/src/transforms/serializer');
+  const { Client } = runtimeRequire('bedrock-protocol/src/client');
   const { CompiledProtodef, ProtoDefCompiler } = runtimeRequire('protodef').Compiler;
+  const { FullPacketParser, Serializer } = runtimeRequire('protodef');
   const compiledFactoryCache = new Map<string, {
     sizeOfFactory: () => Record<string, any>;
     writeFactory: () => Record<string, any>;
@@ -98,7 +103,10 @@ try {
   }>();
 
   const originalCreateProtocol = bpSerializer.createProtocol;
-  bpSerializer.createProtocol = (version: string) => {
+  const originalCreateSerializer = bpSerializer.createSerializer;
+  const originalCreateDeserializer = bpSerializer.createDeserializer;
+
+  const getCachedProtocol = (version: string) => {
     try {
       let cached = compiledFactoryCache.get(version);
       if (!cached) {
@@ -141,6 +149,78 @@ try {
       return originalCreateProtocol(version);
     }
   };
+
+  const makeCachedSerializer = (version: string) => {
+    try {
+      return new Serializer(getCachedProtocol(version), 'mcpe_packet');
+    } catch (_) {
+      return originalCreateSerializer(version);
+    }
+  };
+
+  const makeCachedDeserializer = (version: string) => {
+    try {
+      const parser = new FullPacketParser(getCachedProtocol(version), 'mcpe_packet') as any;
+      parser.dumpFailedBuffer = () => {};
+      parser.verify = () => {};
+      return parser;
+    } catch (_) {
+      return originalCreateDeserializer(version);
+    }
+  };
+
+  bpSerializer.createProtocol = getCachedProtocol;
+  bpSerializer.createSerializer = makeCachedSerializer;
+  bpSerializer.createDeserializer = makeCachedDeserializer;
+
+  // Replace Client.prototype.init so it uses makeCachedSerializer / makeCachedDeserializer
+  // instead of the un-cached destructured functions in bedrock-protocol/src/client.js!
+  const KeyExchange = runtimeRequire('bedrock-protocol/src/handshake/keyExchange');
+  const Login = runtimeRequire('bedrock-protocol/src/handshake/login');
+  const LoginVerify = runtimeRequire('bedrock-protocol/src/handshake/loginVerify');
+  const initRaknet = runtimeRequire('bedrock-protocol/src/rak');
+  const { NethernetClient } = runtimeRequire('bedrock-protocol/src/nethernet');
+
+  Client.prototype.init = function () {
+    if (this._closed) return;
+    this.options.nethernet ??= {};
+    this.options.nethernet.signalling ??= 'lan';
+    this.validateOptions();
+    this.compressionAlgorithm = this.versionGreaterThanOrEqualTo('1.19.30') ? 'none' : 'deflate';
+    this.serializer = makeCachedSerializer(this.options.version);
+    this.deserializer = makeCachedDeserializer(this.options.version);
+    this._loadFeatures();
+
+    KeyExchange(this);
+    Login(this, null, this.options);
+    LoginVerify(this, null, this.options);
+
+    const host = this.options.host;
+    const port = this.options.port;
+    const networkId = this.options.nethernet?.networkId;
+
+    if (this.options.transport === 'nethernet') {
+      this.nethernet ??= {};
+      this.connection = new NethernetClient({ networkId, host: this.options.host, ...this.options.nethernet, port: this.options.port });
+      this.batchHeader = null;
+      this.disableEncryption = true;
+    } else if (this.options.transport === 'raknet') {
+      const { RakClient } = initRaknet(this.options.raknetBackend);
+      this.connection = new RakClient({
+        useWorkers: this.options.useRaknetWorkers,
+        host,
+        port,
+        raknetProtocolVersion: this.versionGreaterThanOrEqualTo('1.19.30') ? 11 : 10,
+      }, this);
+      this.batchHeader = 0xfe;
+      this.disableEncryption = false;
+    }
+
+    if (this.connection) {
+      this.connection.onError = (error: any) => this.onConnectionError(error);
+    }
+    this.emit('connect_allowed');
+  };
 } catch (_) {}
 
 // Also cache Nethernet's discovery ProtoDef protocol so NethernetClient does
@@ -162,6 +242,44 @@ try {
   nethernetSerializer.createDeserializer = () => {
     const { FullPacketParser } = runtimeRequire('protodef');
     return new FullPacketParser(nethernetSerializer.createProtocol(), 'nethernet_packet');
+  };
+} catch (_) {}
+
+// Fast-path packet filter for headless AFK bots:
+// Skips expensive ProtoDef + NBT deserialization for heavy world/rendering
+// packets (level_chunk, update_block, biome_definition_list, crafting_data,
+// available_commands, etc.) that headless AFK bots never inspect.
+try {
+  const [readVarInt] = runtimeRequire('protodef').types.varint;
+  const { Client } = runtimeRequire('bedrock-protocol/src/client');
+
+  // Packets required by bedrock-protocol handshake or PebbleBotInstance:
+  // 1: login, 2: play_status, 3: server_to_client_handshake, 4: client_to_server_handshake,
+  // 5: disconnect, 6: resource_packs_info, 7: resource_pack_stack, 8: resource_pack_client_response,
+  // 9: text, 11: start_game, 19: move_player, 23: tick_sync, 29: update_attributes,
+  // 42: set_health, 45: respawn, 61: change_dimension, 70: chunk_radius_update,
+  // 74: boss_event, 85: transfer, 88: set_title, 100: modal_form_request,
+  // 115: network_stack_latency, 121: network_chunk_publisher_update,
+  // 143: network_settings, 162: item_registry
+  const ESSENTIAL_INBOUND_PACKET_IDS = new Set<number>([
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 19, 23, 29, 42, 45, 61, 70, 74, 85, 88, 100, 115, 121, 143, 162,
+  ]);
+
+  const origReadPacket = Client.prototype.readPacket;
+  Client.prototype.readPacket = function (packet: Buffer) {
+    try {
+      if (packet && packet.length > 0) {
+        const { value: header } = readVarInt(packet, 0);
+        const packetId = header & 0x3ff;
+        if (!ESSENTIAL_INBOUND_PACKET_IDS.has(packetId)) {
+          // Still emit a lightweight packet heartbeat so lastPacketReceivedAt stays fresh
+          this.emit('heartbeat');
+          this.emit('packet', { data: { name: 'ignored_world_packet', params: {} } });
+          return;
+        }
+      }
+    } catch (_) {}
+    return origReadPacket.call(this, packet);
   };
 } catch (_) {}
 
