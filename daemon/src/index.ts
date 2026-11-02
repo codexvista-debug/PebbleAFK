@@ -27,6 +27,7 @@ const AUTH_TOKEN = (process.env.DAEMON_AUTH_TOKEN || '').trim();
 let daemonOwner = (process.env.PEBBLEAFK_OWNER || '').trim().toLowerCase();
 let daemonSecret = AUTH_TOKEN;
 const DAEMON_STARTED_AT = Date.now() - Math.round(process.uptime() * 1000);
+const fs = require('fs');
 const path = require('path');
 const childProcess = require('child_process');
 const crypto = require('crypto');
@@ -421,17 +422,29 @@ wss.on('connection', (ws: WebSocket, req) => {
 
       // Stream live Termux terminal logs to dashboard (compact batch)
       if (parsed.type === 'GET_TERMINAL_LOGS') {
-        const fs = require('fs');
-        const path = require('path');
         let fileLines: string[] = [];
         try {
           const logPath = path.resolve(process.cwd(), 'daemon.log');
           if (fs.existsSync(logPath)) {
-            fileLines = fs.readFileSync(logPath, 'utf8')
-              .split('\n')
-              .slice(-150)
-              .map((l: string) => l.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim())
-              .filter(Boolean);
+            const stat = fs.statSync(logPath);
+            const maxReadBytes = 64 * 1024;
+            const readSize = Math.min(stat.size, maxReadBytes);
+            if (readSize > 0) {
+              const fd = fs.openSync(logPath, 'r');
+              try {
+                const buf = Buffer.allocUnsafe(readSize);
+                const offset = Math.max(0, stat.size - readSize);
+                fs.readSync(fd, buf, 0, readSize, offset);
+                const rawChunk = buf.toString('utf8');
+                const lines = offset > 0 ? rawChunk.split('\n').slice(1) : rawChunk.split('\n');
+                fileLines = lines
+                  .slice(-150)
+                  .map((l: string) => l.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim())
+                  .filter(Boolean);
+              } finally {
+                try { fs.closeSync(fd); } catch (_) {}
+              }
+            }
           }
         } catch (_) {}
 

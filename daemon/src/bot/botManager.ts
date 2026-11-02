@@ -29,9 +29,36 @@ export class BotManager {
 
   constructor(broadcastFn: (msg: DaemonMessage) => void) {
     this.broadcastFn = broadcastFn;
-    // Saved bot configs are deliberately not restored during daemon startup.
-    // The user must explicitly press Connect (or Connect Selected) after
-    // launching Termux; this avoids unexpectedly reconnecting a whole fleet.
+    // On a fresh Termux launch, saved bot configs are not restored so the user
+    // explicitly decides when to connect. However, if the supervisor restarts
+    // the daemon after an unexpected crash/OOM (PEBBLEAFK_CRASH_RECOVERY=1),
+    // automatically restore the active bots so 24/7 AFK sessions never drop.
+    if (process.env.PEBBLEAFK_CRASH_RECOVERY === '1') {
+      this.restoreDesiredBotsAfterCrash();
+    }
+  }
+
+  private restoreDesiredBotsAfterCrash() {
+    try {
+      if (!fs.existsSync(this.desiredBotsPath)) return;
+      const raw = fs.readFileSync(this.desiredBotsPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed) || parsed.length === 0) return;
+
+      console.log(chalk.cyan(`[BotManager] Crash recovery active: restoring ${parsed.length} active bot session(s)...`));
+      parsed.forEach((cfg: BotConfig, idx: number) => {
+        if (!cfg || !cfg.id || !cfg.username || !cfg.host) return;
+        this.desiredBots.set(cfg.id, cfg);
+        setTimeout(() => {
+          if (this.desiredBots.has(cfg.id)) {
+            console.log(chalk.cyan(`[BotManager] Restoring bot session after daemon restart: ${cfg.username} (${cfg.id})`));
+            this.startBot(cfg);
+          }
+        }, idx * 1500);
+      });
+    } catch (error: any) {
+      console.warn(chalk.yellow(`[BotManager] Could not restore active bots after crash: ${error?.message || error}`));
+    }
   }
 
   private persistDesiredBots() {

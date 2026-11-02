@@ -4,6 +4,8 @@ import type { BotManager } from './bot/botManager';
 let notificationTicker: NodeJS.Timeout | null = null;
 let lastTitle = '';
 let lastContent = '';
+let notificationInFlight = false;
+let termuxNotificationAvailable: boolean | null = null;
 
 function formatUptime(totalSec: number): string {
   if (totalSec <= 0) return '0s';
@@ -74,12 +76,16 @@ export function updateTermuxNotification(botManager: BotManager) {
       content = `🟢 ${count} bot${count === 1 ? '' : 's'} online | Uptime: ${uptimeStr}`;
     }
 
-    // Only invoke if changed
+    // Only invoke if changed or if no notification is currently in flight
+    if (termuxNotificationAvailable === false || notificationInFlight) {
+      return;
+    }
     if (title === lastTitle && content === lastContent) {
       return;
     }
     lastTitle = title;
     lastContent = content;
+    notificationInFlight = true;
 
     execFile(
       'termux-notification',
@@ -95,8 +101,12 @@ export function updateTermuxNotification(botManager: BotManager) {
         'low',
         '--alert-once',
       ],
-      () => {
-        // Silently ignore if not in Termux environment
+      { timeout: 3000, killSignal: 'SIGKILL' },
+      (err: any) => {
+        notificationInFlight = false;
+        if (err && err.code === 'ENOENT') {
+          termuxNotificationAvailable = false;
+        }
       }
     );
   } catch (_) {

@@ -84,4 +84,85 @@ if (!minecraftData.versions.bedrock.some((entry: any) => entry.minecraftVersion 
   minecraftData.postNettyVersionsByProtocolVersion.bedrock['2225'] = [version];
 }
 
+// Cache compiled ProtoDef code per Bedrock version so creating/reconnecting
+// multiple bots does not re-generate and eval() ~40MB of protocol JS on every
+// serializer/deserializer instantiation (which blocks the event loop and OOMs
+// Termux's V8 heap after 10-15 minutes with 10+ bots).
+try {
+  const bpSerializer = runtimeRequire('bedrock-protocol/src/transforms/serializer');
+  const { CompiledProtodef, ProtoDefCompiler } = runtimeRequire('protodef').Compiler;
+  const compiledFactoryCache = new Map<string, {
+    sizeOfFactory: () => Record<string, any>;
+    writeFactory: () => Record<string, any>;
+    readFactory: () => Record<string, any>;
+  }>();
+
+  const originalCreateProtocol = bpSerializer.createProtocol;
+  bpSerializer.createProtocol = (version: string) => {
+    try {
+      let cached = compiledFactoryCache.get(version);
+      if (!cached) {
+        try {
+          runtimeRequire(`bedrock-protocol/data/${version}/size.js`);
+          return bpSerializer.getProtocol(version);
+        } catch (_) {}
+
+        const protocol = minecraftData('bedrock_' + version).protocol;
+        const compiler = new ProtoDefCompiler();
+        compiler.addTypesToCompile(protocol.types);
+        compiler.addTypes(runtimeRequire('bedrock-protocol/src/datatypes/compiler-minecraft'));
+
+        const sizeOfCode = compiler.sizeOfCompiler.generate();
+        const writeCode = compiler.writeCompiler.generate();
+        const readCode = compiler.readCompiler.generate();
+
+        const compileFactory = (subCompiler: any, code: string) => {
+          const native = subCompiler.native; // eslint-disable-line @typescript-eslint/no-unused-vars
+          const { PartialReadError } = runtimeRequire('protodef/src/utils'); // eslint-disable-line @typescript-eslint/no-unused-vars
+          return eval(code);
+        };
+
+        cached = {
+          sizeOfFactory: compileFactory(compiler.sizeOfCompiler, sizeOfCode),
+          writeFactory: compileFactory(compiler.writeCompiler, writeCode),
+          readFactory: compileFactory(compiler.readCompiler, readCode),
+        };
+        compiledFactoryCache.set(version, cached);
+      }
+
+      // Each client gets its own fresh ctx object (so per-client variables like
+      // ShieldItemID are isolated), while sharing the compiled V8 SharedFunctionInfo!
+      return new CompiledProtodef(
+        cached.sizeOfFactory(),
+        cached.writeFactory(),
+        cached.readFactory(),
+      );
+    } catch (_) {
+      return originalCreateProtocol(version);
+    }
+  };
+} catch (_) {}
+
+// Also cache Nethernet's discovery ProtoDef protocol so NethernetClient does
+// not re-compile and eval() its protocol schema on every connection/ping.
+try {
+  const nethernetSerializer = runtimeRequire('nethernet/src/transforms/serializer');
+  let cachedNethernetProto: any = null;
+  const origNethernetCreateProtocol = nethernetSerializer.createProtocol;
+  nethernetSerializer.createProtocol = () => {
+    if (!cachedNethernetProto) {
+      cachedNethernetProto = origNethernetCreateProtocol();
+    }
+    return cachedNethernetProto;
+  };
+  nethernetSerializer.createSerializer = () => {
+    const { Serializer } = runtimeRequire('protodef');
+    return new Serializer(nethernetSerializer.createProtocol(), 'nethernet_packet');
+  };
+  nethernetSerializer.createDeserializer = () => {
+    const { FullPacketParser } = runtimeRequire('protodef');
+    return new FullPacketParser(nethernetSerializer.createProtocol(), 'nethernet_packet');
+  };
+} catch (_) {}
+
 module.exports = runtimeRequire('bedrock-protocol');

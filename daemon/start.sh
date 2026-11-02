@@ -183,7 +183,7 @@ stop_pid_file "$SUPERVISOR_PID_FILE" "daemon supervisor"
 stop_pid_file "$DAEMON_PID_FILE" "daemon"
 stop_pid_file "$NATIVE_PREP_PID_FILE" "native RakNet preparation"
 stop_pid_file "$LAUNCHER_PID_FILE" "launcher"
-rm -f "$NATIVE_STATUS_FILE" "$NATIVE_STATUS_FILE.tmp"
+rm -f "$NATIVE_STATUS_FILE" "$NATIVE_STATUS_FILE.tmp" .pebbleafk-bots.json .pebbleafk-bots.json.tmp
 echo "=== PebbleAFK Daemon Started $(date) ===" > daemon.log
 echo "[$(date +%T)] [Launcher] Foreground supervisor started (wake_lock_active=${WAKE_LOCK_ACTIVE}, instance=${INSTANCE_ID})." >> daemon.log
 
@@ -230,7 +230,7 @@ run_daemon_loop() {
   export DAEMON_AUTH_TOKEN="$APP_SECRET"
   export PEBBLEAFK_INSTANCE_ID="$INSTANCE_ID"
   export PEBBLEAFK_NATIVE_STATUS_FILE="$NATIVE_STATUS_FILE"
-  export NODE_OPTIONS="--max-old-space-size=512"
+  export NODE_OPTIONS="--max-old-space-size=1536"
   DAEMON_CHILD_PID=""
   stop_daemon_child() {
     if [ -n "$DAEMON_CHILD_PID" ] && kill -0 "$DAEMON_CHILD_PID" 2>/dev/null; then
@@ -241,7 +241,14 @@ run_daemon_loop() {
   }
   trap 'stop_daemon_child; exit 0' TERM INT
   RESTART_DELAY=2
+  LOOP_ITERATION=0
   while true; do
+    if [ "$LOOP_ITERATION" -gt 0 ]; then
+      export PEBBLEAFK_CRASH_RECOVERY=1
+    else
+      export PEBBLEAFK_CRASH_RECOVERY=0
+    fi
+    LOOP_ITERATION=$((LOOP_ITERATION + 1))
     ./node_modules/.bin/tsx src/index.ts >> daemon.log 2>&1 &
     DAEMON_CHILD_PID=$!
     echo "$DAEMON_CHILD_PID" > "$DAEMON_PID_FILE"
@@ -250,6 +257,8 @@ run_daemon_loop() {
     rm -f "$DAEMON_PID_FILE"
     if [ "$EXIT_CODE" -eq 42 ]; then
       echo -e "\n[$(date +%T)] 🔄 Dashboard requested daemon restart. Rebooting in 1s..." >> daemon.log
+      LOOP_ITERATION=0
+      rm -f .pebbleafk-bots.json .pebbleafk-bots.json.tmp
       sleep 1
       RESTART_DELAY=2
       continue
@@ -448,19 +457,38 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
       restart_tunnel || true
     fi
 
-    # Watchdog: Keep Cloudflare tunnel and public registration alive.
-    # NEVER kill the running daemon child: active Minecraft bot sessions must not be dropped.
-    # The supervisor loop (wait $DAEMON_CHILD_PID) already handles crashes and restarts automatically.
+    # Watchdog: Keep Cloudflare tunnel, Android wake-lock, and daemon HTTP health alive.
     CHECK_COUNTER=$((CHECK_COUNTER + 1))
     if [ "$CHECK_COUNTER" -ge 4 ]; then
       CHECK_COUNTER=0
+      if command -v termux-wake-lock &> /dev/null; then
+        termux-wake-lock 2>/dev/null || true
+      fi
+
+      # Cap daemon.log at 4MB in-place so disk & tail never stall on multi-day AFK runs
+      LOG_SIZE=$(wc -c < daemon.log 2>/dev/null || echo 0)
+      if [ "${LOG_SIZE:-0}" -gt 4194304 ]; then
+        tail -n 2000 daemon.log > daemon.log.tmp 2>/dev/null && cat daemon.log.tmp > daemon.log && rm -f daemon.log.tmp
+      fi
+
       HEALTH_CHILD_PID=$(tr -cd '0-9' < "$DAEMON_PID_FILE" 2>/dev/null || true)
-      if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID"; then
+      LOCAL_HEALTH=$(curl -fsS --connect-timeout 2 --max-time 4 http://127.0.0.1:8080/ 2>/dev/null || true)
+      if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID" && echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
         HEALTH_MISS_COUNT=0
       else
         HEALTH_MISS_COUNT=$((HEALTH_MISS_COUNT + 1))
         if [ "$HEALTH_MISS_COUNT" -le 2 ]; then
-          echo -e "[$(date +%T)] ⚠️ Daemon child process is restarting; supervisor loop is recovering it." >> daemon.log
+          echo -e "[$(date +%T)] ⚠️ Daemon health check missed (${HEALTH_MISS_COUNT}/3); waiting for recovery..." >> daemon.log
+        elif [ "$HEALTH_MISS_COUNT" -ge 3 ]; then
+          HEALTH_MISS_COUNT=0
+          if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID"; then
+            echo -e "[$(date +%T)] 🔄 Daemon process (PID ${HEALTH_CHILD_PID}) is unresponsive on port 8080; cycling process for automatic crash recovery..." >> daemon.log
+            kill -TERM "$HEALTH_CHILD_PID" 2>/dev/null || true
+            sleep 2
+            if is_managed_pid "$HEALTH_CHILD_PID"; then
+              kill -KILL "$HEALTH_CHILD_PID" 2>/dev/null || true
+            fi
+          fi
         fi
       fi
     fi
@@ -473,7 +501,7 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 HEARTBEAT_PID=$!
 echo "$HEARTBEAT_PID" > "$HEARTBEAT_PID_FILE"
 
-# Stream logs continuously in foreground
-tail -f daemon.log &
+# Stream logs continuously in foreground (use -F to follow across rotation/recreation)
+tail -F daemon.log 2>/dev/null &
 TAIL_PID=$!
 wait $TAIL_PID
