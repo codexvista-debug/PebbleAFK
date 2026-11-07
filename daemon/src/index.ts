@@ -188,7 +188,21 @@ async function flushTerminalLogHistory() {
   }
 }
 
-setInterval(() => { void flushTerminalLogHistory(); }, 3000).unref();
+setInterval(() => { void flushTerminalLogHistory(); }, 5000).unref();
+
+// Proactively reclaim external C++ ArrayBuffers (zlib/DTLS/WebRTC) on Android
+// before RSS can trigger Android's Low Memory Killer (lmkd) when >5 bots are active.
+setInterval(() => {
+  try {
+    const gcFn = (global as any).gc;
+    if (typeof gcFn === 'function') {
+      const mem = process.memoryUsage();
+      if (mem.external > 48 * 1024 * 1024 || mem.heapUsed > 160 * 1024 * 1024 || mem.rss > 420 * 1024 * 1024) {
+        gcFn();
+      }
+    }
+  } catch (_) {}
+}, 30000).unref();
 
 function appendTerminalLog(rawText: string) {
   if (isAppendingLog) return;
@@ -198,7 +212,7 @@ function appendTerminalLog(rawText: string) {
     terminalLogs.push(line);
     if (daemonOwner && daemonSecret) {
       pendingHistoryLogs.push({ line, timestamp: Date.now() });
-      if (pendingHistoryLogs.length > 5000) pendingHistoryLogs.splice(0, pendingHistoryLogs.length - 5000);
+      if (pendingHistoryLogs.length > 500) pendingHistoryLogs.splice(0, pendingHistoryLogs.length - 500);
     }
     if (terminalLogs.length > MAX_LOGS) {
       terminalLogs.shift();

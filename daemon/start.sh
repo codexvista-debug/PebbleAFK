@@ -227,7 +227,7 @@ run_daemon_loop() {
   export DAEMON_AUTH_TOKEN="$APP_SECRET"
   export PEBBLEAFK_INSTANCE_ID="$INSTANCE_ID"
   export PEBBLEAFK_NATIVE_STATUS_FILE="$NATIVE_STATUS_FILE"
-  export NODE_OPTIONS="--max-old-space-size=1536"
+  export NODE_OPTIONS="--max-old-space-size=768 --expose-gc"
   DAEMON_CHILD_PID=""
   stop_daemon_child() {
     if [ -n "$DAEMON_CHILD_PID" ] && kill -0 "$DAEMON_CHILD_PID" 2>/dev/null; then

@@ -8,13 +8,12 @@ let notificationInFlight = false;
 let termuxNotificationAvailable: boolean | null = null;
 
 function formatUptime(totalSec: number): string {
-  if (totalSec <= 0) return '0s';
+  if (totalSec <= 0) return '0m';
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return '<1m';
 }
 
 export function updateTermuxNotification(botManager: BotManager) {

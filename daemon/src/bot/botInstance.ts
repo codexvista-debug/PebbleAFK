@@ -828,6 +828,8 @@ export class PebbleBotInstance {
         PebbleBotInstance.lastHandshakeTime = Date.now();
         console.log(chalk.cyan(`[PebbleAFK] Spawning client for ${this.config.username} -> ${cleanHost}:${cleanPort} (version: ${targetVersion}, transport: ${isFreshSmpHost ? 'nethernet-https' : rakBackend})`));
         client = bedrock.createClient(clientOptions);
+        client.viewDistance = 2;
+        client.compressionLevel = 1;
         this.client = client;
       } finally {
         releaseHandshakeQueue();
@@ -1546,30 +1548,39 @@ export class PebbleBotInstance {
 
   private startPlayerAuthInputLoop(client: any) {
     if (this.playerAuthInterval) clearInterval(this.playerAuthInterval);
+    const zeroVec2 = Object.freeze({ x: 0, z: 0 });
+    const zeroVec3 = Object.freeze({ x: 0, y: 0, z: 0 });
+    const emptyInputData = Object.freeze({});
+    const reusableAuthInput: Record<string, any> = {
+      pitch: 0,
+      yaw: 0,
+      position: this.position,
+      move_vector: zeroVec2,
+      head_yaw: 0,
+      input_data: emptyInputData,
+      input_mode: 'touch',
+      play_mode: 'normal',
+      interaction_model: 'classic',
+      interact_rotation: zeroVec2,
+      tick: 0n,
+      delta: zeroVec3,
+      analogue_move_vector: zeroVec2,
+      camera_orientation: zeroVec3,
+      raw_move_vector: zeroVec2,
+    };
     this.playerAuthInterval = setInterval(() => {
       if (this.client !== client || (this.state !== 'SPAWNED' && this.state !== 'LOGGED_IN') || !this.hasSpawnedPosition) return;
       try {
-        // Bedrock clients send player_auth_input once per game tick (20 packets/sec).
-        this.clientTick += 1n;
+        // Advance client tick by 2 ticks per 100ms interval (20 game ticks/sec) while
+        // batching outbound authoritative input at 10 Hz to halve DTLS/SCTP CPU & GC load on mobile.
+        this.clientTick += 2n;
+        reusableAuthInput.pitch = this.position.pitch || 0;
+        reusableAuthInput.yaw = this.position.yaw || 0;
+        reusableAuthInput.position = this.position;
+        reusableAuthInput.head_yaw = this.position.yaw || 0;
+        reusableAuthInput.tick = this.clientTick;
 
-        // Continuous player authoritative inputs prevent Bedrock server / Geyser timeout watchdogs
-        client.write('player_auth_input', {
-          pitch: this.position.pitch || 0,
-          yaw: this.position.yaw || 0,
-          position: { ...this.position },
-          move_vector: { x: 0, z: 0 },
-          head_yaw: this.position.yaw || 0,
-          input_data: {},
-          input_mode: 'touch',
-          play_mode: 'normal',
-          interaction_model: 'classic',
-          interact_rotation: { x: 0, z: 0 },
-          tick: this.clientTick,
-          delta: { x: 0, y: 0, z: 0 },
-          analogue_move_vector: { x: 0, z: 0 },
-          camera_orientation: { x: 0, y: 0, z: 0 },
-          raw_move_vector: { x: 0, z: 0 },
-        });
+        client.queue('player_auth_input', reusableAuthInput);
       } catch (err: any) {
         const now = Date.now();
         if (now - this.lastAuthInputErrorAt >= 10_000) {
@@ -1578,7 +1589,7 @@ export class PebbleBotInstance {
           this.logActivity('status', `⚠️ Bedrock input heartbeat failed: ${reason}`);
         }
       }
-    }, 50);
+    }, 100);
   }
 
   private setupAntiAfk() {
@@ -1731,7 +1742,7 @@ export class PebbleBotInstance {
         }
         this.emitTelemetry();
       }
-    }, 2000);
+    }, 4000);
   }
 
   private emitTelemetry() {
@@ -1770,7 +1781,7 @@ export class PebbleBotInstance {
   public pushChat(chatMsg: any) {
     this.lastChatReceivedAt = Date.now();
     this.chatHistory.push(chatMsg);
-    if (this.chatHistory.length > 250) {
+    if (this.chatHistory.length > 120) {
       this.chatHistory.shift();
     }
 
