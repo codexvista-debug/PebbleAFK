@@ -478,22 +478,22 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
 
     HEALTH_CHILD_PID=$(tr -cd '0-9' < "$DAEMON_PID_FILE" 2>/dev/null || true)
     if [ -n "$HEALTH_CHILD_PID" ] && is_managed_pid "$HEALTH_CHILD_PID"; then
-      LOCAL_HEALTH=$(curl -fsS --connect-timeout 3 --max-time 6 http://127.0.0.1:8080/ 2>/dev/null || true)
+      LOCAL_HEALTH=$(curl -fsS --connect-timeout 5 --max-time 12 http://127.0.0.1:8080/ 2>/dev/null || true)
       if echo "$LOCAL_HEALTH" | grep -Fq "\"instanceId\":\"$INSTANCE_ID\""; then
         HEALTH_MISS_COUNT=0
       else
         HEALTH_MISS_COUNT=$((HEALTH_MISS_COUNT + 1))
-        if [ "$HEALTH_MISS_COUNT" -eq 2 ]; then
+        if [ "$HEALTH_MISS_COUNT" -eq 4 ]; then
           if command -v termux-notification &> /dev/null; then
-            termux-notification --id pebbleafk_status --title "PebbleAFK • Daemon Unresponsive" --content "🔴 Daemon stopped responding (${HEALTH_MISS_COUNT}/3) · Recovering..." --ongoing --priority low --alert-once 2>/dev/null &
+            termux-notification --id pebbleafk_status --title "PebbleAFK • Daemon Busy" --content "⚠️ Daemon health check delayed (${HEALTH_MISS_COUNT}/6) · Waiting for recovery..." --ongoing --priority low --alert-once 2>/dev/null &
           fi
-          echo -e "[$(date +%T)] ⚠️ Daemon health check missed (${HEALTH_MISS_COUNT}/3); waiting for recovery..." >> daemon.log
-        elif [ "$HEALTH_MISS_COUNT" -ge 3 ]; then
+          echo -e "[$(date +%T)] ⚠️ Daemon health check missed (${HEALTH_MISS_COUNT}/6); waiting for recovery..." >> daemon.log
+        elif [ "$HEALTH_MISS_COUNT" -ge 6 ]; then
           HEALTH_MISS_COUNT=0
           if command -v termux-notification &> /dev/null; then
             termux-notification --id pebbleafk_status --title "PebbleAFK • Restarting Daemon" --content "🔄 Cycling unresponsive daemon process for automatic recovery..." --ongoing --priority low --alert-once 2>/dev/null &
           fi
-          echo -e "[$(date +%T)] 🔄 Daemon process (PID ${HEALTH_CHILD_PID}) is unresponsive on port 8080; cycling process for automatic crash recovery..." >> daemon.log
+          echo -e "[$(date +%T)] 🔄 Daemon process (PID ${HEALTH_CHILD_PID}) is unresponsive on port 8080 after 6 consecutive checks; cycling process for automatic crash recovery..." >> daemon.log
           kill -TERM "$HEALTH_CHILD_PID" 2>/dev/null || true
           sleep 2
           if is_managed_pid "$HEALTH_CHILD_PID"; then
@@ -505,9 +505,17 @@ echo -e "  ${BOLD}📜 Streaming Live Daemon Logs:${NC}\n"
       HEALTH_MISS_COUNT=0
     fi
 
-    curl -s --connect-timeout 5 --max-time 10 -X POST "$DASHBOARD_SYNC_URL" \
-      -H "Content-Type: application/json" \
-      -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"heartbeat\"}" > /dev/null 2>&1 || true
+    LATEST_LOG_URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' tunnel.log 2>/dev/null | tail -n 1)
+    if [ -n "$LATEST_LOG_URL" ] && [ "$LATEST_LOG_URL" != "$TUNNEL_URL" ]; then
+      TUNNEL_URL="$LATEST_LOG_URL"
+      WSS_URL=$(echo "$TUNNEL_URL" | sed 's/https:/wss:/')
+    fi
+
+    (
+      curl -s --connect-timeout 5 --max-time 10 -X POST "$DASHBOARD_SYNC_URL" \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"$APP_USER\",\"url\":\"$WSS_URL\",\"token\":\"$APP_SECRET\",\"action\":\"heartbeat\"}" > /dev/null 2>&1 || true
+    ) &
   done
 ) &
 HEARTBEAT_PID=$!

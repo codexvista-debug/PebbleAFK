@@ -106,6 +106,7 @@ export function useDaemonSocket(
   const foregroundProbeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingStartTimeRef = useRef<number>(0);
   const lastPongAtRef = useRef<number>(0);
+  const missedPingsRef = useRef<number>(0);
   const authenticatedAtRef = useRef<number>(0);
   const reconnectAttemptsRef = useRef<number>(0);
   const chatSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -114,6 +115,9 @@ export function useDaemonSocket(
   const shutdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const browserSessionIdsRef = useRef<Record<string, string>>({});
   const wasAuthenticatedRef = useRef(false);
+  const silentReconnectGraceUntilRef = useRef<number>(0);
+  const silentGraceExpiryTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingOutboundQueueRef = useRef<any[]>([]);
 
   const syncDaemonStatus = useCallback(async () => {
     const username = currentUserRef.current?.trim().toLowerCase();
@@ -283,6 +287,12 @@ export function useDaemonSocket(
       setLastDaemonDisconnectedAt(null);
     }
     wasAuthenticatedRef.current = false;
+    silentReconnectGraceUntilRef.current = 0;
+    if (silentGraceExpiryTimerRef.current) {
+      clearTimeout(silentGraceExpiryTimerRef.current);
+      silentGraceExpiryTimerRef.current = null;
+    }
+    pendingOutboundQueueRef.current = [];
     setDeviceSessions([]);
     setBotStates({});
     setBotReasons({});
@@ -335,14 +345,26 @@ export function useDaemonSocket(
 
     const cleanTarget = url.replace(/\/+$/, '');
 
-    // Do NOT destroy an active or connecting socket unless forced
-    if (!force && socketRef.current) {
+    // Do NOT destroy an active or connecting socket on the same URL if it is already healthy or handshaking
+    if (socketRef.current) {
       const currentUrl = (socketRef.current.url || '').replace(/\/+$/, '');
-      if (
-        (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING) &&
-        currentUrl === cleanTarget
-      ) {
-        return;
+      if (currentUrl === cleanTarget) {
+        if (!force && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+        if (
+          force &&
+          socketRef.current.readyState === WebSocket.OPEN &&
+          statusRef.current === 'AUTHENTICATED' &&
+          Date.now() - lastPongAtRef.current < 25000
+        ) {
+          try {
+            pingStartTimeRef.current = Date.now();
+            socketRef.current.send(JSON.stringify({ type: 'PING' }));
+            socketRef.current.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+          } catch (_) {}
+          return;
+        }
       }
     }
 
@@ -368,7 +390,10 @@ export function useDaemonSocket(
       socketRef.current = null;
     }
 
-    setStatus('CONNECTING');
+    const inSilentGrace = Date.now() < silentReconnectGraceUntilRef.current;
+    if (!inSilentGrace) {
+      setStatus('CONNECTING');
+    }
 
     try {
       const ws = new WebSocket(url);
@@ -377,13 +402,16 @@ export function useDaemonSocket(
         if (socketRef.current === ws && ws.readyState === WebSocket.CONNECTING) {
           try { ws.close(); } catch (_) {}
         }
-      }, 8000);
+      }, 12000);
 
       ws.onopen = () => {
         if (socketRef.current !== ws) return;
         if (connectionTimeoutRef.current) clearTimeout(connectionTimeoutRef.current);
-        setStatus('CONNECTED');
+        if (Date.now() >= silentReconnectGraceUntilRef.current) {
+          setStatus('CONNECTED');
+        }
         lastPongAtRef.current = Date.now();
+        missedPingsRef.current = 0;
         authenticatedAtRef.current = 0;
         const effectiveToken =
           authTokenRef.current ||
@@ -422,14 +450,20 @@ export function useDaemonSocket(
           if (socketRef.current === ws && ws.readyState === WebSocket.OPEN && !authenticatedAtRef.current) {
             ws.close(4001, 'Daemon authentication timed out');
           }
-        }, 10000);
+        }, 15000);
 
         if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
         pingIntervalRef.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
-            const pageIsVisible = typeof document === 'undefined' || document.visibilityState === 'visible';
-            if (pageIsVisible && lastPongAtRef.current && Date.now() - lastPongAtRef.current > 45000) {
-              ws.close(4000, 'Daemon heartbeat timed out');
+            const elapsedSinceActivity = lastPongAtRef.current ? Date.now() - lastPongAtRef.current : 0;
+            if (elapsedSinceActivity >= 14000) {
+              missedPingsRef.current += 1;
+            } else {
+              missedPingsRef.current = 0;
+            }
+            // Allow 5 missed retries (~75s+ of complete silence) before cycling the socket
+            if (missedPingsRef.current >= 5 && elapsedSinceActivity > 75000) {
+              ws.close(4000, 'Daemon heartbeat timed out after 5 missed retries');
               return;
             }
             pingStartTimeRef.current = Date.now();
@@ -437,11 +471,18 @@ export function useDaemonSocket(
               ws.send(JSON.stringify({ type: 'PING' }));
             } catch (_) {}
           }
-        }, 10000);
+        }, 15000);
       };
 
       ws.onmessage = (event) => {
         if (socketRef.current !== ws) return;
+        // Any message from the daemon proves the WebSocket tunnel is alive
+        lastPongAtRef.current = Date.now();
+        missedPingsRef.current = 0;
+        if (foregroundProbeTimeoutRef.current) {
+          clearTimeout(foregroundProbeTimeoutRef.current);
+          foregroundProbeTimeoutRef.current = null;
+        }
         try {
           const msg = JSON.parse(event.data);
 
@@ -451,8 +492,15 @@ export function useDaemonSocket(
                 clearTimeout(connectionTimeoutRef.current);
                 connectionTimeoutRef.current = null;
               }
+              if (silentGraceExpiryTimerRef.current) {
+                clearTimeout(silentGraceExpiryTimerRef.current);
+                silentGraceExpiryTimerRef.current = null;
+              }
+              silentReconnectGraceUntilRef.current = 0;
+              reconnectAttemptsRef.current = 0;
               authenticatedAtRef.current = Date.now();
               lastPongAtRef.current = Date.now();
+              missedPingsRef.current = 0;
               wasAuthenticatedRef.current = true;
               const reportedStartedAt = Number(msg.payload?.daemonStartedAt);
               let cachedStartedAt = 0;
@@ -474,11 +522,27 @@ export function useDaemonSocket(
               } catch (_) {}
               void syncDaemonStatus();
               setStatus('AUTHENTICATED');
+              if (pendingOutboundQueueRef.current.length > 0) {
+                const queued = pendingOutboundQueueRef.current.splice(0, pendingOutboundQueueRef.current.length);
+                for (const item of queued) {
+                  try {
+                    if (ws.readyState === WebSocket.OPEN) {
+                      ws.send(JSON.stringify(item));
+                    }
+                  } catch (_) {}
+                }
+              }
             } else {
               if (connectionTimeoutRef.current) {
                 clearTimeout(connectionTimeoutRef.current);
                 connectionTimeoutRef.current = null;
               }
+              if (silentGraceExpiryTimerRef.current) {
+                clearTimeout(silentGraceExpiryTimerRef.current);
+                silentGraceExpiryTimerRef.current = null;
+              }
+              silentReconnectGraceUntilRef.current = 0;
+              wasAuthenticatedRef.current = false;
               setStatus('AUTH_ERROR');
               if (pingIntervalRef.current) {
                 clearInterval(pingIntervalRef.current);
@@ -635,9 +699,6 @@ export function useDaemonSocket(
       ws.onclose = () => {
         if (socketRef.current !== ws) return;
         socketRef.current = null;
-        // This is a browser-client socket close, not proof that the Termux
-        // process stopped; daemon heartbeats own the disconnect timeline.
-        wasAuthenticatedRef.current = false;
         if (connectionTimeoutRef.current) {
           clearTimeout(connectionTimeoutRef.current);
           connectionTimeoutRef.current = null;
@@ -646,36 +707,72 @@ export function useDaemonSocket(
           clearTimeout(foregroundProbeTimeoutRef.current);
           foregroundProbeTimeoutRef.current = null;
         }
-        setStatus('DISCONNECTED');
-        setMsAuthData(null);
         if (pingIntervalRef.current) {
           clearInterval(pingIntervalRef.current);
           pingIntervalRef.current = null;
         }
 
-        if (authenticatedAtRef.current && Date.now() - authenticatedAtRef.current >= 30000) {
+        if (authenticatedAtRef.current && Date.now() - authenticatedAtRef.current >= 20000) {
           reconnectAttemptsRef.current = 0;
         }
         authenticatedAtRef.current = 0;
         if (shutdownRequestedRef.current || sessionRemovedRef.current) {
+          wasAuthenticatedRef.current = false;
+          silentReconnectGraceUntilRef.current = 0;
+          if (silentGraceExpiryTimerRef.current) {
+            clearTimeout(silentGraceExpiryTimerRef.current);
+            silentGraceExpiryTimerRef.current = null;
+          }
           if (shutdownTimeoutRef.current) {
             clearTimeout(shutdownTimeoutRef.current);
             shutdownTimeoutRef.current = null;
           }
+          setStatus('DISCONNECTED');
+          setMsAuthData(null);
           setDaemonUrl('');
           return;
         }
+
+        // Seamless zero-flicker background reconnection:
+        // If this session was authenticated, keep UI status as AUTHENTICATED during an
+        // 18-second silent recovery window while reconnecting immediately in the background.
+        const now = Date.now();
+        if (wasAuthenticatedRef.current || now < silentReconnectGraceUntilRef.current) {
+          if (silentReconnectGraceUntilRef.current <= now) {
+            silentReconnectGraceUntilRef.current = now + 18000;
+            if (silentGraceExpiryTimerRef.current) clearTimeout(silentGraceExpiryTimerRef.current);
+            silentGraceExpiryTimerRef.current = setTimeout(() => {
+              silentGraceExpiryTimerRef.current = null;
+              if (Date.now() >= silentReconnectGraceUntilRef.current && statusRef.current === 'AUTHENTICATED' && !authenticatedAtRef.current) {
+                silentReconnectGraceUntilRef.current = 0;
+                wasAuthenticatedRef.current = false;
+                setStatus(socketRef.current ? 'CONNECTING' : 'DISCONNECTED');
+                setMsAuthData(null);
+              }
+            }, 18100);
+          }
+          setStatus('AUTHENTICATED');
+        } else {
+          setStatus('DISCONNECTED');
+          setMsAuthData(null);
+        }
+
         reconnectAttemptsRef.current += 1;
         if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        // Quick-tunnel URLs can be registered before every Cloudflare edge is
-        // ready. Keep retries responsive so one early handshake failure cannot
-        // leave the dashboard waiting 30 seconds for the next connection.
-        const backoff = Math.min(1000 * (2 ** Math.min(reconnectAttemptsRef.current - 1, 5)), 5000);
-        const delay = backoff + Math.floor(Math.random() * 750);
+        // Fast initial retries (200ms -> 500ms -> 1000ms) for zero-lag Cloudflare edge handoffs
+        const attempt = reconnectAttemptsRef.current;
+        const fastDelay =
+          attempt === 1
+            ? 200
+            : attempt === 2
+              ? 500
+              : attempt === 3
+                ? 1000
+                : Math.min(1000 * (2 ** Math.min(attempt - 3, 4)), 4000) + Math.floor(Math.random() * 500);
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectTimeoutRef.current = null;
           connect(false);
-        }, delay);
+        }, fastDelay);
       };
 
       ws.onerror = () => {
@@ -683,52 +780,62 @@ export function useDaemonSocket(
         try { ws.close(); } catch (_) {}
       };
     } catch (_) {
-      setStatus('DISCONNECTED');
+      if (Date.now() >= silentReconnectGraceUntilRef.current) {
+        setStatus('DISCONNECTED');
+      }
       if (shutdownRequestedRef.current) {
         setDaemonUrl('');
         return;
       }
       reconnectAttemptsRef.current += 1;
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      const backoff = Math.min(1000 * (2 ** Math.min(reconnectAttemptsRef.current - 1, 5)), 5000);
+      const backoff = Math.min(1000 * (2 ** Math.min(reconnectAttemptsRef.current - 1, 5)), 4000);
       reconnectTimeoutRef.current = setTimeout(() => {
         reconnectTimeoutRef.current = null;
         connect(false);
-      }, backoff + Math.floor(Math.random() * 750));
+      }, backoff + Math.floor(Math.random() * 500));
     }
   }, []);
 
-  // Resume promptly after mobile network hand-offs or a tab returning from suspension.
+  // Resume promptly after mobile network hand-offs or a tab returning from suspension,
+  // without ever tearing down an already healthy or connecting WebSocket.
   useEffect(() => {
     const reconnectIfNeeded = () => {
       if (!currentUserRef.current || !daemonUrlRef.current) return;
       const ws = socketRef.current;
-      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING || statusRef.current !== 'AUTHENTICATED') {
-        connect(true);
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        connect(false);
         return;
-      } else if (ws.readyState === WebSocket.OPEN) {
+      }
+      if (ws.readyState === WebSocket.CONNECTING) {
+        // Let an in-progress tunnel handshake finish; its own timeout/retry handles failure.
+        return;
+      }
+      if (ws.readyState === WebSocket.OPEN) {
         const probeStartedAt = Date.now();
+        const silenceDurationMs = lastPongAtRef.current ? probeStartedAt - lastPongAtRef.current : 0;
         try {
           pingStartTimeRef.current = probeStartedAt;
           ws.send(JSON.stringify({ type: 'PING' }));
         } catch (_) {
-          connect(true);
+          connect(false);
           return;
         }
-        if (foregroundProbeTimeoutRef.current) clearTimeout(foregroundProbeTimeoutRef.current);
-        foregroundProbeTimeoutRef.current = setTimeout(() => {
-          foregroundProbeTimeoutRef.current = null;
-          if (
-            socketRef.current === ws &&
-            ws.readyState === WebSocket.OPEN &&
-            lastPongAtRef.current <= probeStartedAt
-          ) {
-            try { ws.close(4000, 'No response to foreground reconnect probe'); } catch (_) {}
-            connect(true);
-          }
-        }, 2500);
-      } else if (ws.readyState === WebSocket.CONNECTING) {
-        // Let an in-progress tunnel handshake finish; its own timeout/retry handles failure.
+        // Only start a fallback timeout if the socket has been completely silent for >30s
+        if (silenceDurationMs > 30000) {
+          if (foregroundProbeTimeoutRef.current) clearTimeout(foregroundProbeTimeoutRef.current);
+          foregroundProbeTimeoutRef.current = setTimeout(() => {
+            foregroundProbeTimeoutRef.current = null;
+            if (
+              socketRef.current === ws &&
+              ws.readyState === WebSocket.OPEN &&
+              lastPongAtRef.current <= probeStartedAt
+            ) {
+              try { ws.close(4000, 'No response to foreground reconnect probe after 12s'); } catch (_) {}
+              connect(false);
+            }
+          }, 12000);
+        }
       }
     };
     const onVisibilityChange = () => {
@@ -780,11 +887,23 @@ export function useDaemonSocket(
 
   const send = useCallback((msg: any) => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(msg));
+      try {
+        socketRef.current.send(JSON.stringify(msg));
+        return true;
+      } catch (_) {}
+    }
+    if (
+      (socketRef.current && socketRef.current.readyState === WebSocket.CONNECTING) ||
+      Date.now() < silentReconnectGraceUntilRef.current
+    ) {
+      if (pendingOutboundQueueRef.current.length < 50) {
+        pendingOutboundQueueRef.current.push(msg);
+      }
+      connect(false);
       return true;
     }
     return false;
-  }, []);
+  }, [connect]);
 
   const disconnectDeviceSession = useCallback((sessionId: string) => {
     return send({ type: 'DISCONNECT_DEVICE_SESSION', payload: { sessionId } });
@@ -792,7 +911,7 @@ export function useDaemonSocket(
 
   const reconnectNow = useCallback(() => {
     sessionRemovedRef.current = false;
-    connect(true);
+    connect(false);
   }, [connect]);
 
   const restartDaemon = useCallback((reason = 'Restart requested from dashboard') => {

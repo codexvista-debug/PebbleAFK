@@ -1099,8 +1099,8 @@ export default function Home() {
                 setDaemonUrl(cleanTarget);
                 reconnect(true);
               } else if (isDisconnected) {
-                // Target URL is already saved and socket is disconnected; force reconnect to wake up Termux session
-                reconnect(true);
+                // Target URL is already saved and socket is disconnected; initiate reconnect without tearing down in-progress handshakes
+                reconnect(false);
               }
               if (targetToken) setAuthToken(targetToken);
             }
@@ -1124,13 +1124,13 @@ export default function Home() {
     // Instant trigger when user switches back from Termux or wakes up from AFK
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        const wasAway = sleepStartTimestampRef.current && (Date.now() - sleepStartTimestampRef.current > 8000);
-        const isOffline = daemonStatusRef.current !== 'AUTHENTICATED';
+        const wasAway = sleepStartTimestampRef.current && (Date.now() - sleepStartTimestampRef.current > 15000);
+        const isOffline = daemonStatusRef.current === 'DISCONNECTED';
         const hasTunnel = Boolean(daemonUrlRef.current || (currentUser && typeof window !== 'undefined' && localStorage.getItem(`pebbleafk_daemon_url_${currentUser.toLowerCase()}`)));
         if (isOffline && (wasAway || wasEverConnectedRef.current || hasTunnel)) {
           setIsSignetReconnectOpen(true);
           setSignetReconnectAttempt((prev) => prev + 1);
-          reconnectNow();
+          reconnect(false);
         }
         sleepStartTimestampRef.current = null;
         checkTunnel();
@@ -1140,13 +1140,13 @@ export default function Home() {
     };
 
     const handleFocus = () => {
-      const isOffline = daemonStatusRef.current !== 'AUTHENTICATED';
+      const isOffline = daemonStatusRef.current === 'DISCONNECTED';
       const hasTunnel = Boolean(daemonUrlRef.current || (currentUser && typeof window !== 'undefined' && localStorage.getItem(`pebbleafk_daemon_url_${currentUser.toLowerCase()}`)));
       const idleTime = Date.now() - lastActiveTimestampRef.current;
-      if (isOffline && (idleTime > 15000 || wasEverConnectedRef.current || hasTunnel)) {
+      if (isOffline && idleTime > 15000 && (wasEverConnectedRef.current || hasTunnel)) {
         setIsSignetReconnectOpen(true);
         setSignetReconnectAttempt((prev) => prev + 1);
-        reconnectNow();
+        reconnect(false);
       }
       lastActiveTimestampRef.current = Date.now();
       checkTunnel();
@@ -1156,13 +1156,13 @@ export default function Home() {
       const now = Date.now();
       const idleMs = now - lastActiveTimestampRef.current;
       lastActiveTimestampRef.current = now;
-      if (idleMs > 25000 && daemonStatusRef.current !== 'AUTHENTICATED') {
+      if (idleMs > 25000 && daemonStatusRef.current === 'DISCONNECTED') {
         const hasTunnel = Boolean(daemonUrlRef.current || (currentUser && typeof window !== 'undefined' && localStorage.getItem(`pebbleafk_daemon_url_${currentUser.toLowerCase()}`)));
         if (wasEverConnectedRef.current || hasTunnel) {
           setIsSignetReconnectOpen(true);
           setSignetReconnectAttempt((prev) => prev + 1);
           checkTunnel();
-          reconnectNow();
+          reconnect(false);
         }
       }
     };

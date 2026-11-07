@@ -96,14 +96,18 @@ setInterval(persistDeviceSessions, 60000).unref();
 function publishDeviceSessions() {
   const now = Date.now();
   const sessions = [...deviceSessions.values()]
-    .map((session) => ({
-      ...session,
-      connected: Boolean(sessionSockets.get(session.sessionId)?.size) && now - session.lastSeenAt < 35000,
-    }))
+    .map((session) => {
+      const sockets = sessionSockets.get(session.sessionId);
+      const hasOpenSocket = Boolean(sockets && [...sockets].some((s) => s.readyState === WebSocket.OPEN));
+      return {
+        ...session,
+        connected: hasOpenSocket && now - session.lastSeenAt < 180000,
+      };
+    })
     .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
   const json = JSON.stringify({ type: 'DEVICE_SESSIONS', payload: { sessions } });
   for (const client of authenticatedClients) {
-    if (client.readyState === WebSocket.OPEN) {
+    if (client.readyState === WebSocket.OPEN && client.bufferedAmount < 512 * 1024) {
       try { client.send(json); } catch (_) {}
     }
   }
@@ -206,7 +210,7 @@ function appendTerminalLog(rawText: string) {
         payload: { line },
       });
       for (const client of authenticatedClients) {
-        if (client.readyState === WebSocket.OPEN) {
+        if (client.readyState === WebSocket.OPEN && socketSessions.has(client) && client.bufferedAmount < 256 * 1024) {
           try {
             client.send(lineMsg);
           } catch (_) {}
@@ -245,9 +249,16 @@ appendTerminalLog('=== NEW TERMUX SESSION STARTED ===');
 
 function broadcast(message: DaemonMessage) {
   const json = JSON.stringify(message);
+  const isDroppableHighFreq =
+    message.type === 'TELEMETRY' ||
+    message.type === 'ACTIVITY_LOG' ||
+    message.type === 'CHAT_MESSAGE';
   for (const client of authenticatedClients) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(json);
+      if (isDroppableHighFreq && client.bufferedAmount > 512 * 1024) continue;
+      try {
+        client.send(json);
+      } catch (_) {}
     }
   }
   if (message.type === 'BOT_STATE' || message.type === 'FRESHSMP_DIAGNOSTICS') {
@@ -260,7 +271,15 @@ startTermuxNotificationTicker(botManager);
 
 wss.on('connection', (ws: WebSocket, req) => {
   const ip = req.socket.remoteAddress;
-  console.log(chalk.gray(`[Connection] New WebSocket client connected from ${ip}`));
+  let isBrowserSession = false;
+  let lastSyncAt = 0;
+  const sendToClient = (out: DaemonMessage) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(out));
+      } catch (_) {}
+    }
+  };
 
   // If no auth token is configured, auto-authorize connection
   if (!AUTH_TOKEN) {
@@ -271,12 +290,14 @@ wss.on('connection', (ws: WebSocket, req) => {
     }));
   }
 
-  // Ping/Pong keepalive. Retire half-open tunnel sockets so clients can reconnect cleanly.
+  // Ping/Pong keepalive. Allow 6 missed heartbeats (~150s) so mobile network lag or backgrounded tabs never drop prematurely.
   let missedHeartbeats = 0;
   const pingInterval = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) return;
-    if (missedHeartbeats >= 3) {
-      console.warn(chalk.yellow(`[Connection] WebSocket heartbeat missed for ${ip}; terminating stale socket`));
+    if (missedHeartbeats >= 6) {
+      if (isBrowserSession) {
+        console.warn(chalk.yellow(`[Connection] WebSocket heartbeat missed for ${ip}; terminating stale socket`));
+      }
       ws.terminate();
       return;
     }
@@ -286,7 +307,7 @@ wss.on('connection', (ws: WebSocket, req) => {
     } catch (_) {
       ws.terminate();
     }
-  }, 20000);
+  }, 25000);
 
   ws.on('pong', () => {
     missedHeartbeats = 0;
@@ -336,6 +357,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         const sessionId = typeof parsed.payload.sessionId === 'string' && /^[\w-]{8,100}$/.test(parsed.payload.sessionId)
           ? parsed.payload.sessionId
           : undefined;
+        isBrowserSession = Boolean(sessionId);
         // Admin and server-to-server sockets do not have a browser session ID;
         // never invent one here or they pollute the user's known-device list.
         if (sessionId) {
@@ -346,14 +368,15 @@ wss.on('connection', (ws: WebSocket, req) => {
             String(req.headers['user-agent'] || ''),
             String(ip || 'unknown'),
           );
+          console.log(chalk.green(`[Auth] Browser session authenticated (${parsed.payload.deviceLabel || 'Browser'})`));
         }
         ws.send(JSON.stringify({
           type: 'AUTH_RESULT',
           payload: { success: true, message: 'Authenticated successfully', daemonStartedAt: DAEMON_STARTED_AT },
         }));
-        console.log(chalk.green(`[Auth] Client authenticated successfully`));
 
-        botManager.handleClientMessage({ type: 'REQUEST_SYNC' });
+        lastSyncAt = Date.now();
+        botManager.handleClientMessage({ type: 'REQUEST_SYNC' }, sendToClient, { includeChat: isBrowserSession });
         return;
       }
 
@@ -476,8 +499,17 @@ wss.on('connection', (ws: WebSocket, req) => {
         return;
       }
 
+      if (parsed.type === 'REQUEST_SYNC') {
+        if (Date.now() - lastSyncAt < 1500) {
+          return;
+        }
+        lastSyncAt = Date.now();
+        botManager.handleClientMessage(parsed, sendToClient, { includeChat: isBrowserSession });
+        return;
+      }
+
       // Forward message to BotManager
-      botManager.handleClientMessage(parsed);
+      botManager.handleClientMessage(parsed, sendToClient, { includeChat: isBrowserSession });
     } catch (err: any) {
       console.error(chalk.red(`[Error] Failed to process message: ${err.message}`));
     }
@@ -502,8 +534,10 @@ wss.on('connection', (ws: WebSocket, req) => {
       }
       publishDeviceSessions();
     }
-    const reasonStr = reason && reason.length ? reason.toString('utf8') : '';
-    console.log(chalk.gray(`[Connection] WebSocket disconnected (${ip}) [code=${code}${reasonStr ? `, reason=${reasonStr}` : ''}]`));
+    if (isBrowserSession) {
+      const reasonStr = reason && reason.length ? reason.toString('utf8') : '';
+      console.log(chalk.gray(`[Connection] WebSocket disconnected (${ip}) [code=${code}${reasonStr ? `, reason=${reasonStr}` : ''}]`));
+    }
   });
 
   ws.on('error', (err) => {

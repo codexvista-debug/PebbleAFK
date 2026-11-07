@@ -98,15 +98,22 @@ async function probeLiveDaemons(tunnels: Map<string, { url: string; token: strin
       const probeAt = Date.now();
       const bots = new Map<string, LiveBotProbe>();
       let timer: NodeJS.Timeout | null = null;
+      let settleTimer: NodeJS.Timeout | null = null;
       let ws: WebSocket | null = null;
 
       const finish = () => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
+        if (settleTimer) clearTimeout(settleTimer);
         results.set(owner, { reachable: authenticated, probeAt, authError, bots });
         try { ws?.close(); } catch (_) {}
         resolve();
+      };
+
+      const scheduleSettle = (ms = 350) => {
+        if (settleTimer) clearTimeout(settleTimer);
+        settleTimer = setTimeout(finish, ms);
       };
 
       timer = setTimeout(finish, 3500);
@@ -127,7 +134,7 @@ async function probeLiveDaemons(tunnels: Map<string, { url: string; token: strin
             if (msg.type === 'AUTH_RESULT') {
               if (msg.payload?.success && !authenticated) {
                 authenticated = true;
-                ws?.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+                scheduleSettle(450);
               } else if (!msg.payload?.success) {
                 authError = msg.payload?.message || 'Daemon authentication failed';
                 finish();
@@ -148,6 +155,7 @@ async function probeLiveDaemons(tunnels: Map<string, { url: string; token: strin
                   serverId: p.serverId,
                 };
                 bots.set(probeInfo.botId, probeInfo);
+                scheduleSettle(250);
               }
             }
           } catch (_) {}

@@ -264,6 +264,7 @@ try {
   const ESSENTIAL_INBOUND_PACKET_IDS = new Set<number>([
     1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 19, 23, 29, 42, 45, 61, 70, 74, 85, 88, 100, 115, 121, 143, 162,
   ]);
+  const SHIELD_ITEM_MARKER = Buffer.from('\x10minecraft:shield', 'utf8');
 
   const origReadPacket = Client.prototype.readPacket;
   Client.prototype.readPacket = function (packet: Buffer) {
@@ -271,6 +272,20 @@ try {
       if (packet && packet.length > 0) {
         const { value: header } = readVarInt(packet, 0);
         const packetId = header & 0x3ff;
+        if (packetId === 162) {
+          // Fast-path item_registry (packet 162): extract ShieldItemID in native C++ Buffer.indexOf
+          // without deserializing 1,500+ item NBT compounds on the single-threaded mobile CPU.
+          const idx = packet.indexOf(SHIELD_ITEM_MARKER);
+          if (idx !== -1 && idx + SHIELD_ITEM_MARKER.length + 2 <= packet.length) {
+            const shieldId = packet.readInt16LE(idx + SHIELD_ITEM_MARKER.length);
+            this.serializer?.proto?.setVariable?.('ShieldItemID', shieldId);
+            this.deserializer?.proto?.setVariable?.('ShieldItemID', shieldId);
+          }
+          this.emit('heartbeat');
+          this.emit('packet', { data: { name: 'item_registry', params: { itemstates: [] } } });
+          this.emit('item_registry', { itemstates: [] });
+          return;
+        }
         if (!ESSENTIAL_INBOUND_PACKET_IDS.has(packetId)) {
           // Still emit a lightweight packet heartbeat so lastPacketReceivedAt stays fresh
           this.emit('heartbeat');

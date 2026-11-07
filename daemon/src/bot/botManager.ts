@@ -164,7 +164,13 @@ export class BotManager {
     if (removedDesiredBot) this.persistDesiredBots();
   }
 
-  public handleClientMessage(msg: ClientMessage) {
+  public handleClientMessage(
+    msg: ClientMessage,
+    targetSendFn?: (out: DaemonMessage) => void,
+    options?: { includeChat?: boolean }
+  ) {
+    const sendFn = targetSendFn || this.broadcastFn;
+    const includeChat = options?.includeChat !== false;
     switch (msg.type) {
       case 'START_BOT':
         console.log(chalk.cyan(`[BotManager] Starting Bedrock bot: ${msg.payload.username} (${msg.payload.id})`));
@@ -242,7 +248,7 @@ export class BotManager {
 
       case 'REQUEST_SYNC': {
         for (const [botId, instance] of Array.from(this.bots.entries())) {
-          this.broadcastFn({
+          sendFn({
             type: 'BOT_STATE',
             payload: {
               botId,
@@ -258,66 +264,71 @@ export class BotManager {
               port: instance.config.port,
             },
           });
-          instance.syncTelemetry();
+          if (includeChat) {
+            instance.syncTelemetry();
 
-          const freshSmpDiagnostics = instance.getFreshSmpDiagnostics();
-          if (freshSmpDiagnostics) {
-            this.broadcastFn({ type: 'FRESHSMP_DIAGNOSTICS', payload: freshSmpDiagnostics });
-          }
+            const freshSmpDiagnostics = instance.getFreshSmpDiagnostics();
+            if (freshSmpDiagnostics) {
+              sendFn({ type: 'FRESHSMP_DIAGNOSTICS', payload: freshSmpDiagnostics });
+            }
 
-          const bossBar = instance.getBossBar();
-          this.broadcastFn({
-            type: 'BOSS_BAR',
-            payload: bossBar || {
-              botId,
-              serverId: instance.config.serverId,
-              accountUsername: instance.config.username,
-              visible: false,
-            },
-          });
+            const bossBar = instance.getBossBar();
+            sendFn({
+              type: 'BOSS_BAR',
+              payload: bossBar || {
+                botId,
+                serverId: instance.config.serverId,
+                accountUsername: instance.config.username,
+                visible: false,
+              },
+            });
 
-          // Sync buffered chat history for this bot so dashboard chat loads immediately
-          if (instance.chatHistory && instance.chatHistory.length > 0) {
-            for (const chatMsg of instance.chatHistory) {
-              this.broadcastFn({
-                type: 'CHAT_MESSAGE',
-                payload: chatMsg,
-              });
+            // Sync recent buffered chat history for this bot to the requesting client only
+            if (instance.chatHistory && instance.chatHistory.length > 0) {
+              const recentChat = instance.chatHistory.slice(-100);
+              for (const chatMsg of recentChat) {
+                sendFn({
+                  type: 'CHAT_MESSAGE',
+                  payload: chatMsg,
+                });
+              }
             }
           }
         }
 
-        // Replay active Microsoft device code if verification is still in progress
-        if (this.activeAuthCodePayload && Date.now() - this.activeAuthCodePayload.createdAt < 10 * 60 * 1000) {
-          this.broadcastFn({
-            type: 'MS_AUTH_CODE',
-            payload: {
-              botId: this.activeAuthCodePayload.botId,
-              userCode: this.activeAuthCodePayload.userCode,
-              url: this.activeAuthCodePayload.url,
-              message: this.activeAuthCodePayload.message,
-              targetEmail: this.activeAuthCodePayload.targetEmail,
-            },
-          });
-        }
-
-        // Replay recently verified accounts (last 15m) so accounts verified while the browser tab was backgrounded are never lost
-        const cutoff = Date.now() - 15 * 60 * 1000;
-        for (const [ignKey, entry] of Array.from(this.recentlyVerifiedAccounts.entries())) {
-          if (entry.verifiedAt < cutoff) {
-            this.recentlyVerifiedAccounts.delete(ignKey);
-            continue;
+        if (includeChat) {
+          // Replay active Microsoft device code if verification is still in progress
+          if (this.activeAuthCodePayload && Date.now() - this.activeAuthCodePayload.createdAt < 10 * 60 * 1000) {
+            sendFn({
+              type: 'MS_AUTH_CODE',
+              payload: {
+                botId: this.activeAuthCodePayload.botId,
+                userCode: this.activeAuthCodePayload.userCode,
+                url: this.activeAuthCodePayload.url,
+                message: this.activeAuthCodePayload.message,
+                targetEmail: this.activeAuthCodePayload.targetEmail,
+              },
+            });
           }
-          this.broadcastFn({
-            type: 'ACCOUNT_VERIFIED',
-            payload: {
-              botId: entry.botId,
-              email: entry.email,
-              ign: entry.ign,
-              uuid: entry.uuid,
-              avatarUrl: entry.avatarUrl,
-            },
-          });
+
+          // Replay recently verified accounts (last 15m) so accounts verified while the browser tab was backgrounded are never lost
+          const cutoff = Date.now() - 15 * 60 * 1000;
+          for (const [ignKey, entry] of Array.from(this.recentlyVerifiedAccounts.entries())) {
+            if (entry.verifiedAt < cutoff) {
+              this.recentlyVerifiedAccounts.delete(ignKey);
+              continue;
+            }
+            sendFn({
+              type: 'ACCOUNT_VERIFIED',
+              payload: {
+                botId: entry.botId,
+                email: entry.email,
+                ign: entry.ign,
+                uuid: entry.uuid,
+                avatarUrl: entry.avatarUrl,
+              },
+            });
+          }
         }
         break;
       }
